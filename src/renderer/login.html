@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'self';"
+    />
+    <title>Login — Bisonstechs POS</title>
+    <style>
+      html, body { margin: 0; height: 100%; font-family: Inter, system-ui, sans-serif; background: #f3f6fa; }
+      .wrap { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 32px 16px; }
+      .card { width: 100%; max-width: 420px; background: #fff; border-radius: 16px; box-shadow: 0 12px 40px rgba(1, 69, 130, 0.12); padding: 32px 28px; }
+      .brand { display: flex; flex-direction: column; align-items: center; margin-bottom: 24px; }
+      .brand img { width: 72px; height: 72px; object-fit: contain; }
+      h1 { margin: 12px 0 4px; font-size: 22px; color: #0b2744; }
+      p.sub { margin: 0; color: #64748b; font-size: 13px; }
+      label { display: block; font-size: 13px; font-weight: 600; color: #334155; margin: 16px 0 6px; }
+      input { width: 100%; box-sizing: border-box; height: 44px; border: 1px solid #d6dee8; border-radius: 10px; padding: 0 12px; font-size: 14px; }
+      input:focus { outline: 2px solid #014582; border-color: #014582; }
+      button.submit { width: 100%; margin-top: 20px; height: 46px; border: 0; border-radius: 10px; background: #014582; color: #fff; font-weight: 700; font-size: 15px; cursor: pointer; }
+      button.submit:disabled { opacity: 0.6; cursor: default; }
+      .error { margin-top: 12px; padding: 10px 12px; background: #fef2f2; color: #b91c1c; border-radius: 8px; font-size: 13px; display: none; }
+      .hint { margin-top: 16px; text-align: center; font-size: 12px; color: #94a3b8; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <form class="card" id="login-form">
+        <div class="brand">
+          <img src="../../assets/icon.png" alt="Bisonstechs" />
+          <h1>Bisonstechs POS</h1>
+          <p class="sub">Sign in with your company account</p>
+        </div>
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="username" required placeholder="you@company.com" />
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" required minlength="6" placeholder="••••••••" />
+        <div class="error" id="error"></div>
+        <button class="submit" type="submit" id="submit">Sign in</button>
+        <p class="hint">OTP will be sent to your email after password check.</p>
+      </form>
+    </div>
+    <script src="./login.js"></script>
+  </body>
+</html>

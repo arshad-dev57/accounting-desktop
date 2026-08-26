@@ -1,0 +1,540 @@
+const api = window.bisonDesktop;
+const TABS = ['Terminals', 'Shifts', 'Sales', 'Returns', 'Receipt', 'Printer', 'Scanner', 'Payments', 'Tax', 'Audit Log'];
+const SETTINGS_KEY = 'pos_settings_v1';
+
+let page = 1;
+let currentTab = 'Terminals';
+let locations = [];
+let terminals = [];
+
+function isAdminRole(role) {
+  const r = String(role || '').toLowerCase().trim();
+  return r === 'admin' || r === 'owner' || r === 'superadmin' || r === 'company_admin';
+}
+
+function money(n) {
+  return Number(n || 0).toFixed(2);
+}
+
+function asList(res) {
+  const d = res?.data;
+  if (Array.isArray(d)) return d;
+  if (Array.isArray(d?.data)) return d.data;
+  if (Array.isArray(d?.shifts)) return d.shifts;
+  if (Array.isArray(d?.sales)) return d.sales;
+  return [];
+}
+
+function showError(message) {
+  const el = document.getElementById('error');
+  if (!message) {
+    el.classList.add('hidden');
+    return;
+  }
+  el.textContent = message;
+  el.classList.remove('hidden');
+}
+
+function badge(status) {
+  const s = String(status || '');
+  const cls = /open|active|completed/i.test(s) ? 'ok-badge' : /suspend/i.test(s) ? 'warn-badge' : 'off-badge';
+  return `<span class="badge ${cls}">${s || '—'}</span>`;
+}
+
+function loadSettings() {
+  try {
+    return { ...defaultSettings(), ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
+  } catch {
+    return defaultSettings();
+  }
+}
+
+function saveSettings(next) {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+}
+
+function defaultSettings() {
+  return {
+    receiptHeader: 'TAX INVOICE / SALES RECEIPT',
+    receiptFooter: 'Thank you for shopping with us! Please visit again.',
+    receiptReturnPolicy: 'Returns accepted within 7 days with original receipt.',
+    receiptNotes: 'This is a computer-generated receipt.',
+    thermalPaperWidthMm: 80,
+    thermalPrintMode: 'browser',
+    autoPrintOnSale: true,
+    enableBarcodeScanner: true,
+    soundOnScan: true,
+    autoAddOnScan: true,
+    enablePaymentTerminal: false,
+    paymentTerminalModel: 'CS30G',
+    paymentTerminalConnection: 'serial',
+    paymentTerminalHost: '192.168.1.100',
+    paymentTerminalPort: 8080,
+  };
+}
+
+function openModal(html) {
+  document.getElementById('modal-body').innerHTML = html;
+  document.getElementById('modal').classList.add('open');
+}
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+}
+document.getElementById('modal').addEventListener('click', (e) => {
+  if (e.target.id === 'modal') closeModal();
+});
+
+function setTab(name) {
+  currentTab = name;
+  page = 1;
+  document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
+  const id = {
+    Terminals: 'panel-terminals',
+    Shifts: 'panel-shifts',
+    Sales: 'panel-sales',
+    Returns: 'panel-returns',
+    Receipt: 'panel-receipt',
+    Printer: 'panel-printer',
+    Scanner: 'panel-scanner',
+    Payments: 'panel-payments',
+    Tax: 'panel-tax',
+    'Audit Log': 'panel-audit',
+  }[name];
+  document.getElementById(id).classList.add('active');
+  loadTab();
+}
+
+async function loadTab() {
+  showError('');
+  if (currentTab === 'Terminals') return loadTerminals();
+  if (currentTab === 'Shifts') return loadShifts();
+  if (currentTab === 'Sales') return loadSales();
+  if (currentTab === 'Returns') return loadReturns();
+  if (currentTab === 'Receipt') return loadReceipt();
+  if (currentTab === 'Printer' || currentTab === 'Scanner' || currentTab === 'Payments') return loadDevice(currentTab);
+  if (currentTab === 'Tax') return loadTax();
+  if (currentTab === 'Audit Log') return loadAudit();
+}
+
+async function loadLocations() {
+  const res = await api.pos.listLocations();
+  locations = asList(res);
+}
+
+async function loadTerminals() {
+  const wrap = document.getElementById('panel-terminals');
+  wrap.innerHTML = '<p class="muted">Loading terminals…</p>';
+  const [termRes] = await Promise.all([api.pos.listTerminals(), locations.length ? null : loadLocations()]);
+  if (!termRes?.success) {
+    wrap.innerHTML = `<p class="error">${termRes?.message || 'Failed to load terminals'}</p>`;
+    return;
+  }
+  terminals = asList(termRes);
+  wrap.innerHTML = `
+    <div class="row">
+      <h2>Terminals (${terminals.length})</h2>
+      <button class="btn btn-brand" id="btn-new-terminal" type="button">+ New Terminal</button>
+    </div>
+    <div class="card hidden" id="create-terminal">
+      <div class="form-grid">
+        <input id="t-name" placeholder="Terminal name (e.g. Main Counter)" />
+        <input id="t-code" placeholder="Code (e.g. TERM-01)" />
+        <select id="t-location">
+          <option value="">Select location…</option>
+          ${locations.map((l) => `<option value="${l.id}">${l.name} (${l.code || l.type || ''})</option>`).join('')}
+        </select>
+        <button class="btn btn-brand" id="t-save" type="button">Create</button>
+        <button class="btn btn-gray" id="t-cancel" type="button">Cancel</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr><th>Name</th><th>Code</th><th>Location</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>
+        ${terminals.map((t) => `
+          <tr>
+            <td><b>${t.name || ''}</b></td>
+            <td>${t.code || ''}</td>
+            <td>${t.location?.name || '—'}</td>
+            <td>${badge(t.isActive === false ? 'Inactive' : 'Active')}</td>
+            <td>
+              <button class="btn ${t.isActive === false ? 'btn-green' : 'btn-red'}" data-toggle="${t.id}">${t.isActive === false ? 'Enable' : 'Disable'}</button>
+              <button class="btn btn-red" data-del="${t.id}">Delete</button>
+            </td>
+          </tr>`).join('') || `<tr><td colspan="5" class="muted">No terminals found</td></tr>`}
+      </tbody>
+    </table>`;
+
+  wrap.querySelector('#btn-new-terminal').onclick = () => wrap.querySelector('#create-terminal').classList.toggle('hidden');
+  wrap.querySelector('#t-cancel').onclick = () => wrap.querySelector('#create-terminal').classList.add('hidden');
+  wrap.querySelector('#t-save').onclick = async () => {
+    const name = wrap.querySelector('#t-name').value.trim();
+    const code = wrap.querySelector('#t-code').value.trim().toUpperCase();
+    const locationId = wrap.querySelector('#t-location').value;
+    if (!name || !code || !locationId) return showError('Name, code and location are required');
+    const res = await api.pos.createTerminal({ name, code, locationId });
+    if (!res?.success) return showError(res?.message || 'Create failed');
+    loadTerminals();
+  };
+  wrap.querySelectorAll('[data-toggle]').forEach((b) => {
+    b.onclick = async () => {
+      const t = terminals.find((x) => x.id === b.dataset.toggle);
+      const res = await api.pos.updateTerminal(t.id, { isActive: t.isActive === false });
+      if (!res?.success) return showError(res?.message || 'Update failed');
+      loadTerminals();
+    };
+  });
+  wrap.querySelectorAll('[data-del]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('Delete this terminal?')) return;
+      const res = await api.pos.deleteTerminal(b.dataset.del);
+      if (!res?.success) return showError(res?.message || 'Delete failed');
+      loadTerminals();
+    };
+  });
+}
+
+async function loadShifts() {
+  const wrap = document.getElementById('panel-shifts');
+  wrap.innerHTML = '<p class="muted">Loading shifts…</p>';
+  const res = await api.pos.getShiftHistory(`page=${page}&limit=15`);
+  if (!res?.success) {
+    wrap.innerHTML = `<p class="error">${res?.message || 'Failed to load shifts'}</p>`;
+    return;
+  }
+  const rows = asList(res);
+  wrap.innerHTML = `
+    <div class="row"><h2>Shift History</h2></div>
+    <table>
+      <thead><tr><th>Cashier</th><th>Terminal</th><th>Status</th><th>Opening</th><th>Actual</th><th>Opened</th><th>Closed</th><th></th></tr></thead>
+      <tbody>
+        ${rows.map((s) => `
+          <tr>
+            <td>${[s.cashier?.firstName, s.cashier?.lastName].filter(Boolean).join(' ') || '—'}</td>
+            <td>${s.terminal?.name || '—'}</td>
+            <td>${badge(s.status)}</td>
+            <td>${money(s.openingCash)}</td>
+            <td>${s.actualCash == null ? '—' : money(s.actualCash)}</td>
+            <td>${s.openedAt ? new Date(s.openedAt).toLocaleString() : '—'}</td>
+            <td>${s.closedAt ? new Date(s.closedAt).toLocaleString() : '—'}</td>
+            <td>${s.status === 'Closed' ? `<button class="btn btn-brand" data-reopen="${s.id}">Reopen</button>` : ''}</td>
+          </tr>`).join('') || `<tr><td colspan="8" class="muted">No shifts</td></tr>`}
+      </tbody>
+    </table>
+    <div class="pager">
+      <button class="btn btn-gray" id="prev">Prev</button>
+      <span class="muted">Page ${page}</span>
+      <button class="btn btn-gray" id="next">Next</button>
+    </div>`;
+  wrap.querySelectorAll('[data-reopen]').forEach((b) => {
+    b.onclick = async () => {
+      const res2 = await api.pos.reopenShift(b.dataset.reopen);
+      if (!res2?.success) return showError(res2?.message || 'Reopen failed');
+      loadShifts();
+    };
+  });
+  wrap.querySelector('#prev').onclick = () => { page = Math.max(1, page - 1); loadShifts(); };
+  wrap.querySelector('#next').onclick = () => { page += 1; loadShifts(); };
+}
+
+async function loadSales(status = '') {
+  const wrap = document.getElementById('panel-sales');
+  wrap.innerHTML = '<p class="muted">Loading sales…</p>';
+  const qs = new URLSearchParams({ page: String(page), limit: '15' });
+  if (status) qs.set('status', status);
+  const res = await api.pos.listSales(qs.toString());
+  if (!res?.success) {
+    wrap.innerHTML = `<p class="error">${res?.message || 'Failed to load sales'}</p>`;
+    return;
+  }
+  const rows = asList(res);
+  wrap.innerHTML = `
+    <div class="row">
+      <h2>Sales</h2>
+      <select id="sale-status">
+        <option value="">All</option>
+        <option value="Completed">Completed</option>
+        <option value="Held">Held</option>
+        <option value="Voided">Voided</option>
+        <option value="Returned">Returned</option>
+      </select>
+    </div>
+    <table>
+      <thead><tr><th>Invoice</th><th>Customer</th><th>Total</th><th>Status</th><th>Date</th><th></th></tr></thead>
+      <tbody>
+        ${rows.map((s) => `
+          <tr>
+            <td>${s.invoiceNumber || s.id}</td>
+            <td>${s.customerName || 'Walk-in'}</td>
+            <td>${money(s.grandTotal ?? s.total)}</td>
+            <td>${badge(s.status)}</td>
+            <td>${s.createdAt ? new Date(s.createdAt).toLocaleString() : '—'}</td>
+            <td>
+              <button class="btn btn-gray" data-view="${s.id}">View</button>
+              ${s.status === 'Completed' ? `<button class="btn btn-red" data-void="${s.id}">Void</button>` : ''}
+            </td>
+          </tr>`).join('') || `<tr><td colspan="6" class="muted">No sales</td></tr>`}
+      </tbody>
+    </table>
+    <div class="pager">
+      <button class="btn btn-gray" id="prev">Prev</button>
+      <span class="muted">Page ${page}</span>
+      <button class="btn btn-gray" id="next">Next</button>
+    </div>`;
+  wrap.querySelector('#sale-status').value = status;
+  wrap.querySelector('#sale-status').onchange = (e) => { page = 1; loadSales(e.target.value); };
+  wrap.querySelector('#prev').onclick = () => { page = Math.max(1, page - 1); loadSales(status); };
+  wrap.querySelector('#next').onclick = () => { page += 1; loadSales(status); };
+  wrap.querySelectorAll('[data-view]').forEach((b) => {
+    b.onclick = async () => {
+      const r = await api.pos.getSale(b.dataset.view);
+      const sale = r?.data || {};
+      openModal(`
+        <h3>Invoice ${sale.invoiceNumber || ''}</h3>
+        <p class="muted">${sale.customerName || 'Walk-in'} · ${money(sale.grandTotal ?? sale.total)}</p>
+        <table>${(sale.items || []).map((i) => `<tr><td>${i.productName}</td><td>${i.quantity}</td><td>${money(i.lineTotal || i.unitPrice)}</td></tr>`).join('')}</table>
+        <div style="margin-top:12px"><button class="btn btn-gray" id="m-close">Close</button></div>`);
+      document.getElementById('m-close').onclick = closeModal;
+    };
+  });
+  wrap.querySelectorAll('[data-void]').forEach((b) => {
+    b.onclick = async () => {
+      const reason = prompt('Void reason');
+      if (!reason) return;
+      const res2 = await api.pos.voidSale(b.dataset.void, { reason });
+      if (!res2?.success) return showError(res2?.message || 'Void failed');
+      loadSales(status);
+    };
+  });
+}
+
+async function loadReturns() {
+  const wrap = document.getElementById('panel-returns');
+  wrap.innerHTML = '<p class="muted">Loading completed sales…</p>';
+  const res = await api.pos.listSales(`page=${page}&limit=15&status=Completed`);
+  const rows = asList(res);
+  wrap.innerHTML = `
+    <div class="row"><h2>Returns</h2></div>
+    <p class="muted">Select a completed sale to process a full or partial return.</p>
+    <table>
+      <thead><tr><th>Invoice</th><th>Customer</th><th>Total</th><th>Date</th><th></th></tr></thead>
+      <tbody>
+        ${rows.map((s) => `
+          <tr>
+            <td>${s.invoiceNumber || ''}</td>
+            <td>${s.customerName || 'Walk-in'}</td>
+            <td>${money(s.grandTotal ?? s.total)}</td>
+            <td>${s.createdAt ? new Date(s.createdAt).toLocaleString() : '—'}</td>
+            <td><button class="btn btn-red" data-ret="${s.id}">Return</button></td>
+          </tr>`).join('') || `<tr><td colspan="5" class="muted">No completed sales</td></tr>`}
+      </tbody>
+    </table>`;
+  wrap.querySelectorAll('[data-ret]').forEach((b) => {
+    b.onclick = async () => {
+      const r = await api.pos.getSale(b.dataset.ret);
+      const sale = r?.data || {};
+      openModal(`
+        <h3>Return ${sale.invoiceNumber || ''}</h3>
+        ${(sale.items || []).map((i) => `
+          <div class="toggle">
+            <span>${i.productName} (sold ${i.quantity})</span>
+            <input type="number" min="0" max="${i.quantity}" value="${i.quantity}" data-pid="${i.productId}" style="width:80px" />
+          </div>`).join('')}
+        <select id="refund-method"><option>Cash</option><option>Card</option><option>Bank Transfer</option></select>
+        <textarea id="ret-reason" placeholder="Return reason"></textarea>
+        <div style="margin-top:12px;display:flex;gap:8px">
+          <button class="btn btn-gray" id="m-close">Cancel</button>
+          <button class="btn btn-red" id="m-go">Confirm Return</button>
+        </div>`);
+      document.getElementById('m-close').onclick = closeModal;
+      document.getElementById('m-go').onclick = async () => {
+        const returnItems = [...document.querySelectorAll('#modal-body [data-pid]')].map((inp) => ({
+          productId: inp.dataset.pid,
+          quantity: Number(inp.value || 0),
+        })).filter((x) => x.quantity > 0);
+        const reason = document.getElementById('ret-reason').value.trim();
+        if (!reason) return alert('Return reason is required');
+        const res2 = await api.pos.processReturn({
+          originalSaleId: sale.id,
+          returnItems,
+          refundMethod: document.getElementById('refund-method').value,
+          reason,
+        });
+        if (!res2?.success) return alert(res2?.message || 'Return failed');
+        closeModal();
+        loadReturns();
+      };
+    };
+  });
+}
+
+async function loadReceipt() {
+  const wrap = document.getElementById('panel-receipt');
+  const local = loadSettings();
+  const res = await api.pos.getReceiptSettings();
+  const remote = res?.data || {};
+  const t = { ...local, ...remote };
+  wrap.innerHTML = `
+    <div class="row"><h2>Receipt template</h2><button class="btn btn-brand" id="save-receipt">Save</button></div>
+    <div class="card">
+      <div class="form-grid">
+        <input id="r-header" placeholder="Header" value="${t.receiptHeader || t.header || ''}" />
+        <input id="r-footer" placeholder="Footer" value="${t.receiptFooter || t.footer || ''}" />
+      </div>
+      <label class="muted">Return policy</label>
+      <textarea id="r-policy">${t.receiptReturnPolicy || t.returnPolicy || ''}</textarea>
+      <label class="muted">Notes</label>
+      <textarea id="r-notes">${t.receiptNotes || t.notes || ''}</textarea>
+    </div>`;
+  wrap.querySelector('#save-receipt').onclick = async () => {
+    const body = {
+      receiptHeader: wrap.querySelector('#r-header').value,
+      receiptFooter: wrap.querySelector('#r-footer').value,
+      receiptReturnPolicy: wrap.querySelector('#r-policy').value,
+      receiptNotes: wrap.querySelector('#r-notes').value,
+    };
+    saveSettings({ ...loadSettings(), ...body });
+    const saved = await api.pos.saveReceiptSettings(body);
+    if (!saved?.success) return showError(saved?.message || 'Save failed');
+    alert('Receipt template saved');
+  };
+}
+
+function loadDevice(tab) {
+  const s = loadSettings();
+  const wrap = document.getElementById(`panel-${tab.toLowerCase()}`);
+  if (tab === 'Printer') {
+    wrap.innerHTML = `
+      <div class="row"><h2>Thermal printer</h2><button class="btn btn-brand" id="save">Save</button></div>
+      <div class="card">
+        <div class="toggle"><span>Auto print on sale</span><input type="checkbox" id="p-auto" ${s.autoPrintOnSale ? 'checked' : ''} /></div>
+        <div class="form-grid" style="margin-top:12px">
+          <select id="p-width"><option value="58">58mm</option><option value="80">80mm</option></select>
+          <select id="p-mode"><option value="browser">Browser print</option><option value="escpos">ESC/POS serial</option></select>
+        </div>
+      </div>`;
+    wrap.querySelector('#p-width').value = String(s.thermalPaperWidthMm || 80);
+    wrap.querySelector('#p-mode').value = s.thermalPrintMode || 'browser';
+    wrap.querySelector('#save').onclick = () => {
+      saveSettings({
+        ...loadSettings(),
+        autoPrintOnSale: wrap.querySelector('#p-auto').checked,
+        thermalPaperWidthMm: Number(wrap.querySelector('#p-width').value),
+        thermalPrintMode: wrap.querySelector('#p-mode').value,
+      });
+      alert('Printer settings saved on this desktop');
+    };
+  }
+  if (tab === 'Scanner') {
+    wrap.innerHTML = `
+      <div class="row"><h2>Barcode scanner</h2><button class="btn btn-brand" id="save">Save</button></div>
+      <div class="card">
+        <div class="toggle"><span>Enable scanner</span><input type="checkbox" id="sc-on" ${s.enableBarcodeScanner ? 'checked' : ''} /></div>
+        <div class="toggle"><span>Beep on scan</span><input type="checkbox" id="sc-sound" ${s.soundOnScan ? 'checked' : ''} /></div>
+        <div class="toggle"><span>Auto-add product</span><input type="checkbox" id="sc-auto" ${s.autoAddOnScan ? 'checked' : ''} /></div>
+      </div>`;
+    wrap.querySelector('#save').onclick = () => {
+      saveSettings({
+        ...loadSettings(),
+        enableBarcodeScanner: wrap.querySelector('#sc-on').checked,
+        soundOnScan: wrap.querySelector('#sc-sound').checked,
+        autoAddOnScan: wrap.querySelector('#sc-auto').checked,
+      });
+      alert('Scanner settings saved on this desktop');
+    };
+  }
+  if (tab === 'Payments') {
+    wrap.innerHTML = `
+      <div class="row"><h2>Payment terminal</h2><button class="btn btn-brand" id="save">Save</button></div>
+      <div class="card">
+        <div class="toggle"><span>Enable card terminal</span><input type="checkbox" id="pay-on" ${s.enablePaymentTerminal ? 'checked' : ''} /></div>
+        <div class="form-grid" style="margin-top:12px">
+          <select id="pay-model"><option>CS30G</option><option>Generic ECR</option></select>
+          <select id="pay-conn"><option value="serial">Serial</option><option value="network">Network</option><option value="sandbox">Sandbox</option></select>
+          <input id="pay-host" placeholder="Host" value="${s.paymentTerminalHost || ''}" />
+          <input id="pay-port" placeholder="Port" value="${s.paymentTerminalPort || 8080}" />
+        </div>
+      </div>`;
+    wrap.querySelector('#pay-model').value = s.paymentTerminalModel || 'CS30G';
+    wrap.querySelector('#pay-conn').value = s.paymentTerminalConnection || 'serial';
+    wrap.querySelector('#save').onclick = () => {
+      saveSettings({
+        ...loadSettings(),
+        enablePaymentTerminal: wrap.querySelector('#pay-on').checked,
+        paymentTerminalModel: wrap.querySelector('#pay-model').value,
+        paymentTerminalConnection: wrap.querySelector('#pay-conn').value,
+        paymentTerminalHost: wrap.querySelector('#pay-host').value,
+        paymentTerminalPort: Number(wrap.querySelector('#pay-port').value || 8080),
+      });
+      alert('Payment terminal settings saved on this desktop');
+    };
+  }
+}
+
+async function loadTax() {
+  const wrap = document.getElementById('panel-tax');
+  wrap.innerHTML = '<p class="muted">Loading tax context…</p>';
+  const res = await api.tax.getContext();
+  const ctx = res?.data || {};
+  wrap.innerHTML = `
+    <div class="row"><h2>POS tax compliance</h2></div>
+    <p class="muted">Rates and exemptions are managed in web Tax Compliance. If tax is OFF, POS will not add tax.</p>
+    <div class="kpi">
+      <div><small>TAX IN FLOW</small><div><b>${ctx.enabled ? 'ON' : 'OFF'}</b></div></div>
+      <div><small>CONFIGURED</small><div><b>${ctx.configured ? 'Yes' : 'Not yet'}</b></div></div>
+      <div><small>REGIME</small><div><b>${ctx.regime || '—'}</b></div></div>
+      <div><small>PRICING</small><div><b>${ctx.pricingModel || '—'}</b></div></div>
+      <div><small>DEFAULT RATE</small><div><b>${ctx.defaultRate?.rate ?? 0}%</b></div></div>
+    </div>`;
+}
+
+async function loadAudit() {
+  const wrap = document.getElementById('panel-audit');
+  wrap.innerHTML = '<p class="muted">Loading audit log…</p>';
+  const res = await api.pos.getAuditLogs(`page=${page}&limit=20`);
+  const rows = asList(res);
+  wrap.innerHTML = `
+    <div class="row"><h2>Audit log</h2></div>
+    <table>
+      <thead><tr><th>Action</th><th>User</th><th>Details</th><th>Date</th></tr></thead>
+      <tbody>
+        ${rows.map((l) => `
+          <tr>
+            <td>${l.action || l.type || '—'}</td>
+            <td>${l.user?.email || l.userName || '—'}</td>
+            <td>${l.details || l.message || '—'}</td>
+            <td>${l.createdAt ? new Date(l.createdAt).toLocaleString() : '—'}</td>
+          </tr>`).join('') || `<tr><td colspan="4" class="muted">No audit records</td></tr>`}
+      </tbody>
+    </table>
+    <div class="pager">
+      <button class="btn btn-gray" id="prev">Prev</button>
+      <span class="muted">Page ${page}</span>
+      <button class="btn btn-gray" id="next">Next</button>
+    </div>`;
+  wrap.querySelector('#prev').onclick = () => { page = Math.max(1, page - 1); loadAudit(); };
+  wrap.querySelector('#next').onclick = () => { page += 1; loadAudit(); };
+}
+
+async function boot() {
+  const session = await api.auth.getSession();
+  if (!isAdminRole(session?.user?.role) && !session?.isAdmin) {
+    alert('POS Management is only available to admin users.');
+    await api.pos.enterShift();
+    return;
+  }
+  document.getElementById('subtitle').textContent =
+    `${[session.user?.firstName, session.user?.lastName].filter(Boolean).join(' ') || session.user?.email || 'Admin'} · POS Management`;
+  const tabs = document.getElementById('tabs');
+  tabs.innerHTML = TABS.map((t) => `<button class="tab ${t === 'Terminals' ? 'active' : ''}" data-tab="${t}" type="button">${t}</button>`).join('');
+  tabs.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
+  document.getElementById('btn-open-pos').onclick = () => api.pos.enterShift();
+  document.getElementById('btn-logout').onclick = () => api.auth.logout();
+  api.auth.onExpired(() => api.auth.logout());
+  await loadLocations();
+  await loadTab();
+}
+
+boot().catch((err) => {
+  showError(err.message);
+});

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline';"
+    />
+    <title>Bisonstechs POS</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        font-family: Inter, system-ui, sans-serif;
+        background: transparent;
+      }
+      .card {
+        height: 100%;
+        box-sizing: border-box;
+        border-radius: 16px;
+        background: linear-gradient(160deg, #0b2744 0%, #014582 55%, #01366a 100%);
+        color: #fff;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        box-shadow: 0 16px 40px rgba(1, 69, 130, 0.35);
+      }
+      img {
+        width: 88px;
+        height: 88px;
+        object-fit: contain;
+      }
+      h1 {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 700;
+      }
+      p {
+        margin: 0;
+        font-size: 13px;
+        opacity: 0.8;
+      }
+      .bar {
+        width: 180px;
+        height: 4px;
+        border-radius: 99px;
+        background: rgba(255, 255, 255, 0.18);
+        overflow: hidden;
+        margin-top: 8px;
+      }
+      .bar span {
+        display: block;
+        height: 100%;
+        width: 40%;
+        background: #fff;
+        animation: slide 1.1s ease-in-out infinite;
+      }
+      @keyframes slide {
+        0% {
+          transform: translateX(-120%);
+        }
+        100% {
+          transform: translateX(280%);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <img src="../assets/icon.png" alt="Bisonstechs" />
+      <h1>Bisonstechs POS</h1>
+      <p>Starting desktop app…</p>
+      <div class="bar"><span></span></div>
+    </div>
+  </body>
+</html>

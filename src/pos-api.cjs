@@ -1,0 +1,317 @@
+/**
+ * POS and Warehouse HTTP calls from the Electron main process.
+ * Renderer never talks to the backend directly.
+ */
+const config = require('./config.cjs');
+
+async function request(accessToken, method, pathname, body) {
+  const base = config.resolveApiUrl();
+  const url = `${base}${pathname.startsWith('/') ? pathname : `/${pathname}`}`;
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: body == null ? undefined : JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.success === false) {
+      return {
+        success: false,
+        status: res.status,
+        code: data.code,
+        retryable: data.retryable === true || (res.status >= 500 && res.status !== 409),
+        message: data.message || `Request failed (${res.status})`,
+      };
+    }
+    return {
+      success: true,
+      data: data.data !== undefined ? data.data : data,
+      stats: data.stats || null,
+      total: data.total,
+      message: data.message || '',
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: err.message || 'Cannot reach the POS API. Check ELECTRON_API_URL.',
+    };
+  }
+}
+
+// ─── Terminals ───────────────────────────────────────────────────────────────
+function listTerminals(token, locationId) {
+  const qs = locationId ? `?locationId=${encodeURIComponent(locationId)}` : '';
+  return request(token, 'GET', `/api/pos/terminals${qs}`);
+}
+
+// ─── Shifts ───────────────────────────────────────────────────────────────────
+function getCurrentShift(token) {
+  return request(token, 'GET', '/api/pos/shifts/current');
+}
+
+function getShiftHistory(token, paramsString = '') {
+  const qs = paramsString ? `?${paramsString}` : '';
+  return request(token, 'GET', `/api/pos/shifts${qs}`);
+}
+
+function openShift(token, payload) {
+  return request(token, 'POST', '/api/pos/shifts/open', payload);
+}
+
+function closeShift(token, shiftId, payload) {
+  return request(token, 'POST', `/api/pos/shifts/${shiftId}/close`, payload);
+}
+
+function suspendShift(token, shiftId) {
+  return request(token, 'POST', `/api/pos/shifts/${shiftId}/suspend`);
+}
+
+function resumeShift(token, shiftId) {
+  return request(token, 'POST', `/api/pos/shifts/${shiftId}/resume`);
+}
+
+function recordCashFlow(token, payload) {
+  return request(token, 'POST', '/api/pos/cash-flow', payload);
+}
+
+// ─── Products ─────────────────────────────────────────────────────────────────
+function searchProducts(token, paramsString) {
+  return request(token, 'GET', `/api/pos/products/search?${paramsString}`);
+}
+
+function byBarcode(token, code, locationId) {
+  const qs = locationId ? `?locationId=${encodeURIComponent(locationId)}` : '';
+  return request(token, 'GET', `/api/pos/products/barcode/${encodeURIComponent(code)}${qs}`);
+}
+
+// ─── Sales & Returns ──────────────────────────────────────────────────────────
+function completeSale(token, payload) {
+  return request(token, 'POST', '/api/pos/sales', payload);
+}
+
+function holdSale(token, payload) {
+  return request(token, 'POST', '/api/pos/sales/hold', payload);
+}
+
+// Held sales list
+function getHeldSales(token) {
+  return request(token, 'GET', '/api/pos/sales/held');
+}
+
+function deleteHeldSale(token, id) {
+  return request(token, 'DELETE', `/api/pos/sales/held/${id}`);
+}
+
+function syncOfflineSales(token, payload) {
+  return request(token, 'POST', '/api/pos/sales/sync', payload);
+}
+
+function processReturn(token, payload) {
+  return request(token, 'POST', '/api/pos/returns', payload);
+}
+
+function getShiftReport(token, shiftId) {
+  return request(token, 'GET', `/api/pos/reports/shift/${shiftId}`);
+}
+
+function getDailyReport(token, paramsString = '') {
+  const qs = paramsString ? `?${paramsString}` : '';
+  return request(token, 'GET', `/api/pos/reports/daily${qs}`);
+}
+
+function verifyManager(token, payload) {
+  return request(token, 'POST', '/api/pos/auth/verify-manager', payload);
+}
+
+// ─── POS Management / Admin APIs ──────────────────────────────────────────
+function createTerminal(token, body) {
+  return request(token, 'POST', '/api/pos/terminals', body);
+}
+
+function updateTerminal(token, id, body) {
+  return request(token, 'PUT', `/api/pos/terminals/${id}`, body);
+}
+
+function deleteTerminal(token, id) {
+  return request(token, 'DELETE', `/api/pos/terminals/${id}`);
+}
+
+function reopenShift(token, id) {
+  return request(token, 'POST', `/api/pos/shifts/${id}/reopen`);
+}
+
+function listSales(token, paramsString = '') {
+  const qs = paramsString ? `?${paramsString}` : '';
+  return request(token, 'GET', `/api/pos/sales${qs}`);
+}
+
+function getSale(token, id) {
+  return request(token, 'GET', `/api/pos/sales/${id}`);
+}
+
+function voidSale(token, id, body) {
+  return request(token, 'POST', `/api/pos/sales/${id}/void`, body);
+}
+
+function convertToInvoice(token, id, body) {
+  return request(token, 'POST', `/api/pos/sales/${id}/convert-to-invoice`, body || {});
+}
+
+function getAuditLogs(token, paramsString = '') {
+  const qs = paramsString ? `?${paramsString}` : '';
+  return request(token, 'GET', `/api/pos/audit-logs${qs}`);
+}
+
+function saveReceiptSettings(token, body) {
+  return request(token, 'PUT', '/api/pos/receipt-settings', body);
+}
+
+
+// ─── Categories (Warehouse) ──────────────────────────────────────────────────
+function getCategories(token, paramsString = '') {
+  const qs = paramsString ? `?${paramsString}` : '';
+  return request(token, 'GET', `/api/warehouse/categories${qs}`);
+}
+
+// ─── Bulk-fetch helpers for offline sync cache refresh ────────────────────────
+async function fetchAllProducts(token) {
+  const all = [];
+  for (let page = 1; page <= 100; page += 1) {
+    const res = await request(token, 'GET', `/api/warehouse/products?limit=100&page=${page}`);
+    if (!res.success) {
+      if (page === 1) {
+        return request(token, 'GET', '/api/pos/products/search?q=&limit=2000&includeZeroStock=true');
+      }
+      break;
+    }
+    const rows = Array.isArray(res.data)
+      ? res.data
+      : Array.isArray(res.data?.data)
+        ? res.data.data
+        : [];
+    all.push(...rows);
+    if (rows.length < 100) break;
+  }
+  if (!all.length) {
+    return request(token, 'GET', '/api/pos/products/search?q=&limit=2000&includeZeroStock=true');
+  }
+  return { success: true, data: all };
+}
+
+function fetchAllCategories(token) {
+  return request(token, 'GET', '/api/warehouse/categories?tree=true');
+}
+
+async function fetchAllCustomers(token) {
+  const all = [];
+  for (let page = 1; page <= 100; page += 1) {
+    const res = await request(token, 'GET', `/api/warehouse/customers?limit=100&page=${page}`);
+    if (!res.success) {
+      if (page === 1) {
+        return request(token, 'GET', '/api/warehouse/customers/search?q=&limit=2000');
+      }
+      break;
+    }
+    const rows = Array.isArray(res.data)
+      ? res.data
+      : Array.isArray(res.data?.data)
+        ? res.data.data
+        : Array.isArray(res.data?.customers)
+          ? res.data.customers
+          : [];
+    all.push(...rows);
+    if (rows.length < 100) break;
+  }
+  if (!all.length) {
+    return request(token, 'GET', '/api/warehouse/customers/search?q=&limit=2000');
+  }
+  return { success: true, data: all };
+}
+
+function fetchTaxContext(token) {
+  return request(token, 'GET', '/api/pos/tax-context');
+}
+
+// ─── Customers (Warehouse) ───────────────────────────────────────────────────
+function searchCustomers(token, q, limit = 10) {
+  return request(token, 'GET', `/api/warehouse/customers/search?q=${encodeURIComponent(q)}&limit=${limit}`);
+}
+
+function createCustomer(token, payload) {
+  return request(token, 'POST', '/api/warehouse/customers', payload);
+}
+
+function getCustomerCreditInfo(token, customerId) {
+  return request(token, 'GET', `/api/warehouse/customers/${customerId}/credit-info`);
+}
+
+// ─── Receipt & Profile Settings ──────────────────────────────────────────────
+function listLocations(token) {
+  return request(token, 'GET', '/api/warehouse/locations');
+}
+
+function getReceiptSettings(token) {
+  return request(token, 'GET', '/api/pos/receipt-settings');
+}
+
+function pullMasterData(token, cursor, limit) {
+  const qs = new URLSearchParams();
+  if (cursor) qs.set('cursor', cursor);
+  if (limit) qs.set('limit', String(limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return request(token, 'GET', `/api/pos/sync/master-data${suffix}`);
+}
+
+function getProfile(token) {
+  return request(token, 'GET', '/api/profile');
+}
+
+module.exports = {
+  listTerminals,
+  getCurrentShift,
+  getShiftHistory,
+  openShift,
+  closeShift,
+  suspendShift,
+  resumeShift,
+  recordCashFlow,
+  searchProducts,
+  byBarcode,
+  completeSale,
+  holdSale,
+  getHeldSales,
+  deleteHeldSale,
+  syncOfflineSales,
+  processReturn,
+  getShiftReport,
+  getDailyReport,
+  verifyManager,
+  getCategories,
+  searchCustomers,
+  createCustomer,
+  getCustomerCreditInfo,
+  listLocations,
+  getReceiptSettings,
+  pullMasterData,
+  getProfile,
+  // POS Management APIs
+  createTerminal,
+  updateTerminal,
+  deleteTerminal,
+  reopenShift,
+  listSales,
+  getSale,
+  voidSale,
+  convertToInvoice,
+  getAuditLogs,
+  saveReceiptSettings,
+  // Bulk-fetch helpers
+  fetchAllProducts,
+  fetchAllCategories,
+  fetchAllCustomers,
+  fetchTaxContext,
+};

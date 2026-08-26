@@ -1,0 +1,30 @@
+{
+  "name": "accounting-desktop-app",
+  "version": "1.0.0",
+  "description": "Bisonstechs POS desktop application. Separate from accounting-web-app.",
+  "author": "Bisonstechs",
+  "private": true,
+  "main": "src/main.cjs",
+  "scripts": {
+    "dev": "env -u ELECTRON_RUN_AS_NODE electron .",
+    "dev:wait": "env -u ELECTRON_RUN_AS_NODE wait-on http://127.0.0.1:3000 && env -u ELECTRON_RUN_AS_NODE electron .",
+    "start": "env -u ELECTRON_RUN_AS_NODE electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win nsis",
+    "build:mac": "electron-builder --mac dmg zip",
+    "build:linux": "electron-builder --linux AppImage deb"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "electron-updater": "^6.6.2",
+    "sql.js": "^1.12.0"
+  },
+  "devDependencies": {
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12",
+    "wait-on": "^8.0.5"
+  },
+  "allowScripts": {
+    "electron@37.10.3": true
+  }
+}

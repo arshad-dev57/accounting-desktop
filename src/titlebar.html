@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'self';"
+    />
+    <title>Title bar</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        font-family: Inter, system-ui, sans-serif;
+        background: #0b2744;
+        color: #fff;
+        user-select: none;
+      }
+      .bar {
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        -webkit-app-region: drag;
+        padding: 0 8px 0 12px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+      .brand img {
+        width: 18px;
+        height: 18px;
+        object-fit: contain;
+      }
+      .controls {
+        display: flex;
+        -webkit-app-region: no-drag;
+      }
+      button {
+        width: 40px;
+        height: 36px;
+        border: 0;
+        background: transparent;
+        color: #fff;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: rgba(255, 255, 255, 0.12);
+      }
+      button.close:hover {
+        background: #e81123;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <div class="brand">
+        <img src="../assets/icon.png" alt="" />
+        <span>Bisonstechs POS</span>
+      </div>
+      <div class="controls">
+        <button id="min" title="Minimize" aria-label="Minimize">─</button>
+        <button id="max" title="Maximize" aria-label="Maximize">□</button>
+        <button id="close" class="close" title="Close" aria-label="Close">✕</button>
+      </div>
+    </div>
+    <script src="./titlebar.js"></script>
+  </body>
+</html>

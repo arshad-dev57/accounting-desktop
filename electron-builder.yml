@@ -1,0 +1,56 @@
+appId: com.bisonstechs.pos
+productName: Bisonstechs POS
+copyright: Copyright © Bisonstechs
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+
+directories:
+  output: dist-electron
+  buildResources: assets
+
+files:
+  - src/**/*
+  - assets/**/*
+  - package.json
+  - "!**/*.map"
+
+asar: true
+
+win:
+  icon: assets/icon.png
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Bisonstechs POS
+  installerIcon: assets/icon.png
+  uninstallerIcon: assets/icon.png
+
+mac:
+  icon: assets/icon.png
+  category: public.app-category.business
+  target:
+    - target: dmg
+      arch:
+        - universal
+    - target: zip
+      arch:
+        - universal
+  hardenedRuntime: true
+  gatekeeperAssess: false
+
+linux:
+  icon: assets/icon.png
+  category: Office
+  target:
+    - AppImage
+    - deb
+  executableName: bisonstechs-pos
+
+publish: null

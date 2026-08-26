@@ -1,0 +1,1782 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self' data: blob: http: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self';"
+    />
+    <title>POS Dashboard — Bisonstechs</title>
+    <link rel="stylesheet" href="./shared.css" />
+    <style>
+      /* Layout & Nav styling */
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background-color: var(--bg);
+        font-family: 'Inter', system-ui, sans-serif;
+      }
+      .app-layout {
+        height: 100vh;
+        display: grid;
+        grid-template-rows: 64px 1fr;
+      }
+      
+      /* Top Bar */
+      .top-bar {
+        background-color: var(--brand);
+        color: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 20px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        z-index: 10;
+      }
+      .top-brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .top-brand b {
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+      }
+      .top-brand span {
+        font-size: 12px;
+        background-color: rgba(255, 255, 255, 0.15);
+        padding: 4px 8px;
+        border-radius: 6px;
+        opacity: 0.9;
+      }
+      .top-info {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      .time-badge {
+        font-family: monospace;
+        font-size: 14px;
+        background: #012f5c;
+        padding: 6px 12px;
+        border-radius: 8px;
+        font-weight: 700;
+        min-width: 90px;
+        text-align: center;
+      }
+      .status-badge {
+        background-color: #10b981;
+        color: #ffffff;
+        font-size: 10px;
+        font-weight: 700;
+        padding: 4px 10px;
+        border-radius: 9999px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .offline-badge {
+        background-color: #f59e0b;
+        color: #ffffff;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 4px 10px;
+        border-radius: 9999px;
+        display: none;
+      }
+      .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .btn-nav-action {
+        height: 36px;
+        border: none;
+        border-radius: 8px;
+        padding: 0 14px;
+        font-weight: 600;
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .btn-nav-action.ghost {
+        background-color: rgba(255, 255, 255, 0.1);
+        color: #ffffff;
+      }
+      .btn-nav-action.ghost:hover {
+        background-color: rgba(255, 255, 255, 0.2);
+      }
+      .btn-nav-action.accent {
+        background-color: #fbbf24;
+        color: #01366a;
+      }
+      .btn-nav-action.accent:hover {
+        opacity: 0.9;
+      }
+      .btn-nav-action.danger {
+        background-color: #ef4444;
+        color: #ffffff;
+      }
+      .btn-nav-action.danger:hover {
+        background-color: #dc2626;
+      }
+      /* Sync button badge */
+      #btn-sync-offline #sync-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #ef4444;
+        color: #fff;
+        border-radius: 9999px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        width: 18px;
+        height: 18px;
+        margin-left: 4px;
+      }
+      /* Inline spinner for sync button */
+      .spinner-sm {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border: 2px solid rgba(255,255,255,0.4);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: spinSm 0.6s linear infinite;
+      }
+      @keyframes spinSm {
+        to { transform: rotate(360deg); }
+      }
+
+      /* Main container */
+      .main-container {
+        display: grid;
+        grid-template-columns: 80px 1fr;
+        min-height: 0;
+      }
+
+      /* Sidebar Navigation */
+      .sidebar {
+        background-color: #01366a;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 16px 0;
+        gap: 12px;
+        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.05);
+      }
+      .tab-btn {
+        width: 68px;
+        height: 64px;
+        border: none;
+        border-radius: 12px;
+        background: transparent;
+        color: rgba(255, 255, 255, 0.7);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .tab-btn:hover {
+        background-color: rgba(255, 255, 255, 0.08);
+        color: #ffffff;
+      }
+      .tab-btn.active {
+        background-color: #ffffff;
+        color: var(--brand);
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+      }
+      .tab-btn i {
+        font-size: 18px;
+      }
+      .tab-btn span {
+        font-size: 10px;
+        font-weight: 700;
+      }
+
+      /* Main Workspace View */
+      .workspace {
+        min-height: 0;
+        overflow: hidden;
+        position: relative;
+        background-color: var(--bg);
+      }
+      .view-panel {
+        display: none;
+        height: 100%;
+        width: 100%;
+        overflow: hidden;
+      }
+      .view-panel.active {
+        display: block;
+        overflow-y: auto;
+      }
+
+      /* ─── SELL VIEW PANEL ────────────────────────────────────────── */
+      .sell-layout {
+        display: grid;
+        grid-template-columns: 1.3fr 380px;
+        height: 100%;
+      }
+      
+      /* Product Browser Area */
+      .product-browser {
+        display: flex;
+        flex-direction: column;
+        border-right: 1px solid var(--line);
+        background-color: #f8fafc;
+        min-height: 0;
+      }
+      .browser-header {
+        background: #ffffff;
+        border-bottom: 1px solid var(--line);
+        padding: 12px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .search-row {
+        display: flex;
+        gap: 10px;
+      }
+      .inp-search {
+        flex: 1;
+        height: 42px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 0 12px;
+        font-size: 14px;
+        outline: none;
+      }
+      .inp-search:focus {
+        border-color: var(--brand);
+      }
+      .inp-scan {
+        width: 160px;
+        height: 42px;
+        background-color: rgba(1, 69, 130, 0.05);
+        border: 1px solid rgba(1, 69, 130, 0.2);
+        border-radius: 10px;
+        padding: 0 12px;
+        font-size: 14px;
+        outline: none;
+        color: var(--brand);
+      }
+      .inp-scan:focus {
+        border-color: var(--brand);
+        background-color: #ffffff;
+      }
+      
+      /* Categories Bar */
+      .categories-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        overflow-x: auto;
+        padding-bottom: 2px;
+        scrollbar-width: thin;
+      }
+      .category-crumb {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--muted);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .category-crumb.active {
+        color: var(--brand);
+      }
+      .category-tab-btn {
+        padding: 6px 12px;
+        background-color: #ffffff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--text);
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .category-tab-btn:hover {
+        border-color: var(--brand);
+      }
+      .category-tab-btn.selected {
+        background-color: var(--brand);
+        border-color: var(--brand);
+        color: #ffffff;
+      }
+      .subcategories-tabs-row::-webkit-scrollbar {
+        height: 5px;
+      }
+      .subcategories-tabs-row::-webkit-scrollbar-thumb {
+        background: #cbd5e1;
+        border-radius: 999px;
+      }
+      .subcategories-tabs-row::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      /* Products grid container */
+      .products-grid-scroll {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px;
+      }
+      .categories-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+        gap: 12px;
+      }
+      .category-card {
+        aspect-ratio: 1;
+        background-color: #ffffff;
+        border: 2px solid #e2e8f0;
+        border-radius: 16px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+        text-align: center;
+        padding: 12px;
+      }
+      .category-card:hover {
+        border-color: var(--brand);
+        background-color: #f0f7ff;
+      }
+      .category-card span {
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .products-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        gap: 12px;
+      }
+      .prod-card {
+        background-color: #ffffff;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px;
+        cursor: pointer;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        transition: all 0.2s;
+      }
+      .prod-card:hover {
+        background-color: #f0f7ff;
+        border-color: rgba(1, 69, 130, 0.3);
+      }
+      .prod-card-img {
+        width: 100%;
+        height: 90px;
+        border-radius: 8px;
+        background-color: #f8fafc;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+      }
+      .prod-card-img img {
+        width: 100%;
+        height: 100%;
+        object-cover: cover;
+      }
+      .prod-card b {
+        font-size: 13px;
+        color: var(--text);
+        line-height: 1.3;
+        height: 34px;
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+      }
+      .prod-card span {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .prod-card-price {
+        font-size: 15px;
+        font-weight: 800;
+        color: var(--brand);
+      }
+      .prod-card-stock {
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      /* Cart Pane Area */
+      .cart-pane {
+        background-color: #ffffff;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .cart-header {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .cart-header h3 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 800;
+        color: var(--text);
+      }
+      .btn-clear-cart {
+        background-color: rgba(239, 68, 68, 0.15);
+        color: #ef4444;
+        border: none;
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      /* Customer Selector */
+      .customer-selector {
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--line);
+        background-color: #fafafa;
+        position: relative;
+      }
+      .customer-inp-wrap {
+        position: relative;
+      }
+      .inp-customer {
+        width: 100%;
+        height: 38px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0 10px 0 32px;
+        font-size: 13px;
+        outline: none;
+      }
+      .inp-customer:focus {
+        border-color: var(--brand);
+      }
+      .icon-cust-search {
+        position: absolute;
+        left: 10px;
+        top: 11px;
+        color: var(--muted);
+      }
+      
+      /* Dropdown autocomplete */
+      .cust-dropdown {
+        position: absolute;
+        left: 16px;
+        right: 16px;
+        top: 100%;
+        background-color: #ffffff;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+        max-height: 220px;
+        overflow-y: auto;
+        z-index: 50;
+        display: none;
+      }
+      .cust-item {
+        padding: 10px 14px;
+        cursor: pointer;
+        border-bottom: 1px solid #f1f5f9;
+        font-size: 13px;
+      }
+      .cust-item:hover {
+        background-color: #f8fafc;
+      }
+      .cust-item b {
+        display: block;
+        color: var(--text);
+      }
+      .cust-item span {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      
+      /* Customer Credit Panel */
+      .cust-credit-panel {
+        margin-top: 8px;
+        background: #f0fdf4;
+        border: 1px solid #bbf7d0;
+        border-radius: 8px;
+        padding: 8px;
+        font-size: 11px;
+        display: none;
+      }
+      .cust-credit-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+
+      /* Custom line addition */
+      .custom-line-section {
+        padding: 10px 16px;
+        background-color: #ffffff;
+        border-bottom: 1px solid var(--line);
+      }
+      .custom-line-grid {
+        display: grid;
+        grid-template-columns: 1.5fr 0.9fr 56px auto auto;
+        gap: 6px;
+        align-items: center;
+      }
+      .custom-line-total {
+        font-size: 12px;
+        font-weight: 800;
+        color: var(--brand);
+        white-space: nowrap;
+        min-width: 64px;
+        text-align: right;
+      }
+      .inp-custom-price, .inp-custom-qty {
+        width: 100%;
+        height: 32px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 0 8px;
+        font-size: 12px;
+      }
+      .btn-add-custom {
+        height: 32px;
+        background-color: var(--brand);
+        color: #ffffff;
+        border: none;
+        padding: 0 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      /* Cart Scroll List */
+      .cart-items-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 12px;
+        background-color: #f8fafc;
+      }
+      .cart-item-row {
+        background: #ffffff;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px;
+        margin-bottom: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .cart-item-row-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+      }
+      .cart-item-info b {
+        font-size: 13px;
+        color: var(--text);
+        display: block;
+      }
+      .cart-item-info span {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .cart-item-total {
+        font-weight: 800;
+        font-size: 14px;
+        color: var(--brand);
+      }
+      .cart-item-controls {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 4px;
+      }
+      .cart-item-qty {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .btn-qty {
+        width: 26px;
+        height: 26px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background-color: #ffffff;
+        font-size: 14px;
+        font-weight: bold;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .btn-qty:hover {
+        background-color: #f1f5f9;
+      }
+      .cart-item-disc {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .inp-item-disc {
+        width: 48px;
+        height: 24px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 4px;
+        font-size: 11px;
+        text-align: center;
+      }
+
+      /* Cart Footer / Checkout Totals */
+      .cart-footer {
+        padding: 16px;
+        border-top: 1px solid var(--line);
+        background-color: #ffffff;
+        box-shadow: 0 -4px 12px rgba(0,0,0,0.03);
+      }
+      .totals-row {
+        display: flex;
+        justify-content: space-between;
+        font-size: 13px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .totals-row.grand-total {
+        font-size: 18px;
+        font-weight: 800;
+        color: var(--text);
+        border-top: 1px solid #f1f5f9;
+        padding-top: 10px;
+        margin-top: 8px;
+      }
+      .totals-row.grand-total span.val {
+        color: var(--brand);
+      }
+      .btn-checkout {
+        width: 100%;
+        height: 48px;
+        background-color: var(--brand);
+        color: #ffffff;
+        border: none;
+        border-radius: 10px;
+        font-size: 15px;
+        font-weight: 700;
+        cursor: pointer;
+        margin-top: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        box-shadow: 0 4px 12px rgba(1, 69, 130, 0.2);
+      }
+      .btn-checkout:hover {
+        opacity: 0.95;
+      }
+      .btn-credit {
+        width: 100%;
+        height: 42px;
+        background-color: #0f766e;
+        color: #ffffff;
+        border: none;
+        border-radius: 10px;
+        font-size: 14px;
+        font-weight: 700;
+        cursor: pointer;
+        margin-top: 8px;
+      }
+      .btn-credit:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+      .pay-quick-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .pay-quick {
+        height: 40px;
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 8px;
+        font-weight: 700;
+        font-size: 13px;
+        cursor: pointer;
+        color: var(--text);
+      }
+      .pay-quick.active {
+        background: var(--brand);
+        color: #fff;
+        border-color: var(--brand);
+      }
+      .pay-quick.credit.active {
+        background: #0f766e;
+        border-color: #0f766e;
+      }
+      .credit-note {
+        display: none;
+        margin: 0 0 10px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: #ecfdf5;
+        color: #0f766e;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .btn-hold {
+        width: 100%;
+        height: 38px;
+        background-color: rgba(1, 69, 130, 0.05);
+        color: var(--brand);
+        border: 1px solid rgba(1, 69, 130, 0.15);
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        margin-top: 8px;
+      }
+
+      /* ─── TABS / OTHER SUB PANELS ───────────────────────────────── */
+      .panel-content {
+        padding: 24px;
+        height: 100%;
+        overflow-y: auto;
+        box-sizing: border-box;
+      }
+      .panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 12px;
+      }
+      .panel-header h2 {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 800;
+        color: var(--text);
+      }
+      .settings-stack {
+        display: grid;
+        gap: 16px;
+        max-width: 760px;
+      }
+      .settings-card {
+        background: #fff;
+        padding: 20px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+      }
+      .settings-card h3 {
+        margin: 0 0 6px;
+        font-size: 15px;
+        color: var(--brand);
+      }
+      .settings-muted {
+        margin: 0 0 14px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .spec-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px 16px;
+        margin-bottom: 14px;
+      }
+      .spec-item {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .spec-item span { font-size: 11px; color: var(--muted); }
+      .spec-item b { font-size: 13px; font-weight: 600; color: var(--text); }
+      .meter { margin-top: 10px; }
+      .meter-row {
+        display: flex;
+        justify-content: space-between;
+        font-size: 12px;
+        margin-bottom: 4px;
+      }
+      .meter-row.muted { color: var(--muted); font-size: 11px; margin-top: 4px; }
+      .meter-track {
+        height: 8px;
+        background: #e8eef5;
+        border-radius: 99px;
+        overflow: hidden;
+      }
+      .meter-fill {
+        display: block;
+        height: 100%;
+        width: 0;
+        background: var(--brand);
+        border-radius: 99px;
+      }
+      .meter-fill.mem { background: #0ea5e9; }
+      .storage-hero {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .storage-hero-label { font-size: 11px; color: var(--muted); }
+      .storage-hero-value { font-size: 22px; font-weight: 800; color: var(--text); }
+      .settings-path {
+        margin: 8px 0 0;
+        font-size: 11px;
+        color: var(--muted);
+        word-break: break-all;
+      }
+      .panel-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 16px;
+      }
+      .embed-kpi {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      .embed-kpi .kpi {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 14px 16px;
+      }
+      .embed-kpi span { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; }
+      .embed-kpi b { display: block; font-size: 22px; margin-top: 4px; }
+      .data-panel {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+        margin-bottom: 14px;
+      }
+      .data-panel h3 {
+        margin: 0;
+        padding: 12px 16px;
+        font-size: 14px;
+        border-bottom: 1px solid var(--line);
+      }
+      .data-panel table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      .data-panel th { text-align: left; font-size: 11px; color: var(--muted); padding: 10px 16px; background: #f8fafc; }
+      .data-panel td { padding: 10px 16px; border-top: 1px solid #f1f5f9; }
+      .cat-subtabs { display: flex; gap: 8px; margin-bottom: 12px; }
+      .cat-subtab {
+        height: 34px; border: 1px solid var(--line); background: #fff;
+        border-radius: 8px; padding: 0 14px; font-weight: 700; font-size: 13px;
+      }
+      .cat-subtab.active { background: var(--brand); color: #fff; border-color: var(--brand); }
+      .prod-modal { width: 880px; max-width: 94vw; max-height: 92vh; padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+      .prod-form-head { padding: 16px 20px 8px; }
+      .prod-tabs { display: flex; overflow-x: auto; border-bottom: 1px solid var(--line); padding: 0 12px; }
+      .prod-tab {
+        height: 40px; border: 0; background: transparent; padding: 0 12px;
+        font-size: 12px; font-weight: 700; color: var(--muted); white-space: nowrap;
+        border-bottom: 2px solid transparent;
+      }
+      .prod-tab.active { color: var(--brand); border-bottom-color: var(--brand); }
+      .prod-form-body { padding: 16px 20px; overflow-y: auto; max-height: 58vh; }
+      .prod-pane { display: none; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+      .prod-pane.active { display: grid; }
+      .pf-span { grid-column: 1 / -1; }
+      .pf-label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+      .pf-hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+      .pf-input, .pf-select, .pf-textarea { width: 100%; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+      .pf-input, .pf-select { height: 36px; padding: 0 10px; }
+      .pf-textarea { padding: 8px 10px; min-height: 72px; }
+      .pf-check { display: flex; align-items: center; gap: 8px; min-height: 36px; font-size: 13px; }
+      .prod-form-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px 16px; border-top: 1px solid var(--line); }
+      .pf-imgs { display: flex; flex-wrap: wrap; gap: 8px; }
+      .pf-img { width: 72px; height: 72px; border-radius: 10px; overflow: hidden; position: relative; border: 1px solid var(--line); background: #f8fafc; }
+      .pf-img img { width: 100%; height: 100%; object-fit: cover; }
+      .pf-img button { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border: 0; border-radius: 999px; background: #ef4444; color: #fff; font-size: 11px; }
+      .pf-custom-row { display: grid; grid-template-columns: 1fr 1fr 32px; gap: 8px; margin-top: 8px; }
+      .cat-toolbar { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+      .cat-toolbar input {
+        height: 36px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; min-width: 220px;
+      }
+      .report-card {
+        background-color: #ffffff;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+      }
+
+      /* ─── CHECKOUT MODAL / SCREEN ──────────────────────────────── */
+      .checkout-overlay {
+        position: fixed;
+        inset: 0;
+        background-color: rgba(0, 0, 0, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+        display: none;
+      }
+      .checkout-modal {
+        background-color: #ffffff;
+        border-radius: 16px;
+        width: 480px;
+        max-width: 90vw;
+        max-height: 85vh;
+        overflow-y: auto;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+        padding: 24px;
+      }
+      .payments-container {
+        margin-top: 14px;
+        max-height: 150px;
+        overflow-y: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px;
+        background-color: #fafafa;
+      }
+      .payment-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+      .payment-row select, .payment-row input {
+        height: 36px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 0 8px;
+        font-size: 13px;
+      }
+
+      /* Keypad */
+      .keypad-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .keypad-btn {
+        height: 48px;
+        background-color: #ffffff;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        font-size: 18px;
+        font-weight: 700;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .keypad-btn:hover {
+        background-color: #f1f5f9;
+      }
+
+      /* ─── GENERAL DIALOG / MODAL ───────────────────────────────── */
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background-color: rgba(0,0,0,0.6);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+        display: none;
+      }
+      .modal-box {
+        background-color: #ffffff;
+        border-radius: 16px;
+        padding: 24px;
+        width: 440px;
+        max-width: 90vw;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+      }
+      .modal-box-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+      .modal-box-header h3 {
+        margin: 0;
+        font-size: 17px;
+        font-weight: 700;
+      }
+      .modal-close-btn {
+        background: transparent;
+        border: none;
+        font-size: 18px;
+        cursor: pointer;
+      }
+      
+      /* Receipt paper modal specific */
+      .receipt-modal-box {
+        width: 400px;
+        max-height: 90vh;
+        overflow-y: auto;
+      }
+      
+      /* Receipt CSS style */
+      .receipt-paper {
+        background: #ffffff;
+        color: #000000;
+        font-family: monospace;
+        font-size: 12px;
+        padding: 16px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        line-height: 1.4;
+      }
+
+      /* Returns View Grid */
+      .returns-table, .shifts-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 14px;
+      }
+      .returns-table th, .returns-table td, .shifts-table th, .shifts-table td {
+        border-bottom: 1px solid var(--line);
+        padding: 10px;
+        text-align: left;
+        font-size: 13px;
+      }
+      .returns-table th, .shifts-table th {
+        background-color: #f1f5f9;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-layout">
+      <!-- Top Bar -->
+      <div class="top-bar">
+        <div class="top-brand">
+          <b>Bisonstechs POS</b>
+          <span id="terminal-badge">Terminal...</span>
+          <span class="status-badge">SHIFT OPEN</span>
+          <span class="offline-badge" id="offline-badge">Offline</span>
+        </div>
+        <div class="top-info">
+          <span id="cashier-meta">Cashier: ...</span>
+          <div class="time-badge" id="live-clock">00:00:00</div>
+          <div class="top-actions">
+             <button class="btn-nav-action ghost" id="btn-sync-offline">Sync</button>
+             <button class="btn-nav-action ghost" id="btn-admin" style="display:none;">Admin</button>
+             <button class="btn-nav-action ghost" id="btn-sales-orders">Sales Orders</button>
+             <button class="btn-nav-action ghost" id="btn-kick-drawer">Drawer</button>
+             <button class="btn-nav-action ghost" id="btn-cash-flow">Cash In/Out</button>
+             <button class="btn-nav-action accent" id="btn-suspend-shift">Suspend</button>
+             <button class="btn-nav-action danger" id="btn-trigger-close-shift">Close Shift</button>
+             <button class="btn-nav-action danger" id="logout">Sign out</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main Workspace Grid -->
+      <div class="main-container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+          <button class="tab-btn active" data-tab="sell">
+            <span>Sell</span>
+          </button>
+          <button class="tab-btn" data-tab="returns">
+            <span>Returns</span>
+          </button>
+          <button class="tab-btn" data-tab="held">
+            <span>Held</span>
+          </button>
+          <button class="tab-btn" data-tab="shifts">
+            <span>Shifts</span>
+          </button>
+          <button class="tab-btn" data-tab="reports">
+            <span>Reports</span>
+          </button>
+          <button class="tab-btn" data-tab="sales">
+            <span>Sales</span>
+          </button>
+          <button class="tab-btn" data-tab="categories">
+            <span>Categories</span>
+          </button>
+          <button class="tab-btn" data-tab="products">
+            <span>Products</span>
+          </button>
+          <button class="tab-btn" data-tab="settings">
+            <span>Settings</span>
+          </button>
+        </div>
+
+        <!-- View panel container -->
+        <div class="workspace">
+          
+          <!-- ─── T1: SELL VIEW ────────────────────────────────────── -->
+          <div class="view-panel active" id="tab-sell">
+            <div class="sell-layout">
+              <!-- Left side Product Browser -->
+              <div class="product-browser">
+                <div class="browser-header">
+                  <div class="search-row">
+                    <input type="text" class="inp-search" id="product-search" placeholder="Search by name, SKU or category..." />
+                    <input type="text" class="inp-scan" id="barcode-scan-box" placeholder="Scan barcode..." />
+                  </div>
+                  <div class="categories-bar" id="categories-tabs-bar">
+                    <!-- Crumb / category tabs dynamically loaded -->
+                  </div>
+                </div>
+                <div class="products-grid-scroll">
+                  <div class="categories-grid" id="main-categories-grid">
+                    <!-- Loaded dynamically -->
+                  </div>
+                  <div class="products-grid" id="products-grid" style="display:none;">
+                    <!-- Loaded dynamically -->
+                  </div>
+                </div>
+              </div>
+
+              <!-- Right side Cart Pane -->
+              <div class="cart-pane">
+                <div class="cart-header">
+                  <h3>Cart (<span id="cart-qty-count">0</span> items)</h3>
+                  <button class="btn-clear-cart" id="btn-clear-cart" style="display:none;">Clear</button>
+                </div>
+                
+                <div class="customer-selector">
+                  <div class="customer-inp-wrap">
+                    <input type="text" class="inp-customer" id="customer-search-input" placeholder="Search customer (name, phone)..." />
+                    <span class="icon-cust-search">&#128100;</span>
+                  </div>
+                  <div class="cust-dropdown" id="customer-dropdown-results">
+                    <!-- autocomplete items -->
+                  </div>
+                  <!-- Credit info card -->
+                  <div class="cust-credit-panel" id="cust-credit-info-card">
+                    <div class="cust-credit-grid">
+                      <div>Limit: <b id="cc-limit">$0.00</b></div>
+                      <div>Owed: <b id="cc-owed">$0.00</b></div>
+                      <div>Available: <b id="cc-avail">$0.00</b></div>
+                      <div>Points: <b id="cc-points">0</b></div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Custom line addition -->
+                <div class="custom-line-section">
+                  <div class="custom-line-grid">
+                    <input type="text" class="inp-custom-price" id="custom-line-name" placeholder="Item name..." />
+                    <input type="number" class="inp-custom-price" id="custom-line-price" placeholder="Price" min="0.01" step="0.01" />
+                    <input type="number" class="inp-custom-qty" id="custom-line-qty" value="1" min="1" />
+                    <div class="custom-line-total" id="custom-line-total">$0.00</div>
+                    <button class="btn-add-custom" id="btn-add-custom-line">Add</button>
+                  </div>
+                </div>
+
+                <!-- Items Scroll Container -->
+                <div class="cart-items-list" id="cart-items-list-container">
+                  <!-- items dynamically loaded -->
+                </div>
+
+                <!-- Cart Totals & Pay -->
+                <div class="cart-footer">
+                  <div class="totals-row">
+                    <span>Items (qty)</span>
+                    <span id="cart-items-qty-total">0</span>
+                  </div>
+                  <div class="totals-row">
+                    <span>Subtotal</span>
+                    <span id="cart-subtotal">$0.00</span>
+                  </div>
+                  <div class="totals-row">
+                    <span>Discount
+                      <select id="cart-discount-mode" style="border:1px solid #ddd;font-size:11px;">
+                        <option value="pct">%</option>
+                        <option value="amount">$</option>
+                      </select>
+                      <input type="number" id="cart-discount-input" style="width:40px;height:18px;text-align:center;border:1px solid #ddd;font-size:11px;" value="0" min="0" />
+                    </span>
+                    <span id="cart-discount-value">-$0.00</span>
+                  </div>
+                  <div class="totals-row" id="tax-summary-row" style="display:none;">
+                    <span id="tax-regime-label">GST</span>
+                    <span id="cart-tax-value">$0.00</span>
+                  </div>
+                  <div class="totals-row grand-total">
+                    <span>Total</span>
+                    <span class="val" id="cart-grand-total">$0.00</span>
+                  </div>
+
+                  <button class="btn-checkout" id="btn-checkout-trigger" disabled>
+                    Checkout — <span id="checkout-grand-total">$0.00</span>
+                  </button>
+                  <button class="btn-credit" id="btn-credit-sale-trigger" disabled>Credit sale</button>
+                  <button class="btn-hold" id="btn-hold-sale-trigger" disabled>⏸️ Hold Sale</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ─── T2: RETURNS VIEW ────────────────────────────────── -->
+          <div class="view-panel" id="tab-returns">
+            <div class="panel-content">
+              <div class="panel-header">
+                <h2>Process Sales Return</h2>
+              </div>
+              <div style="display:flex;gap:12px;margin-bottom:16px;">
+                <input type="text" class="inp-search" id="return-search-invoice" placeholder="Search by Invoice Number..." style="max-width:320px;" />
+                <button class="btn-nav-action ghost" id="btn-search-return" style="background-color:var(--brand);color:white;">Search</button>
+              </div>
+              <div id="returns-list-wrap">
+                <!-- return table loaded here -->
+              </div>
+            </div>
+          </div>
+
+          <!-- ─── T3: HELD SALES VIEW ────────────────────────────── -->
+          <div class="view-panel" id="tab-held">
+            <div class="panel-content">
+              <div class="panel-header">
+                <h2>Held Sales</h2>
+              </div>
+              <div id="held-sales-list-wrap">
+                <!-- held sales list -->
+              </div>
+            </div>
+          </div>
+
+          <!-- ─── T4: SHIFTS VIEW ────────────────────────────────── -->
+          <div class="view-panel" id="tab-shifts">
+            <div class="panel-content">
+              <div class="panel-header">
+                <h2>Shift History</h2>
+              </div>
+              <div id="shifts-list-wrap">
+                <!-- shifts list -->
+              </div>
+            </div>
+          </div>
+
+          <!-- ─── T5: REPORTS VIEW ───────────────────────────────── -->
+          <div class="view-panel" id="tab-reports">
+            <div class="panel-content">
+              <div class="panel-header">
+                <h2>Shift Reports</h2>
+              </div>
+              <div class="panel-grid" id="reports-cards-grid">
+                <!-- report cards -->
+              </div>
+            </div>
+          </div>
+
+          <!-- ─── SALES REGISTER ──────────────────────────────── -->
+          <div class="view-panel" id="tab-sales">
+            <div class="panel-content">
+              <div class="panel-header">
+                <h2>POS Sales</h2>
+              </div>
+              <div class="embed-kpi">
+                <div class="kpi"><span>Sales count</span><b id="sales-kpi-count">0</b></div>
+                <div class="kpi"><span>Total amount</span><b id="sales-kpi-total">$0.00</b></div>
+                <div class="kpi"><span>Credit sales</span><b id="sales-kpi-credit">$0.00</b></div>
+                <div class="kpi"><span>Cashiers</span><b id="sales-kpi-users">0</b></div>
+              </div>
+              <div class="data-panel">
+                <h3>By cashier / user</h3>
+                <div id="sales-user-table"></div>
+              </div>
+              <div class="data-panel">
+                <h3>All sales</h3>
+                <div id="sales-list-table"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ─── CATEGORIES ───────────────────────────────────── -->
+          <div class="view-panel" id="tab-categories">
+            <div class="panel-content">
+              <div class="panel-header">
+                <h2>Categories</h2>
+              </div>
+              <div class="cat-subtabs">
+                <button class="cat-subtab active" type="button" data-cat-tab="cats">Categories</button>
+                <button class="cat-subtab" type="button" data-cat-tab="subs">Subcategories</button>
+              </div>
+              <div class="cat-toolbar">
+                <input id="cat-search" type="text" placeholder="Search..." />
+                <button class="btn-add-custom" id="cat-add" type="button">+ Add Category</button>
+              </div>
+              <div class="data-panel" id="cat-table"></div>
+            </div>
+          </div>
+
+          <!-- ─── PRODUCTS ─────────────────────────────────────── -->
+          <div class="view-panel" id="tab-products">
+            <div class="panel-content">
+              <div class="panel-header">
+                <h2>Products</h2>
+              </div>
+              <div class="cat-toolbar">
+                <input id="prod-search" type="text" placeholder="Search name, SKU, barcode..." />
+                <button class="btn-add-custom" id="prod-add" type="button">+ Add Product</button>
+              </div>
+              <div class="data-panel" id="prod-table"></div>
+            </div>
+          </div>
+
+          <!-- ─── T6: SETTINGS VIEW ──────────────────────────────── -->
+          <div class="view-panel" id="tab-settings">
+            <div class="panel-content">
+              <div class="panel-header">
+                <h2>POS settings</h2>
+              </div>
+              <div class="settings-stack">
+                <div class="settings-card">
+                  <h3>This computer</h3>
+                  <p class="settings-muted" id="machine-os">Loading…</p>
+                  <div class="spec-grid" id="machine-specs"></div>
+                  <div class="meter">
+                    <div class="meter-row"><span>Disk used</span><b id="disk-used-label">—</b></div>
+                    <div class="meter-track"><span class="meter-fill" id="disk-used-bar"></span></div>
+                    <div class="meter-row muted"><span id="disk-free-label">—</span><span id="disk-total-label">—</span></div>
+                  </div>
+                  <div class="meter">
+                    <div class="meter-row"><span>Memory used</span><b id="mem-used-label">—</b></div>
+                    <div class="meter-track"><span class="meter-fill mem" id="mem-used-bar"></span></div>
+                    <div class="meter-row muted"><span id="mem-free-label">—</span><span id="mem-total-label">—</span></div>
+                  </div>
+                </div>
+                <div class="settings-card">
+                  <h3>This app’s local storage</h3>
+                  <p class="settings-muted">Offline catalog, queues and session on this PC.</p>
+                  <div class="storage-hero">
+                    <div>
+                      <div class="storage-hero-label">App data used</div>
+                      <div class="storage-hero-value" id="app-data-used">—</div>
+                    </div>
+                    <div>
+                      <div class="storage-hero-label">Install size</div>
+                      <div class="storage-hero-value" id="app-install-size">—</div>
+                    </div>
+                  </div>
+                  <div class="spec-grid" id="app-storage-specs"></div>
+                  <p class="settings-path" id="app-data-path"></p>
+                </div>
+                <div class="settings-card">
+                  <h3>Hardware</h3>
+                  <div style="margin-bottom:12px;">
+                    <label style="display:block;font-weight:600;margin-bottom:6px;font-size:13px;">Barcode Scanner</label>
+                    <input type="checkbox" id="settings-enable-scanner" checked /> Expose scanner settings
+                  </div>
+                  <div style="margin-bottom:12px;">
+                    <label style="display:block;font-weight:600;margin-bottom:6px;font-size:13px;">Card Terminal (Split Payment Link)</label>
+                    <input type="checkbox" id="settings-enable-terminal" /> Enable card reader link
+                  </div>
+                  <div style="margin-bottom:12px;">
+                    <label style="display:block;font-weight:600;margin-bottom:6px;font-size:13px;">Receipt Thermal Printing</label>
+                    <input type="checkbox" id="settings-enable-thermal" /> Auto-print receipt on sale
+                  </div>
+                  <button class="btn-add-custom" id="btn-save-settings" style="margin-top:10px;">Save Settings</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── MODAL: CLOSE SHIFT ──────────────────────────────────────── -->
+    <div class="modal-overlay" id="modal-close-shift">
+      <div class="modal-box">
+        <div class="modal-box-header">
+          <h3>Close Terminal Shift</h3>
+          <button class="modal-close-btn" id="btn-close-shift-cancel">✕</button>
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;">Counted Cash in Drawer</label>
+          <input type="number" id="close-shift-actual-cash" style="width:100%;height:44px;font-size:20px;text-align:center;font-weight:bold;border:1px solid var(--line);border-radius:8px;" placeholder="0.00" min="0" step="0.01" />
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;">Notes (optional)</label>
+          <input type="text" id="close-shift-notes" style="width:100%;height:36px;border:1px solid var(--line);border-radius:6px;padding:0 8px;font-size:13px;" placeholder="Closing notes..." />
+        </div>
+        <div style="display:flex;gap:12px;">
+          <button class="btn-nav-action ghost" style="flex:1;justify-content:center;" id="btn-close-shift-no">Cancel</button>
+          <button class="btn-nav-action danger" style="flex:2;justify-content:center;" id="btn-close-shift-yes">Close & Print Report</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── MODAL: CASH FLOW (IN/OUT) ──────────────────────────────── -->
+    <div class="modal-overlay" id="modal-cash-flow">
+      <div class="modal-box">
+        <div class="modal-box-header">
+          <h3>Cash Flow In/Out</h3>
+          <button class="modal-close-btn" id="btn-cash-flow-cancel">✕</button>
+        </div>
+        <div style="margin-bottom:12px;">
+          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;">Transaction Type</label>
+          <select id="cash-flow-type" style="width:100%;height:36px;border:1px solid var(--line);border-radius:6px;">
+            <option value="In">Cash In (Add Cash)</option>
+            <option value="Out">Cash Out (Payout)</option>
+          </select>
+        </div>
+        <div style="margin-bottom:12px;">
+          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;">Amount</label>
+          <input type="number" id="cash-flow-amount" style="width:100%;height:36px;border:1px solid var(--line);border-radius:6px;padding:0 8px;" placeholder="0.00" min="0.01" step="0.01" />
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;">Reason</label>
+          <input type="text" id="cash-flow-reason" style="width:100%;height:36px;border:1px solid var(--line);border-radius:6px;padding:0 8px;" placeholder="Reason for cash change..." />
+        </div>
+        <div style="display:flex;gap:12px;">
+          <button class="btn-nav-action ghost" style="flex:1;justify-content:center;" id="btn-cash-flow-no">Cancel</button>
+          <button class="btn-nav-action accent" style="flex:2;justify-content:center;" id="btn-cash-flow-yes">Submit Entry</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── MODAL: CHECKOUT ────────────────────────────────────────── -->
+    <div class="checkout-overlay" id="checkout-modal-overlay">
+      <div class="checkout-modal">
+        <h3 style="margin:0 0 16px 0;">Checkout Payment</h3>
+        <p id="checkout-customer-label" class="settings-muted" style="margin:-8px 0 12px;">Walk-in Customer</p>
+        
+        <div style="margin-bottom:12px;display:flex;justify-content:space-between;font-size:14px;border-bottom:1px solid #f1f5f9;padding-bottom:10px;">
+          <span>Order Grand Total</span>
+          <span style="font-weight:800;color:var(--brand);" id="checkout-modal-total">$0.00</span>
+        </div>
+
+        <div class="pay-quick-row">
+          <button type="button" class="pay-quick" data-method="Cash">Cash</button>
+          <button type="button" class="pay-quick" data-method="Card">Card</button>
+          <button type="button" class="pay-quick credit" data-method="Credit">Credit</button>
+        </div>
+        <p class="credit-note" id="checkout-credit-note">This sale will be posted to the customer’s account.</p>
+        
+        <div style="margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <label style="font-size:12px;color:var(--muted);">Payments</label>
+            <button class="btn-clear-cart" id="btn-add-split-payment" style="background-color:rgba(1,69,130,0.1);color:var(--brand);padding:2px 8px;">+ Add Split</button>
+          </div>
+          <div class="payments-container" id="payments-split-list">
+            <!-- Split payments rows -->
+          </div>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:14px;font-weight:700;">
+          <span id="checkout-change-label">Change Due:</span>
+          <span style="font-size:18px;" id="checkout-modal-change">$0.00</span>
+        </div>
+
+        <!-- Checkout Numpad helper -->
+        <div class="keypad-grid">
+          <button class="keypad-btn">7</button><button class="keypad-btn">8</button><button class="keypad-btn">9</button>
+          <button class="keypad-btn">4</button><button class="keypad-btn">5</button><button class="keypad-btn">6</button>
+          <button class="keypad-btn">1</button><button class="keypad-btn">2</button><button class="keypad-btn">3</button>
+          <button class="keypad-btn">00</button><button class="keypad-btn">0</button><button class="keypad-btn" style="color:#ef4444;">⌫</button>
+        </div>
+        <button class="btn-hold" id="btn-checkout-set-exact" style="width:100%;margin-top:10px;">Set Exact Amount</button>
+
+        <div style="display:flex;gap:12px;margin-top:20px;">
+          <button class="btn-nav-action ghost" style="flex:1;justify-content:center;" id="btn-checkout-close">Cancel</button>
+          <button class="btn-nav-action" style="flex:2;justify-content:center;background-color:#10b981;color:#fff;" id="btn-checkout-submit">Submit Sale</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── MODAL: ADD CUSTOMER ────────────────────────────────────── -->
+    <div class="modal-overlay" id="modal-add-customer">
+      <div class="modal-box" style="width:480px;">
+        <div class="modal-box-header">
+          <h3>Create Customer</h3>
+          <button class="modal-close-btn" id="btn-add-customer-cancel">✕</button>
+        </div>
+        <div style="max-height:360px;overflow-y:auto;padding-right:4px;">
+          <div style="margin-bottom:12px;">
+            <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px;">Customer Name *</label>
+            <input type="text" id="cust-new-name" style="width:100%;height:32px;border:1px solid var(--line);border-radius:6px;padding:0 8px;" />
+          </div>
+          <div style="margin-bottom:12px;">
+            <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px;">Email</label>
+            <input type="email" id="cust-new-email" style="width:100%;height:32px;border:1px solid var(--line);border-radius:6px;padding:0 8px;" />
+          </div>
+          <div style="margin-bottom:12px;">
+            <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px;">Phone</label>
+            <input type="tel" id="cust-new-phone" style="width:100%;height:32px;border:1px solid var(--line);border-radius:6px;padding:0 8px;" />
+          </div>
+          <div style="margin-bottom:12px;">
+            <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px;">Company Name</label>
+            <input type="text" id="cust-new-company" style="width:100%;height:32px;border:1px solid var(--line);border-radius:6px;padding:0 8px;" />
+          </div>
+          <div style="margin-bottom:12px;">
+            <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px;">Customer Type</label>
+            <select id="cust-new-type" style="width:100%;height:32px;border:1px solid var(--line);border-radius:6px;">
+              <option value="Individual">Individual</option>
+              <option value="Business">Business</option>
+              <option value="Wholesale">Wholesale</option>
+              <option value="Distributor">Distributor</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:16px;">
+          <button class="btn-nav-action ghost" style="flex:1;justify-content:center;" id="btn-add-customer-no">Cancel</button>
+          <button class="btn-nav-action accent" style="flex:2;justify-content:center;" id="btn-add-customer-yes">Create Customer</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── MODAL: RECEIPT ─────────────────────────────────────────── -->
+    <div class="modal-overlay" id="modal-receipt">
+      <div class="modal-box receipt-modal-box">
+        <div class="modal-box-header">
+          <h3>Sale Complete</h3>
+          <button class="modal-close-btn" id="btn-receipt-close">✕</button>
+        </div>
+        
+        <div class="receipt-paper" id="receipt-paper-box">
+          <!-- Receipt layout dynamically formatted -->
+        </div>
+
+        <div style="display:flex;gap:10px;margin-top:16px;">
+          <button class="btn-nav-action ghost" style="flex:1;justify-content:center;background-color:var(--brand);color:white;" id="btn-receipt-print">Print Receipt</button>
+          <button class="btn-nav-action ghost" style="flex:1;justify-content:center;" id="btn-receipt-email">Send Email</button>
+        </div>
+        <button class="btn-checkout" style="margin-top:12px;background-color:#10b981;" id="btn-receipt-new-sale">New Sale</button>
+      </div>
+    </div>
+
+    <!-- ─── MODAL: MANAGER PIN APPROVAL ────────────────────────────── -->
+    <div class="modal-overlay" id="modal-manager-pin">
+      <div class="modal-box">
+        <div class="modal-box-header">
+          <h3>Manager Approval Required</h3>
+          <button class="modal-close-btn" id="btn-manager-cancel">✕</button>
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:14px;" id="manager-reason-label">Enter credentials to authorize discount.</p>
+        <div style="margin-bottom:12px;">
+          <input type="email" id="manager-email" style="width:100%;height:36px;border:1px solid var(--line);border-radius:6px;padding:0 8px;font-size:13px;" placeholder="Manager Email" />
+        </div>
+        <div style="margin-bottom:16px;">
+          <input type="password" id="manager-pass" style="width:100%;height:36px;border:1px solid var(--line);border-radius:6px;padding:0 8px;font-size:13px;" placeholder="Password" />
+        </div>
+        <div style="display:flex;gap:12px;">
+          <button class="btn-nav-action ghost" style="flex:1;justify-content:center;" id="btn-manager-no">Cancel</button>
+          <button class="btn-nav-action accent" style="flex:2;justify-content:center;" id="btn-manager-yes">Authorize</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="cat-overlay">
+      <div class="modal-box" style="width:420px;">
+        <form id="cat-form">
+          <div class="modal-box-header">
+            <h3 id="cat-form-title">Add Category</h3>
+            <button type="button" class="modal-close-btn" id="cat-form-cancel">✕</button>
+          </div>
+          <div class="err" id="cat-form-error" style="color:#b91c1c;font-size:12px;margin-bottom:8px;"></div>
+          <div style="margin-bottom:10px;display:none;" id="cat-parent-field">
+            <label style="display:block;font-size:12px;font-weight:700;margin-bottom:4px;">Parent category *</label>
+            <select id="cat-f-parent" style="width:100%;height:36px;border:1px solid var(--line);border-radius:8px;"></select>
+          </div>
+          <div style="margin-bottom:10px;">
+            <label style="display:block;font-size:12px;font-weight:700;margin-bottom:4px;">Name *</label>
+            <input id="cat-f-name" required style="width:100%;height:36px;border:1px solid var(--line);border-radius:8px;padding:0 10px;" />
+          </div>
+          <div style="margin-bottom:10px;">
+            <label style="display:block;font-size:12px;font-weight:700;margin-bottom:4px;">Code</label>
+            <input id="cat-f-code" placeholder="Auto or custom" style="width:100%;height:36px;border:1px solid var(--line);border-radius:8px;padding:0 10px;" />
+          </div>
+          <div style="margin-bottom:10px;">
+            <label style="display:block;font-size:12px;font-weight:700;margin-bottom:4px;">Description</label>
+            <textarea id="cat-f-desc" rows="2" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;"></textarea>
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+            <button type="button" class="btn-nav-action ghost" id="cat-form-no">Cancel</button>
+            <button type="submit" class="btn-nav-action accent">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="prod-overlay">
+      <div class="modal-box prod-modal">
+        <form id="prod-form">
+          <div class="modal-box-header prod-form-head">
+            <h3 id="prod-form-title">Add Product</h3>
+            <button type="button" class="modal-close-btn" id="prod-form-cancel">✕</button>
+          </div>
+          <div class="prod-tabs" id="prod-tabs">
+            <button type="button" class="prod-tab active" data-prod-tab="basic">Basic Info</button>
+            <button type="button" class="prod-tab" data-prod-tab="pricing">Pricing &amp; Stock</button>
+            <button type="button" class="prod-tab" data-prod-tab="category">Category &amp; Supplier</button>
+            <button type="button" class="prod-tab" data-prod-tab="warehouse">Warehouse</button>
+            <button type="button" class="prod-tab" data-prod-tab="physical">Physical</button>
+            <button type="button" class="prod-tab" data-prod-tab="expiry">Expiry &amp; Batch</button>
+            <button type="button" class="prod-tab" data-prod-tab="shipping">Shipping</button>
+            <button type="button" class="prod-tab" data-prod-tab="media">Media</button>
+            <button type="button" class="prod-tab" data-prod-tab="custom">Custom</button>
+          </div>
+          <div class="prod-form-body">
+            <div id="prod-form-error" style="color:#b91c1c;font-size:12px;margin-bottom:8px;"></div>
+
+            <div class="prod-pane active" data-pane="basic">
+              <div><label class="pf-label">Product Name *</label><input class="pf-input" id="pf-name" required placeholder="e.g., Cotton - Grade A" /></div>
+              <div><label class="pf-label">SKU</label><input class="pf-input" id="pf-sku" placeholder="Auto on save" /><div class="pf-hint">Leave blank to auto-generate locally</div></div>
+              <div><label class="pf-label">Barcode</label><input class="pf-input" id="pf-barcode" placeholder="Leave blank to use SKU" /><div class="pf-hint">Blank uses SKU automatically</div></div>
+              <div>
+                <label class="pf-label">Product QR</label>
+                <div style="display:flex;gap:8px;">
+                  <input class="pf-input" id="pf-qrCode" placeholder="Scan or generate from SKU" />
+                  <button type="button" class="btn-nav-action ghost" id="pf-qr-from-sku">From SKU</button>
+                </div>
+              </div>
+              <div><label class="pf-label">Product Type</label><select class="pf-select" id="pf-productType"><option value="Physical">Physical</option><option value="Service">Service</option><option value="Digital">Digital</option><option value="Raw Material">Raw Material</option></select></div>
+              <div class="pf-check"><input type="checkbox" id="pf-isActive" checked /><label for="pf-isActive">Active</label></div>
+              <div class="pf-span"><label class="pf-label">Description</label><textarea class="pf-textarea" id="pf-description" placeholder="Enter product description..."></textarea></div>
+              <div class="pf-span"><label class="pf-label">Tags</label><input class="pf-input" id="pf-tags" placeholder="e.g., cotton, grade-a, raw-material" /></div>
+            </div>
+
+            <div class="prod-pane" data-pane="pricing">
+              <div><label class="pf-label">Cost Price *</label><input class="pf-input" id="pf-costPrice" type="number" min="0" step="0.01" placeholder="0.00" /></div>
+              <div><label class="pf-label">Selling Price *</label><input class="pf-input" id="pf-sellingPrice" type="number" min="0" step="0.01" placeholder="0.00" /></div>
+              <div><label class="pf-label">Landing Cost</label><input class="pf-input" id="pf-landingCost" type="number" min="0" step="0.01" placeholder="0.00" /></div>
+              <div><label class="pf-label">Currency *</label><select class="pf-select" id="pf-currency"><option>PKR</option><option>USD</option><option>EUR</option><option>GBP</option><option>AUD</option></select></div>
+              <div><label class="pf-label">Tax Rate %</label><input class="pf-input" id="pf-taxRate" type="number" min="0" step="0.01" /></div>
+              <div><label class="pf-label">Tax Type</label><select class="pf-select" id="pf-taxType"><option>Exclusive</option><option>Inclusive</option></select></div>
+              <div><label class="pf-label">Stock Unit</label><select class="pf-select" id="pf-stockUnit"><option>Pcs</option><option>Kg</option><option>Box</option><option>Meter</option><option>Liter</option><option>Dozen</option><option>Pair</option><option>Set</option></select></div>
+              <div><label class="pf-label">Current Stock</label><input class="pf-input" id="pf-currentStock" type="number" min="0" step="1" /><div class="pf-hint">Local POS stock on this PC</div></div>
+              <div><label class="pf-label">Minimum Stock</label><input class="pf-input" id="pf-minimumStock" type="number" min="0" step="1" placeholder="5" /></div>
+              <div><label class="pf-label">Maximum Stock</label><input class="pf-input" id="pf-maximumStock" type="number" min="0" step="1" placeholder="100" /></div>
+            </div>
+
+            <div class="prod-pane" data-pane="category">
+              <div><label class="pf-label">Category *</label><select class="pf-select" id="pf-category"></select></div>
+              <div><label class="pf-label">Sub-Category</label><select class="pf-select" id="pf-subCategory"></select></div>
+              <div><label class="pf-label">Brand</label><input class="pf-input" id="pf-brand" placeholder="Brand name" /></div>
+              <div><label class="pf-label">Model Number</label><input class="pf-input" id="pf-modelNumber" placeholder="Model #" /></div>
+              <div><label class="pf-label">Supplier</label><input class="pf-input" id="pf-supplier" placeholder="Supplier name" /></div>
+              <div><label class="pf-label">Supplier SKU</label><input class="pf-input" id="pf-supplierSku" placeholder="Supplier SKU" /></div>
+              <div><label class="pf-label">Lead Time (days)</label><input class="pf-input" id="pf-leadTime" type="number" min="0" step="1" /></div>
+              <div><label class="pf-label">Reorder Point</label><input class="pf-input" id="pf-reorderPoint" type="number" min="0" step="1" /></div>
+            </div>
+
+            <div class="prod-pane" data-pane="warehouse">
+              <div><label class="pf-label">Rack Location</label><input class="pf-input" id="pf-rackLocation" placeholder="A-1-B1" /></div>
+              <div><label class="pf-label">Zone</label><input class="pf-input" id="pf-zone" placeholder="Zone" /></div>
+              <div><label class="pf-label">Pallet Number</label><input class="pf-input" id="pf-palletNumber" placeholder="Pallet #" /></div>
+              <div><label class="pf-label">Shelf Number</label><input class="pf-input" id="pf-shelfNumber" placeholder="Shelf #" /></div>
+              <div><label class="pf-label">Storage Condition</label><input class="pf-input" id="pf-storageCondition" placeholder="Normal" /></div>
+              <div><label class="pf-label">Temp Min</label><input class="pf-input" id="pf-tempMin" type="number" step="0.01" placeholder="0" /></div>
+              <div><label class="pf-label">Temp Max</label><input class="pf-input" id="pf-tempMax" type="number" step="0.01" placeholder="40" /></div>
+            </div>
+
+            <div class="prod-pane" data-pane="physical">
+              <div><label class="pf-label">Weight</label><input class="pf-input" id="pf-weight" type="number" min="0" step="0.01" placeholder="0.00" /></div>
+              <div><label class="pf-label">Weight Unit</label><select class="pf-select" id="pf-weightUnit"><option>KG</option><option>G</option><option>LB</option><option>OZ</option></select></div>
+              <div><label class="pf-label">Length</label><input class="pf-input" id="pf-length" type="number" min="0" step="0.01" /></div>
+              <div><label class="pf-label">Width</label><input class="pf-input" id="pf-width" type="number" min="0" step="0.01" /></div>
+              <div><label class="pf-label">Height</label><input class="pf-input" id="pf-height" type="number" min="0" step="0.01" /></div>
+              <div><label class="pf-label">Dimension Unit</label><select class="pf-select" id="pf-dimensionUnit"><option>cm</option><option>m</option><option>in</option><option>mm</option></select></div>
+              <div><label class="pf-label">Color</label><input class="pf-input" id="pf-color" placeholder="e.g., White" /></div>
+              <div><label class="pf-label">Size</label><input class="pf-input" id="pf-size" placeholder="Size" /></div>
+              <div><label class="pf-label">Material</label><input class="pf-input" id="pf-material" placeholder="e.g., 100% Cotton" /></div>
+              <div><label class="pf-label">Finish</label><input class="pf-input" id="pf-finish" placeholder="e.g., Matte, Glossy" /></div>
+            </div>
+
+            <div class="prod-pane" data-pane="expiry">
+              <div class="pf-check"><input type="checkbox" id="pf-hasExpiry" /><label for="pf-hasExpiry">Has Expiry</label></div>
+              <div class="pf-check"><input type="checkbox" id="pf-isBatchManaged" /><label for="pf-isBatchManaged">Batch Managed</label></div>
+              <div class="pf-check"><input type="checkbox" id="pf-isSerialManaged" /><label for="pf-isSerialManaged">Serial Managed</label></div>
+              <div class="pf-check"><input type="checkbox" id="pf-isExpiryManaged" /><label for="pf-isExpiryManaged">Expiry Managed</label></div>
+              <div><label class="pf-label">Expiry Date</label><input class="pf-input" id="pf-expiryDate" type="date" /></div>
+              <div><label class="pf-label">Manufacturing Date</label><input class="pf-input" id="pf-manufacturingDate" type="date" /></div>
+              <div><label class="pf-label">Batch Number</label><input class="pf-input" id="pf-batchNumber" placeholder="BATCH-001" /></div>
+              <div><label class="pf-label">Shelf Life (days)</label><input class="pf-input" id="pf-shelfLife" type="number" min="0" step="1" placeholder="365" /></div>
+              <div class="pf-check"><input type="checkbox" id="pf-isBulkManaged" /><label for="pf-isBulkManaged">Bulk Managed</label></div>
+              <div class="pf-check"><input type="checkbox" id="pf-hasIndividualTracking" /><label for="pf-hasIndividualTracking">Individual Tracking</label></div>
+              <div><label class="pf-label">Bulk Unit</label><select class="pf-select" id="pf-bulkUnit"><option>Bale</option><option>Box</option><option>Roll</option><option>Pallet</option></select></div>
+              <div><label class="pf-label">Default Batch Quantity</label><input class="pf-input" id="pf-defaultBatchQuantity" type="number" min="0" step="1" placeholder="50" /></div>
+            </div>
+
+            <div class="prod-pane" data-pane="shipping">
+              <div><label class="pf-label">HS Code</label><input class="pf-input" id="pf-hsCode" placeholder="e.g., 5201.00.00" /></div>
+              <div><label class="pf-label">Country of Origin</label><select class="pf-select" id="pf-countryOfOrigin"><option>Pakistan</option><option>China</option><option>USA</option><option>Turkey</option><option>India</option></select></div>
+              <div><label class="pf-label">Shipping Class</label><input class="pf-input" id="pf-shippingClass" placeholder="Normal" /></div>
+              <div><label class="pf-label">Freight Class</label><input class="pf-input" id="pf-freightClass" placeholder="Freight class" /></div>
+              <div><label class="pf-label">Stacking Limit</label><input class="pf-input" id="pf-stackingLimit" type="number" min="0" step="1" placeholder="5" /></div>
+              <div class="pf-check"><input type="checkbox" id="pf-dangerousGoods" /><label for="pf-dangerousGoods">Dangerous Goods</label></div>
+              <div><label class="pf-label">UN Number</label><input class="pf-input" id="pf-unNumber" placeholder="UN #" /></div>
+              <div class="pf-span"><label class="pf-label">Handling Instructions</label><input class="pf-input" id="pf-handlingInstructions" placeholder="Special handling instructions..." /></div>
+            </div>
+
+            <div class="prod-pane" data-pane="media">
+              <div class="pf-span">
+                <label class="pf-label">Product Images</label>
+                <div class="pf-hint">Up to 5. First image is main. URL or local file — saved on this PC.</div>
+                <div class="pf-imgs" id="pf-image-preview"></div>
+                <div style="display:flex;gap:8px;margin-top:8px;">
+                  <input class="pf-input" id="pf-imageUrl" placeholder="https://..." />
+                  <button type="button" class="btn-nav-action ghost" id="pf-image-add-url">Add URL</button>
+                  <button type="button" class="btn-nav-action ghost" id="pf-image-pick">Choose files</button>
+                </div>
+                <input type="file" id="pf-image-files" accept="image/png,image/jpeg,image/jpg,image/webp" multiple hidden />
+              </div>
+              <div class="pf-span"><label class="pf-label">Video URL</label><input class="pf-input" id="pf-videoUrl" placeholder="https://..." /></div>
+            </div>
+
+            <div class="prod-pane" data-pane="custom">
+              <div class="pf-span">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <label class="pf-label">Custom Attributes</label>
+                  <button type="button" class="btn-nav-action ghost" id="pf-custom-add">+ Add Field</button>
+                </div>
+                <div id="pf-custom-rows"></div>
+              </div>
+              <div><label class="pf-label">Warranty Period</label><input class="pf-input" id="pf-warrantyPeriod" type="number" min="0" step="1" placeholder="12" /></div>
+              <div><label class="pf-label">Warranty Unit</label><select class="pf-select" id="pf-warrantyUnit"><option>Days</option><option selected>Months</option><option>Years</option></select></div>
+              <div class="pf-check"><input type="checkbox" id="pf-isReturnable" checked /><label for="pf-isReturnable">Is Returnable</label></div>
+              <div><label class="pf-label">Return Days</label><input class="pf-input" id="pf-returnDays" type="number" min="0" step="1" placeholder="7" /></div>
+              <div class="pf-span"><label class="pf-label">Additional Notes</label><textarea class="pf-textarea" id="pf-notes" placeholder="Enter any additional notes..."></textarea></div>
+            </div>
+          </div>
+          <div class="prod-form-actions">
+            <button type="button" class="btn-nav-action ghost" id="prod-form-no">Cancel</button>
+            <button type="submit" class="btn-nav-action accent">Save Product</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="sync-overlay" class="sync-overlay" aria-live="polite">
+      <div class="sync-card">
+        <div class="sync-stack">
+          <span class="sync-layer"></span>
+          <span class="sync-layer"></span>
+          <span class="sync-layer"></span>
+        </div>
+        <h3>Syncing<span class="sync-dots"></span></h3>
+        <p id="sync-overlay-msg">Pulling latest categories, products and customers from the cloud.</p>
+      </div>
+    </div>
+    <script src="./sell.js"></script>
+  </body>
+</html>

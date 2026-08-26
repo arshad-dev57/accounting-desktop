@@ -1,0 +1,118 @@
+:root {
+  --brand: #014582;
+  --navy: #0b2744;
+  --bg: #f3f6fa;
+  --card: #ffffff;
+  --text: #0b2744;
+  --muted: #64748b;
+  --line: #d6dee8;
+  --danger: #b91c1c;
+  --ok: #047857;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  height: 100%;
+  font-family: Inter, system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+button { font-family: inherit; cursor: pointer; }
+button:disabled { opacity: 0.6; cursor: default; }
+.hidden { display: none !important; }
+.error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #fef2f2;
+  color: var(--danger);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.ok {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #ecfdf5;
+  color: var(--ok);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.sync-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  background: rgba(11, 39, 68, 0.55);
+  backdrop-filter: blur(8px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+.sync-overlay.show { display: flex; }
+.sync-card {
+  width: min(380px, 92vw);
+  background: #fff;
+  border-radius: 24px;
+  padding: 36px 28px 28px;
+  text-align: center;
+  box-shadow: 0 24px 60px rgba(1, 69, 130, 0.28);
+  animation: sync-pop 0.28s ease;
+}
+@keyframes sync-pop {
+  from { transform: translateY(12px) scale(0.96); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+.sync-stack {
+  position: relative;
+  width: 88px;
+  height: 88px;
+  margin: 0 auto 18px;
+}
+.sync-layer {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 70px;
+  height: 48px;
+  margin-left: -35px;
+  margin-top: -24px;
+  border-radius: 12px;
+  border: 2px solid #014582;
+  background: linear-gradient(180deg, #f0f7fc, #fff);
+  box-shadow: 0 8px 16px rgba(1, 69, 130, 0.12);
+}
+.sync-layer:nth-child(1) { opacity: 0.4; animation: sync-float-1 1.4s ease-in-out infinite; }
+.sync-layer:nth-child(2) { opacity: 0.7; animation: sync-float-2 1.4s ease-in-out infinite 0.15s; }
+.sync-layer:nth-child(3) { animation: sync-float-3 1.4s ease-in-out infinite 0.3s; }
+@keyframes sync-float-1 {
+  0%, 100% { transform: translateY(-16px) scale(0.86); }
+  50% { transform: translateY(-22px) scale(0.88); }
+}
+@keyframes sync-float-2 {
+  0%, 100% { transform: translateY(-8px) scale(0.93); }
+  50% { transform: translateY(-14px) scale(0.95); }
+}
+@keyframes sync-float-3 {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-6px) scale(1.02); }
+}
+.sync-card h3 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  color: #014582;
+}
+.sync-card p {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.sync-dots::after {
+  content: '';
+  animation: sync-dots 1.2s steps(4, end) infinite;
+}
+@keyframes sync-dots {
+  0% { content: ''; }
+  25% { content: '.'; }
+  50% { content: '..'; }
+  75% { content: '...'; }
+}

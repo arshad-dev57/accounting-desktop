@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self';"
+    />
+    <title>POS Management — Bisonstechs</title>
+    <link rel="stylesheet" href="./shared.css" />
+    <style>
+      body { overflow: hidden; }
+      .app { height: 100%; display: grid; grid-template-rows: 64px 48px 1fr; }
+      .top {
+        background: #014582; color: #fff; display: flex; align-items: center;
+        justify-content: space-between; padding: 0 20px;
+      }
+      .top h1 { margin: 0; font-size: 18px; }
+      .top p { margin: 2px 0 0; font-size: 12px; opacity: 0.8; }
+      .top-actions { display: flex; gap: 8px; }
+      .top-actions button {
+        height: 34px; border: 0; border-radius: 8px; padding: 0 14px; font-weight: 600; font-size: 12px;
+      }
+      .btn-light { background: rgba(255,255,255,0.14); color: #fff; }
+      .btn-pos { background: #fbbf24; color: #01366a; }
+      .tabs {
+        background: #fff; border-bottom: 1px solid var(--line); display: flex; gap: 4px; padding: 0 16px; overflow-x: auto;
+      }
+      .tab {
+        border: 0; background: transparent; padding: 14px 16px; color: var(--muted); font-weight: 600; font-size: 13px;
+        border-bottom: 2px solid transparent;
+      }
+      .tab.active { color: var(--brand); border-bottom-color: var(--brand); }
+      .main { overflow: auto; padding: 22px 24px; }
+      .panel { display: none; }
+      .panel.active { display: block; }
+      .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+      h2 { margin: 0; font-size: 18px; }
+      .card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+      table { width: 100%; border-collapse: collapse; background: #fff; }
+      th, td { padding: 11px 12px; border-bottom: 1px solid var(--line); font-size: 13px; text-align: left; }
+      th { background: #f8fafc; color: var(--muted); font-size: 11px; text-transform: uppercase; }
+      input, select, textarea {
+        height: 38px; border: 1px solid var(--line); border-radius: 9px; padding: 0 10px; font-size: 13px;
+      }
+      textarea { height: 72px; padding: 8px 10px; width: 100%; }
+      .btn { height: 36px; border: 0; border-radius: 9px; padding: 0 14px; font-weight: 700; font-size: 12px; }
+      .btn-brand { background: #014582; color: #fff; }
+      .btn-gray { background: #f1f5f9; color: #475569; }
+      .btn-red { background: #fef2f2; color: #dc2626; }
+      .btn-green { background: #ecfdf5; color: #047857; }
+      .muted { color: var(--muted); font-size: 13px; }
+      .form-grid { display: flex; gap: 10px; flex-wrap: wrap; }
+      .form-grid input, .form-grid select { min-width: 140px; flex: 1; }
+      .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; }
+      .ok-badge { background: #d1fae5; color: #047857; }
+      .off-badge { background: #fee2e2; color: #b91c1c; }
+      .warn-badge { background: #fef3c7; color: #b45309; }
+      .pager { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; align-items: center; }
+      .toggle { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #e5e7eb; }
+      .kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+      .kpi div { background: #f8fafc; border-radius: 10px; padding: 12px; }
+      .kpi small { color: var(--muted); font-size: 11px; }
+      .modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center; justify-content: center; z-index: 40; }
+      .modal.open { display: flex; }
+      .modal-card { background: #fff; border-radius: 16px; padding: 22px; width: 520px; max-width: 94vw; max-height: 90vh; overflow: auto; }
+      .muted { color: var(--muted); font-size: 13px; }
+      .btn { height: 36px; border: 0; border-radius: 9px; padding: 0 14px; font-weight: 700; font-size: 12px; }
+      .btn-brand { background: #014582; color: #fff; }
+      .btn-gray { background: #f1f5f9; color: #475569; }
+      .btn-red { background: #fef2f2; color: #dc2626; }
+      .btn-green { background: #ecfdf5; color: #047857; }
+      .form-grid { display: flex; gap: 10px; flex-wrap: wrap; }
+      .form-grid input, .form-grid select { min-width: 140px; flex: 1; }
+      .pager { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; align-items: center; }
+      .toggle { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #e5e7eb; }
+      .kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+      .kpi div { background: #f8fafc; border-radius: 10px; padding: 12px; }
+      .kpi small { color: var(--muted); font-size: 11px; }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="top">
+        <div>
+          <h1>Point of Sale Management</h1>
+          <p id="subtitle">Admin only · Terminals · Shifts · Sales · Returns</p>
+        </div>
+        <div class="top-actions">
+          <button class="btn-pos" id="btn-open-pos" type="button">Open POS</button>
+          <button class="btn-light" id="btn-logout" type="button">Sign out</button>
+        </div>
+      </div>
+      <div class="tabs" id="tabs"></div>
+      <div class="main">
+        <div id="error" class="error hidden"></div>
+        <div class="panel active" id="panel-terminals"></div>
+        <div class="panel" id="panel-shifts"></div>
+        <div class="panel" id="panel-sales"></div>
+        <div class="panel" id="panel-returns"></div>
+        <div class="panel" id="panel-receipt"></div>
+        <div class="panel" id="panel-printer"></div>
+        <div class="panel" id="panel-scanner"></div>
+        <div class="panel" id="panel-payments"></div>
+        <div class="panel" id="panel-tax"></div>
+        <div class="panel" id="panel-audit"></div>
+      </div>
+    </div>
+    <div class="modal" id="modal">
+      <div class="modal-card" id="modal-body"></div>
+    </div>
+    <script src="./management.js"></script>
+  </body>
+</html>

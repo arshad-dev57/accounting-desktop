@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self';"
+    />
+    <title>Categories — Bisonstechs</title>
+    <link rel="stylesheet" href="./shared.css" />
+    <style>
+      body { overflow: hidden; }
+      .app { height: 100%; display: grid; grid-template-rows: 52px 1fr; }
+      .top {
+        background: var(--navy); color: #fff;
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 0 20px;
+      }
+      .top h1 { font-size: 15px; font-weight: 700; margin: 0; }
+      .top-actions { display: flex; gap: 8px; }
+      .top-actions button, .btn {
+        height: 32px; border: 0; border-radius: 8px; padding: 0 14px;
+        font-weight: 600; font-size: 12px; cursor: pointer;
+      }
+      .btn-ghost { background: rgba(255,255,255,0.12); color: #fff; }
+      .btn-brand { background: var(--brand); color: #fff; }
+      .main { overflow-y: auto; padding: 20px; }
+      .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+      .tab {
+        height: 36px; border: 1px solid var(--line); background: #fff;
+        border-radius: 8px; padding: 0 14px; font-weight: 700; font-size: 13px;
+      }
+      .tab.active { background: var(--brand); color: #fff; border-color: var(--brand); }
+      .toolbar { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+      .toolbar input {
+        height: 36px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; min-width: 240px;
+      }
+      .panel { background: #fff; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th { text-align: left; font-size: 11px; color: var(--muted); padding: 10px 16px; background: #f8fafc; }
+      td { padding: 10px 16px; border-top: 1px solid #f1f5f9; }
+      .empty { padding: 36px; text-align: center; color: var(--muted); }
+      .icon-btn { border: 0; background: transparent; cursor: pointer; font-size: 14px; }
+      .overlay {
+        display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45);
+        align-items: center; justify-content: center;
+      }
+      .overlay.show { display: flex; }
+      .modal { background: #fff; width: 420px; max-width: 92vw; border-radius: 16px; padding: 20px; }
+      .modal h3 { margin: 0 0 14px; }
+      .field { margin-bottom: 10px; }
+      .field label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+      .field input, .field textarea, .field select {
+        width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 13px;
+      }
+      .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+      .err { color: #b91c1c; font-size: 12px; margin-bottom: 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="top">
+        <h1>Categories</h1>
+        <div class="top-actions">
+          <button class="btn-ghost" id="btn-back" type="button">← POS</button>
+        </div>
+      </div>
+      <div class="main">
+        <div class="tabs">
+          <button class="tab active" data-tab="cats" type="button">Categories</button>
+          <button class="tab" data-tab="subs" type="button">Subcategories</button>
+        </div>
+        <div class="toolbar">
+          <input id="search" type="text" placeholder="Search..." />
+          <button class="btn-brand" id="btn-add" type="button">+ Add Category</button>
+        </div>
+        <div class="panel" id="table-wrap"></div>
+      </div>
+    </div>
+    <div class="overlay" id="overlay">
+      <form class="modal" id="form">
+        <h3 id="form-title">Add Category</h3>
+        <div class="err" id="form-error"></div>
+        <div class="field" id="parent-field" style="display:none;">
+          <label>Parent category *</label>
+          <select id="f-parent"></select>
+        </div>
+        <div class="field">
+          <label>Name *</label>
+          <input id="f-name" required />
+        </div>
+        <div class="field">
+          <label>Code</label>
+          <input id="f-code" placeholder="Auto or custom" />
+        </div>
+        <div class="field">
+          <label>Description</label>
+          <textarea id="f-desc" rows="2"></textarea>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn" id="btn-cancel">Cancel</button>
+          <button type="submit" class="btn-brand">Save</button>
+        </div>
+      </form>
+    </div>
+    <script src="./categories.js"></script>
+  </body>
+</html>
