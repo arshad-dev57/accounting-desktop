@@ -1,9 +1,57 @@
-/**
- * Pull POS master data pages and commit each page in SQLite.
- */
+
 const masterSqlite = require('./master-sqlite.cjs');
 const posApi = require('./pos-api.cjs');
 const localDb = require('./local-db.cjs');
+
+async function checkOnline(accessToken) {
+  const res = await posApi.checkConnectivity(accessToken);
+  return { online: res.online === true, ...res };
+}
+
+function offlineResult() { 
+  return {
+    success: false,
+    online: false,
+    retryable: true,
+    code: 'OFFLINE',
+    message: 'No internet connection. Sync skipped. Please reconnect and try again.',
+  };
+}
+
+async function pushPendingCatalog(accessToken) {
+  const pending = masterSqlite.listPendingSync();
+  const total =
+    pending.categories.length + pending.subcategories.length + pending.products.length;
+  if (!total) {
+    return {
+      success: true,
+      pushed: false,
+      summary: { categories: 0, subcategories: 0, products: 0, failed: 0 },
+    };
+  }
+
+  const res = await posApi.pushMasterData(accessToken, pending);
+  if (!res.success) {
+    return {
+      success: false,
+      retryable: res.retryable !== false && res.status !== 401,
+      status: res.status,
+      code: res.code || 'PUSH_FAILED',
+      message: res.message || 'Failed to upload local changes to the cloud',
+    };
+  }
+
+  const data = res.data || { pushed: [], mapping: {} };
+  masterSqlite.markSynced(data);
+  if (Array.isArray(data?.pushed?.failed)) masterSqlite.markFailed(data.pushed.failed);
+  masterSqlite.reloadFromDisk();
+  return {
+    success: true,
+    pushed: true,
+    mapping: data.mapping || {},
+    summary: data.summary || data.pushed || {},
+  };
+}
 
 function flattenCategories(nodes, inheritedParent = null, into = { categories: [], subcategories: [] }) {
   for (const node of nodes || []) {
@@ -41,6 +89,7 @@ function unwrapRows(res) {
   if (Array.isArray(raw?.products)) return raw.products;
   if (Array.isArray(raw?.categories)) return raw.categories;
   if (Array.isArray(raw?.customers)) return raw.customers;
+  if (Array.isArray(raw?.suppliers)) return raw.suppliers;
   return [];
 }
 
@@ -67,18 +116,21 @@ function mapLiveProduct(p) {
   };
 }
 
-async function seedFromLiveApis(accessToken) {
-  const [catsRes, prodRes, custRes] = await Promise.all([
+async function seedFromLiveApis(accessToken, locationId) {
+  const [catsRes, prodRes, custRes, suppRes] = await Promise.all([
     posApi.fetchAllCategories(accessToken),
-    posApi.fetchAllProducts(accessToken),
+    posApi.fetchAllProducts(accessToken, locationId),
     posApi.fetchAllCustomers(accessToken),
+    posApi.fetchAllSuppliers(accessToken),
   ]);
   const catRows = unwrapRows(catsRes);
   const prodRows = unwrapRows(prodRes);
   const custRows = unwrapRows(custRes);
+  const suppRows = unwrapRows(suppRes);
+  console.log('[sync] live suppliers', suppRows.length, suppRes?.success, suppRes?.message || '');
   const flat = flattenCategories(catRows);
   const products = prodRows.map(mapLiveProduct).filter(Boolean);
-  if (!flat.categories.length && !products.length && !custRows.length) {
+  if (!flat.categories.length && !products.length && !custRows.length && !suppRows.length) {
     return { success: false, message: 'Live catalog APIs returned no catalog rows' };
   }
   masterSqlite.applyPage({
@@ -86,13 +138,24 @@ async function seedFromLiveApis(accessToken) {
     subcategories: flat.subcategories,
     products,
     customers: custRows,
+    suppliers: suppRows,
     nextCursor: masterSqlite.getCursor() || '',
   });
+  if (locationId) {
+    masterSqlite.keepOnlyProductIds(products.map((p) => p.id));
+  }
   if (custRows.length) localDb.saveCustomers(custRows);
   return { success: true, recovered: true, pages: 1, counts: masterSqlite.counts() };
 }
 
-async function syncMasterData(accessToken) {
+async function syncMasterData(accessToken, locationId, opts = {}) {
+  if (opts.push !== false) {
+    const conn = await checkOnline(accessToken);
+    if (!conn.online) return offlineResult();
+    const pushed = await pushPendingCatalog(accessToken);
+    if (!pushed.success) return pushed;
+  }
+
   let cursor = masterSqlite.getCursor() || '';
   let pages = 0;
   let recovered = false;
@@ -108,7 +171,7 @@ async function syncMasterData(accessToken) {
   }
   if (!res.success) {
     if (!masterSqlite.counts().products) {
-      const fallback = await seedFromLiveApis(accessToken);
+      const fallback = await seedFromLiveApis(accessToken, locationId);
       if (fallback.success) return fallback;
     }
     return {
@@ -132,10 +195,10 @@ async function syncMasterData(accessToken) {
     if (!page.hasMore) {
       const counts = masterSqlite.counts();
       if (!counts.products) {
-        const fallback = await seedFromLiveApis(accessToken);
+        const fallback = await seedFromLiveApis(accessToken, locationId);
         if (fallback.success) return { ...fallback, pages };
       }
-      const live = await seedFromLiveApis(accessToken);
+      const live = await seedFromLiveApis(accessToken, locationId);
       return {
         success: true,
         recovered,
@@ -159,10 +222,33 @@ async function syncMasterData(accessToken) {
   }
 }
 
-async function refreshCatalog(accessToken) {
+async function refreshCatalog(accessToken, locationId) {
+  const conn = await checkOnline(accessToken);
+  if (!conn.online) {
+    return offlineResult();
+  }
+
+  let push = { success: true };
+  try {
+    push = await pushPendingCatalog(accessToken);
+  } catch (err) {
+    push = { success: false, retryable: true, code: 'PUSH_FAILED', message: err.message };
+  }
+  if (!push.success) {
+
+    console.warn('[sync] refresh aborted — push failed, local unsynced data preserved:', push.message);
+    return {
+      success: false,
+      retryable: push.retryable !== false && push.status !== 401,
+      status: push.status,
+      code: push.code || 'PUSH_FAILED',
+      message: `Sync failed before refresh (${push.message || 'upload error'}). Local unsynced records are preserved and will retry on the next sync.`,
+    };
+  }
+
   masterSqlite.clearCatalog();
-  const snapshot = await syncMasterData(accessToken);
-  const live = await seedFromLiveApis(accessToken);
+  const snapshot = await syncMasterData(accessToken, locationId);
+  const live = await seedFromLiveApis(accessToken, locationId);
   masterSqlite.reloadFromDisk();
   const counts = masterSqlite.counts();
   const tree = masterSqlite.getCategoryTree();
@@ -181,4 +267,40 @@ async function refreshCatalog(accessToken) {
   return snapshot.success === false ? snapshot : live;
 }
 
-module.exports = { syncMasterData, refreshCatalog };
+async function syncBidirectional(accessToken, opts = {}) {
+  const conn = await checkOnline(accessToken);
+  if (!conn.online) return offlineResult();
+
+  const pending = masterSqlite.listPendingSync();
+  const total = pending.categories.length + pending.subcategories.length + pending.products.length;
+
+  let pushSummary = { categories: 0, subcategories: 0, products: 0, failed: 0 };
+  if (total) {
+    const res = await posApi.publishMasterData(accessToken, pending);
+    if (!res.success) {
+      return {
+        success: false,
+        retryable: res.retryable !== false && res.status !== 401,
+        status: res.status,
+        code: res.code || 'SYNC_FAILED',
+        message: res.message || 'Bidirectional sync failed',
+      };
+    }
+    const data = res.data || {};
+    masterSqlite.markSynced(data);
+    if (Array.isArray(data?.pushed?.failed)) masterSqlite.markFailed(data.pushed.failed);
+    pushSummary = data?.phase?.push || data?.summary || {};
+  }
+  masterSqlite.reloadFromDisk();
+  const counts = masterSqlite.counts();
+  return {
+    success: true,
+    online: true,
+    pushed: total > 0,
+    summary: pushSummary,
+    pendingAfter: masterSqlite.pendingCounts(),
+    counts,
+  };
+}
+
+module.exports = { syncMasterData, refreshCatalog, syncBidirectional, checkOnline, pushPendingCatalog };

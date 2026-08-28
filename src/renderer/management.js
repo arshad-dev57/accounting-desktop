@@ -368,35 +368,142 @@ async function loadReturns() {
   });
 }
 
+function receiptEsc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+const RECEIPT_TOGGLES = [
+  ['showLogo', 'Logo'], ['showAddress', 'Address'], ['showPhone', 'Phone'],
+  ['showEmail', 'Email'], ['showWebsite', 'Website'], ['showTaxId', 'Tax ID'],
+  ['showBarcode', 'Barcode'], ['showSku', 'SKU'], ['showCashier', 'Cashier'],
+  ['showTerminal', 'Terminal'], ['showLoyalty', 'Loyalty points'],
+];
+
 async function loadReceipt() {
   const wrap = document.getElementById('panel-receipt');
+  // LOCAL-ONLY: receipt template lives in localStorage only — never synced
+  // to/from the cloud, so each device keeps its own design.
   const local = loadSettings();
-  const res = await api.pos.getReceiptSettings();
-  const remote = res?.data || {};
-  const t = { ...local, ...remote };
-  wrap.innerHTML = `
-    <div class="row"><h2>Receipt template</h2><button class="btn btn-brand" id="save-receipt">Save</button></div>
-    <div class="card">
-      <div class="form-grid">
-        <input id="r-header" placeholder="Header" value="${t.receiptHeader || t.header || ''}" />
-        <input id="r-footer" placeholder="Footer" value="${t.receiptFooter || t.footer || ''}" />
-      </div>
-      <label class="muted">Return policy</label>
-      <textarea id="r-policy">${t.receiptReturnPolicy || t.returnPolicy || ''}</textarea>
-      <label class="muted">Notes</label>
-      <textarea id="r-notes">${t.receiptNotes || t.notes || ''}</textarea>
+  let template = { ...window.PosReceipt.loadReceiptTemplate(), ...local };
+
+  let profile = null;
+  try { profile = (await api.pos.getProfile())?.data || null; } catch { /* ignore */ }
+
+  const field = (id, label, key, textarea) => `
+    <div style="margin-bottom:10px;">
+      <label class="muted">${label}</label>
+      ${textarea
+        ? `<textarea id="${id}" rows="3">${receiptEsc(template[key] || '')}</textarea>`
+        : `<input id="${id}" value="${receiptEsc(template[key] || '')}" />`}
     </div>`;
-  wrap.querySelector('#save-receipt').onclick = async () => {
-    const body = {
-      receiptHeader: wrap.querySelector('#r-header').value,
-      receiptFooter: wrap.querySelector('#r-footer').value,
-      receiptReturnPolicy: wrap.querySelector('#r-policy').value,
-      receiptNotes: wrap.querySelector('#r-notes').value,
+
+  const toggles = RECEIPT_TOGGLES.map(([key, label]) => `
+    <div class="toggle" style="gap:10px;">
+      <span>${label}</span>
+      <input type="checkbox" data-toggle="${key}" ${template[key] !== false ? 'checked' : ''} />
+    </div>`).join('');
+
+  wrap.innerHTML = `
+    <div class="row">
+      <h2>POS receipt designer</h2>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" id="receipt-reset">Reset defaults</button>
+        <button class="btn btn-brand" id="receipt-save">Save</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:16px;align-items:start;">
+      <div style="display:grid;gap:14px;">
+        <div class="card">
+          <h3 style="margin:0 0 10px;">Store details</h3>
+          ${field('r-store-name', 'Store name (blank = company name)', 'storeName')}
+          ${field('r-store-address', 'Address', 'storeAddress')}
+          <div class="form-grid">
+            ${field('r-phone', 'Phone', 'phone')}
+            ${field('r-email', 'Email', 'email')}
+            ${field('r-website', 'Website', 'website')}
+            ${field('r-tax-id', 'NTN / Tax ID', 'taxId')}
+          </div>
+        </div>
+        <div class="card">
+          <h3 style="margin:0 0 10px;">Receipt text</h3>
+          ${field('r-header', 'Header', 'receiptHeader')}
+          ${field('r-copy-label', 'Copy label', 'copyLabel')}
+          ${field('r-footer', 'Footer', 'receiptFooter')}
+          ${field('r-policy', 'Return / exchange policy', 'receiptReturnPolicy', true)}
+          ${field('r-notes', 'Extra notes', 'receiptNotes', true)}
+          ${field('r-served-by', 'Served by prefix', 'servedByPrefix')}
+          ${field('r-powered-by', 'Bottom line', 'poweredBy')}
+          <div style="margin-bottom:10px;">
+            <label class="muted">Thermal paper width</label>
+            <select id="r-paper-width">
+              <option value="58" ${Number(template.thermalPaperWidthMm) === 58 ? 'selected' : ''}>58mm</option>
+              <option value="80" ${Number(template.thermalPaperWidthMm) !== 58 ? 'selected' : ''}>80mm</option>
+            </select>
+          </div>
+        </div>
+        <div class="card">
+          <h3 style="margin:0 0 6px;">Show / hide sections</h3>
+          ${toggles}
+        </div>
+      </div>
+      <div style="position:sticky;top:16px;">
+        <div class="muted" style="font-size:12px;font-weight:700;margin-bottom:8px;letter-spacing:.6px;">LIVE PREVIEW</div>
+        <div style="background:#e5e7eb;border-radius:14px;padding:12px;max-height:78vh;overflow:auto;">
+          <div id="receipt-preview"></div>
+        </div>
+      </div>
+    </div>`;
+  const collect = () => {
+    const next = { ...template };
+    const map = {
+      'r-store-name': 'storeName', 'r-store-address': 'storeAddress', 'r-phone': 'phone',
+      'r-email': 'email', 'r-website': 'website', 'r-tax-id': 'taxId',
+      'r-header': 'receiptHeader', 'r-copy-label': 'copyLabel', 'r-footer': 'receiptFooter',
+      'r-policy': 'receiptReturnPolicy', 'r-notes': 'receiptNotes',
+      'r-served-by': 'servedByPrefix', 'r-powered-by': 'poweredBy',
     };
+    for (const [id, key] of Object.entries(map)) {
+      const el = wrap.querySelector('#' + id);
+      if (el) next[key] = el.value;
+    }
+    const width = wrap.querySelector('#r-paper-width');
+    if (width) next.thermalPaperWidthMm = Number(width.value) === 58 ? 58 : 80;
+    wrap.querySelectorAll('[data-toggle]').forEach((cb) => { next[cb.dataset.toggle] = cb.checked; });
+    return next;
+  };
+
+  const renderPreview = () => {
+    const next = collect();
+    const comp = window.PosReceipt.resolveReceiptCompany(profile, next);
+    wrap.querySelector('#receipt-preview').innerHTML = window.PosReceipt.buildReceiptHtml(
+      window.PosReceipt.sampleReceiptSale(), comp, next
+    );
+  };
+
+  wrap.querySelectorAll('input, select, textarea').forEach((el) => {
+    el.addEventListener('input', renderPreview);
+    el.addEventListener('change', renderPreview);
+  });
+  renderPreview();
+
+  wrap.querySelector('#receipt-save').onclick = () => {
+    const body = collect();
+    // LOCAL-ONLY: save to localStorage (per-device). No cloud round-trip.
+    window.PosReceipt.saveReceiptTemplate(body);
     saveSettings({ ...loadSettings(), ...body });
-    const saved = await api.pos.saveReceiptSettings(body);
-    if (!saved?.success) return showError(saved?.message || 'Save failed');
-    alert('Receipt template saved');
+    alert('Receipt template saved locally');
+    renderPreview();
+  };
+
+  wrap.querySelector('#receipt-reset').onclick = () => {
+    const defaults = window.PosReceipt.DEFAULT_RECEIPT_TEMPLATE();
+    window.PosReceipt.saveReceiptTemplate(defaults);
+    saveSettings({ ...loadSettings(), ...defaults });
+    loadReceipt();
   };
 }
 

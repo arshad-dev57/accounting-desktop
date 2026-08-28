@@ -1,7 +1,4 @@
-/**
- * Calls the same Express auth APIs as the web app.
- * Runs in the main process so the renderer never talks to the backend directly.
- */
+
 const config = require('./config.cjs');
 
 async function postJson(pathname, body) {

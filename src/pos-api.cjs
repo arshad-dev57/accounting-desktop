@@ -178,13 +178,18 @@ function getCategories(token, paramsString = '') {
 }
 
 // ─── Bulk-fetch helpers for offline sync cache refresh ────────────────────────
-async function fetchAllProducts(token) {
+function locationQuery(locationId) {
+  return locationId ? `&locationId=${encodeURIComponent(locationId)}` : '';
+}
+
+async function fetchAllProducts(token, locationId) {
+  const loc = locationQuery(locationId);
   const all = [];
   for (let page = 1; page <= 100; page += 1) {
-    const res = await request(token, 'GET', `/api/warehouse/products?limit=100&page=${page}`);
+    const res = await request(token, 'GET', `/api/warehouse/products?limit=100&page=${page}${loc}`);
     if (!res.success) {
       if (page === 1) {
-        return request(token, 'GET', '/api/pos/products/search?q=&limit=2000&includeZeroStock=true');
+        return request(token, 'GET', `/api/pos/products/search?q=&limit=2000&includeZeroStock=true${loc}`);
       }
       break;
     }
@@ -197,13 +202,36 @@ async function fetchAllProducts(token) {
     if (rows.length < 100) break;
   }
   if (!all.length) {
-    return request(token, 'GET', '/api/pos/products/search?q=&limit=2000&includeZeroStock=true');
+    return request(token, 'GET', `/api/pos/products/search?q=&limit=2000&includeZeroStock=true${loc}`);
   }
   return { success: true, data: all };
 }
 
 function fetchAllCategories(token) {
   return request(token, 'GET', '/api/warehouse/categories?tree=true');
+}
+
+async function fetchAllSuppliers(token) {
+  const all = [];
+  for (let page = 1; page <= 100; page += 1) {
+    const res = await request(token, 'GET', `/api/warehouse/supplier?limit=100&page=${page}`);
+    if (!res.success) {
+      if (page === 1) {
+        return request(token, 'GET', '/api/warehouse/supplier?limit=2000');
+      }
+      break;
+    }
+    const rows = Array.isArray(res.data)
+      ? res.data
+      : Array.isArray(res.data?.data)
+        ? res.data.data
+        : Array.isArray(res.data?.suppliers)
+          ? res.data.suppliers
+          : [];
+    all.push(...rows);
+    if (rows.length < 100) break;
+  }
+  return { success: true, data: all };
 }
 
 async function fetchAllCustomers(token) {
@@ -266,6 +294,50 @@ function pullMasterData(token, cursor, limit) {
   return request(token, 'GET', `/api/pos/sync/master-data${suffix}`);
 }
 
+/**
+ * Local -> Cloud push of offline-created/edited catalog records.
+ * Body: { records: { categories, subcategories, products } } — every record must
+ * carry a stable client-generated `syncId`. Returns a syncId -> cloudId mapping.
+ */
+function pushMasterData(token, records) {
+  return request(token, 'POST', '/api/pos/sync/master-data/push', { records });
+}
+
+/**
+ * Combined bidirectional sync (Local -> Cloud -> Local) in a single call.
+ * Pushes the supplied pending `records`, then returns the full merged cloud
+ * catalog (categories, subcategories, products) plus the syncId -> cloudId map.
+ */
+function publishMasterData(token, records, opts = {}) {
+  const body = { records };
+  return request(token, 'POST', '/api/pos/sync/master-data/sync', body);
+}
+
+/**
+ * Lightweight connectivity probe. The endpoint is unauthenticated on the
+ * backend, so a reachable response (even an error object) proves the network is
+ * up. Used to satisfy the "check internet before starting sync" requirement.
+ */
+async function checkConnectivity(token) {
+  const base = config.resolveApiUrl();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(`${base}/api/health/prisma`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: token ? `Bearer ${token}` : '',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    return { success: true, status: res.status, online: true };
+  } catch (err) {
+    return { success: false, online: false, message: err.message || 'Offline' };
+  }
+}
+
 function getProfile(token) {
   return request(token, 'GET', '/api/profile');
 }
@@ -297,6 +369,9 @@ module.exports = {
   listLocations,
   getReceiptSettings,
   pullMasterData,
+  pushMasterData,
+  publishMasterData,
+  checkConnectivity,
   getProfile,
   // POS Management APIs
   createTerminal,
@@ -312,6 +387,7 @@ module.exports = {
   // Bulk-fetch helpers
   fetchAllProducts,
   fetchAllCategories,
+  fetchAllSuppliers,
   fetchAllCustomers,
   fetchTaxContext,
 };

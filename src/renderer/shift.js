@@ -51,7 +51,11 @@ async function boot() {
   userEl.textContent = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email || '';
   const syncEl = document.getElementById('sync-status');
   try {
-    const synced = await api.pos.syncMasterData();
+    const locationId = window.bisonLocation
+      ? bisonLocation.effectiveId(bisonLocation.getStoredLocationId())
+      : '';
+    const synced = await api.pos.syncMasterData({ locationId });
+    if (window.bisonLocation && locationId) bisonLocation.setLastSyncedLocationId(locationId);
     if (syncEl) {
       if (synced?.success) {
         const c = synced.counts || {};

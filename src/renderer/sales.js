@@ -940,7 +940,10 @@ async function runCatalogSync() {
   if (overlay) overlay.classList.add('show');
   if (msg) msg.textContent = 'Pulling latest categories, subcategories and products from the cloud.';
   try {
-    const catalog = await api.pos.syncMasterData({ refresh: true });
+    const locationId = window.bisonLocation
+      ? bisonLocation.effectiveId(bisonLocation.getStoredLocationId())
+      : '';
+    const catalog = await api.pos.syncMasterData({ refresh: true, locationId, skipReload: true });
     if (msg) msg.textContent = 'Refreshing products and orders…';
     await Promise.all([loadProducts(), fetchOrders()]);
     const n = catalog?.counts?.products || 0;

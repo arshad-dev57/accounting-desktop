@@ -2,6 +2,14 @@
 
 const api = window.bisonDesktop;
 
+// Guard: agar api available nahi toh early error show karo
+if (!api) {
+  document.addEventListener('DOMContentLoaded', () => {
+    const tw = document.getElementById('table-wrap');
+    if (tw) tw.innerHTML = '<div class="empty" style="color:#b91c1c;">Desktop API not available. Please reopen this page from the POS.</div>';
+  });
+}
+
 let catalog = [];
 let tab = 'cats';
 let editing = null;
@@ -103,8 +111,48 @@ function closeForm() {
 }
 
 async function reload() {
-  const res = await api.catalog.list();
+  console.log('[categories] reload called');
+
+  // Loading state
+  tableWrap.innerHTML = '<div class="empty">Loading...</div>';
+
+  let res;
+  try {
+    res = await api.catalog.list();
+  } catch (err) {
+    console.error('[categories] api.catalog.list() threw:', err);
+    tableWrap.innerHTML = `<div class="empty" style="color:#b91c1c;">Error: ${err.message}</div>`;
+    return;
+  }
+
+  console.log('[categories] API response:', res);
+
+  if (!res?.success) {
+    console.error('[categories] API failed:', res?.message);
+    tableWrap.innerHTML = `<div class="empty" style="color:#b91c1c;">${res?.message || 'Failed to load categories'}</div>`;
+    return;
+  }
+
   catalog = Array.isArray(res?.data) ? res.data : [];
+  console.log('[categories] catalog loaded:', catalog.length);
+
+  // Agar empty ho toh sync try karo — but render HAMESHA hoga
+  if (catalog.length === 0) {
+    console.warn('[categories] No categories found, trying to sync...');
+    try {
+      const syncRes = await api.pos.syncMasterData({ refresh: true, skipReload: true });
+      console.log('[categories] Sync result:', syncRes);
+      if (syncRes?.success) {
+        const retryRes = await api.catalog.list();
+        catalog = Array.isArray(retryRes?.data) ? retryRes.data : [];
+        console.log('[categories] After sync, catalog loaded:', catalog.length);
+      }
+    } catch (err) {
+      console.error('[categories] Sync failed:', err);
+    }
+  }
+
+  // Render ZAROOR karo — chahe data ho ya na ho
   render();
 }
 
@@ -122,6 +170,9 @@ btnAdd.addEventListener('click', () => openForm(tab, null));
 document.getElementById('btn-cancel').addEventListener('click', closeForm);
 document.getElementById('btn-back').addEventListener('click', () => {
   window.location.href = './sell.html';
+});
+document.getElementById('btn-products').addEventListener('click', () => {
+  window.location.href = './products.html?t=' + Date.now();
 });
 
 tableWrap.addEventListener('click', async (e) => {
@@ -164,9 +215,15 @@ form.addEventListener('submit', async (e) => {
     return;
   }
   const payload = { id: editing?.row?.id, name, code, description };
-  const res = editing?.kind === 'subs'
-    ? await api.catalog.saveSubcategory({ ...payload, categoryId: parentSel.value })
-    : await api.catalog.saveCategory(payload);
+  let res;
+  try {
+    res = editing?.kind === 'subs'
+      ? await api.catalog.saveSubcategory({ ...payload, categoryId: parentSel.value })
+      : await api.catalog.saveCategory(payload);
+  } catch (err) {
+    formError.textContent = err.message || 'Save failed';
+    return;
+  }
   if (!res?.success) {
     formError.textContent = res?.message || 'Save failed';
     return;
@@ -175,6 +232,11 @@ form.addEventListener('submit', async (e) => {
   await reload();
 });
 
-reload().catch((err) => {
-  tableWrap.innerHTML = `<div class="empty">${err.message}</div>`;
-});
+// Boot
+if (!api) {
+  tableWrap.innerHTML = '<div class="empty" style="color:#b91c1c;">Desktop API not available.</div>';
+} else {
+  reload().catch((err) => {
+    tableWrap.innerHTML = `<div class="empty" style="color:#b91c1c;">${err.message}</div>`;
+  });
+}

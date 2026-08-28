@@ -1,9 +1,5 @@
-/**
- * Electron main process — Bisonstechs POS desktop shell.
- * Separate project from accounting-web-app.
- *
- * Flow: native login → native OTP → Next.js POS in a BrowserView.
- */
+
+
 const {
   app,
   BrowserWindow,
@@ -18,6 +14,15 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
+
+try {
+  require('electron-reload')(__dirname, {
+    electron: path.join(__dirname, '..', 'node_modules', '.bin', 'electron'),
+    hardResetMethod: 'exit',
+    ignored: /node_modules|[\/\\]\./,
+  });
+} catch {
+}
 
 const config = require('./config.cjs');
 const windowState = require('./window-state.cjs');
@@ -88,7 +93,22 @@ function showRegisterScreen() {
 }
 
 function showCategoriesScreen() {
-  appView?.webContents.loadFile(path.join(__dirname, 'renderer', 'categories.html'));
+
+  appView?.webContents.session.clearCache(() => {
+    const timestamp = Date.now();
+    appView?.webContents.loadFile(path.join(__dirname, 'renderer', 'categories.html'), {
+      query: { t: timestamp }
+    });
+  });
+}
+
+function showProductsScreen() {
+  appView?.webContents.session.clearCache(() => {
+    const timestamp = Date.now();
+    appView?.webContents.loadFile(path.join(__dirname, 'renderer', 'products.html'), {
+      query: { t: timestamp }
+    });
+  });
 }
 
 function showPosScreen() {
@@ -199,6 +219,12 @@ function applyRendererSecurity() {
   ].join('; ');
 
   const ses = session.fromPartition('persist:bison-pos');
+  ses.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === 'media' || permission === 'clipboard-sanitized-write');
+  });
+  ses.setPermissionCheckHandler((_wc, permission) => (
+    permission === 'media' || permission === 'clipboard-sanitized-write'
+  ));
   ses.webRequest.onBeforeRequest((details, callback) => {
     const url = details.url || '';
     if (url.includes('webpack-hmr') || url.includes('_next/webpack-hmr')) {
@@ -303,7 +329,104 @@ function createMainWindow() {
       contextIsolation: true,
       sandbox: true,
       partition: 'persist:bison-pos',
+      webSecurity: false,
     },
+  });
+
+  // TEMP DEBUG: forward renderer console to main stdout
+  const logConsole = (msgOrEvent, maybeMsg, maybeLine, maybeSrc) => {
+    const msg = typeof msgOrEvent === 'object' && msgOrEvent !== null
+      ? `${msgOrEvent.message || ''} @ ${msgOrEvent.sourceId || ''}:${msgOrEvent.lineNumber ?? ''}`
+      : `${maybeMsg} @ ${maybeSrc}:${maybeLine}`;
+    console.log(`[renderer] ${msg}`);
+  };
+  appView.webContents.on('console-message', logConsole);
+  appView.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
+    if (isMainFrame) console.error('[renderer] did-fail-load', code, desc, url);
+  });
+  appView.webContents.on('render-process-gone', (_e, details) => {
+    console.error('[renderer] process-gone', details.reason);
+  });
+  appView.webContents.on('did-finish-load', () => {
+    // FIX: persisted zoom (partition persist:bison-pos) breaks viewport/click mapping
+    if (appView.webContents.getZoomLevel() !== 0) {
+      console.log('[renderer] resetting persisted zoom:', appView.webContents.getZoomLevel());
+      appView.webContents.setZoomLevel(0);
+    }
+    console.log('[renderer] finish url=', appView.webContents.getURL(), 'bounds=', JSON.stringify(appView.getBounds()));
+    setTimeout(() => {
+      appView.webContents.executeJavaScript(`(() => {
+        try {
+          // Capture console errors
+          window.__errors = [];
+          window.addEventListener('error', e => window.__errors.push(e.message));
+          
+          const W = window.innerWidth, H = window.innerHeight;
+          const center = document.elementFromPoint(W/2, H/2);
+          
+          // Get all buttons and check their onclick/addEventListener status
+          const buttons = [...document.querySelectorAll('button, .tab-btn, .nav-item, a.btn')];
+          const btnInfo = buttons.slice(0, 10).map(b => ({
+            tag: b.tagName,
+            id: b.id,
+            cls: b.className.slice(0, 30),
+            text: b.textContent.trim().slice(0, 20),
+            disabled: b.disabled,
+            onclick: b.onclick ? 'has-onclick' : 'no-onclick',
+            rect: (() => { const r = b.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; })()
+          }));
+          
+          // Try to find sidebar tabs specifically
+          const sidebar = document.querySelector('.sidebar, #sidebar, nav, .nav');
+          const sidebarBtns = sidebar ? [...sidebar.querySelectorAll('button, .tab-btn, a, [role=tab]')].slice(0, 10).map(b => ({
+            tag: b.tagName,
+            cls: b.className.slice(0, 40),
+            text: b.textContent.trim().slice(0, 25),
+            hasClick: b.onclick !== null || b.getAttribute('data-tab') || b.getAttribute('href'),
+            rect: (() => { const r = b.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; })()
+          })) : 'no-sidebar-found';
+          
+          // Check product grid state
+          const grid = document.querySelector('.products-grid, .product-grid, #products-grid, [class*=product-grid]');
+          const gridHTML = grid ? grid.innerHTML.slice(0, 500) : 'no-grid';
+          
+          return JSON.stringify({
+            dims: W + 'x' + H,
+            hasBisonDesktop: typeof window.bisonDesktop !== 'undefined',
+            bodyPointerEvents: getComputedStyle(document.body).pointerEvents,
+            coveringDivs: [...document.querySelectorAll('div')].filter(d => {
+              const r = d.getBoundingClientRect();
+              const cs = getComputedStyle(d);
+              return r.width >= W*0.9 && r.height >= H*0.9 && r.top <= 0 && r.left <= 0
+                && cs.position === 'fixed' && cs.pointerEvents !== 'none';
+            }).map(d => d.id || d.className.slice(0, 30) || 'anon'),
+            centerEl: center ? (center.id || center.className.slice(0, 30) || center.tagName) : 'null',
+            buttons: btnInfo,
+            sidebar: sidebarBtns,
+                         gridHTML: gridHTML,
+            errors: window.__errors ? window.__errors.slice(0, 5) : [],
+            bootSteps: window.__bootSteps ? window.__bootSteps.slice(0, 20) : 'none',
+          });
+        } catch (e) { return 'PROBE-ERR: ' + e.message + ' | ' + e.stack; }
+      })()`).then(r => console.log('[probe3]', r)).catch(e => console.error('[probe3] fail', e.message));
+      // SECOND PROBE: manually invoke boot() and capture exactly what happens
+      appView.webContents.executeJavaScript(`(async () => {
+        const out = { readyState: document.readyState, hadBoot: typeof boot, bootSteps: window.__bootSteps };
+        if (typeof boot === 'function') {
+          try {
+            await Promise.race([boot(), new Promise((_,rej)=>setTimeout(()=>rej(new Error('boot timed out (>8s)')),8000))]);
+            out.bootResult = 'RESOLVED';
+          } catch(e) {
+            out.bootResult = 'THREW: ' + e.message;
+            out.bootStack = (e.stack||'').split('\\n').slice(0,3).join(' | ');
+          }
+          out.bootStepsAfter = window.__bootSteps.slice(0,30);
+        } else {
+          out.bootResult = 'boot NOT a function — top-level failed before defining it (can we even do manual? boot is hoisted)';
+        }
+        return JSON.stringify(out);
+      })()`).then(r => console.log('[probe4]', r)).catch(e => console.error('[probe4] fail', e.message));
+    }, 6000);
   });
 
   mainWindow.addBrowserView(titleBarView);
@@ -332,6 +455,9 @@ function createMainWindow() {
   }
 
   appView.webContents.setWindowOpenHandler(({ url }) => {
+    // Allow blank/about:blank windows (used by the POS print/PDF report feature
+    // via window.open('', '_blank', ...) + document.write).
+    if (url === '' || String(url).startsWith('about:blank')) return { action: 'allow' };
     if (String(url).startsWith(rendererOrigin)) return { action: 'allow' };
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -430,19 +556,19 @@ function buildMenu() {
   const template = [
     ...(isMac
       ? [
-          {
-            label: app.name,
-            submenu: [
-              { role: 'about' },
-              { type: 'separator' },
-              { role: 'hide' },
-              { role: 'hideOthers' },
-              { role: 'unhide' },
-              { type: 'separator' },
-              { role: 'quit' },
-            ],
-          },
-        ]
+        {
+          label: app.name,
+          submenu: [
+            { role: 'about' },
+            { type: 'separator' },
+            { role: 'hide' },
+            { role: 'hideOthers' },
+            { role: 'unhide' },
+            { type: 'separator' },
+            { role: 'quit' },
+          ],
+        },
+      ]
       : []),
     { role: 'editMenu' },
     {
@@ -461,12 +587,12 @@ function buildMenu() {
         { role: 'togglefullscreen' },
         ...(allowDevtools
           ? [
-              {
-                label: 'Toggle Developer Tools',
-                accelerator: 'F12',
-                click: () => appView?.webContents.toggleDevTools(),
-              },
-            ]
+            {
+              label: 'Toggle Developer Tools',
+              accelerator: 'F12',
+              click: () => appView?.webContents.toggleDevTools(),
+            },
+          ]
           : []),
       ],
     },
@@ -506,7 +632,7 @@ function registerShortcuts() {
     if (!mainWindow) return;
     mainWindow.setFullScreen(!mainWindow.isFullScreen());
   });
-}function parseProductSearchPayload(payload) {
+} function parseProductSearchPayload(payload) {
   let src = payload;
   if (payload && typeof payload === 'object' && payload.query && typeof payload.query === 'object') {
     src = { ...payload, ...payload.query };
@@ -529,7 +655,7 @@ function registerShortcuts() {
 
 function collectCategoryIds(categoriesList, targetId) {
   const matchIds = new Set();
-  
+
   function findAndCollect(list, findId, collectAll = false) {
     if (!list || !Array.isArray(list)) return false;
     for (const cat of list) {
@@ -573,11 +699,11 @@ function registerIpc() {
     const s = authStore.getValidSession(userData());
     event.returnValue = s
       ? backendApi.cloneJson({
-          accessToken: s.accessToken,
-          refreshToken: s.refreshToken || '',
-          user: s.user || null,
-          isAdmin: isAdminUser(s.user),
-        })
+        accessToken: s.accessToken,
+        refreshToken: s.refreshToken || '',
+        user: s.user || null,
+        isAdmin: isAdminUser(s.user),
+      })
       : null;
   });
 
@@ -606,11 +732,11 @@ function registerIpc() {
     const s = authStore.getValidSession(userData());
     return s
       ? {
-          accessToken: s.accessToken,
-          refreshToken: s.refreshToken,
-          user: s.user,
-          isAdmin: isAdminUser(s.user),
-        }
+        accessToken: s.accessToken,
+        refreshToken: s.refreshToken,
+        user: s.user,
+        isAdmin: isAdminUser(s.user),
+      }
       : null;
   });
 
@@ -677,15 +803,30 @@ function registerIpc() {
   handle('pos:syncMasterData', async (event, payload) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
+    const locationId = String(payload?.locationId || '').trim();
     if (payload && payload.refresh) {
-      const result = await masterSync.refreshCatalog(auth.session.accessToken);
-      console.log('[pos:syncMasterData] refresh', result?.counts, result?.message || result?.success);
-      setTimeout(() => {
-        try { event.sender.reloadIgnoringCache(); } catch { /* window gone */ }
-      }, 300);
+      const result = await masterSync.refreshCatalog(auth.session.accessToken, locationId);
+      console.log('[pos:syncMasterData] refresh', result?.counts, 'location', locationId || 'all', result?.message || result?.success);
+      if (!payload.skipReload) {
+        setTimeout(() => {
+          try { event.sender.reloadIgnoringCache(); } catch { /* window gone */ }
+        }, 300);
+      }
       return result;
     }
-    return masterSync.syncMasterData(auth.session.accessToken);
+    return masterSync.syncMasterData(auth.session.accessToken, locationId);
+  });
+
+  handle('pos:pushMasterData', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    return masterSync.pushPendingCatalog(auth.session.accessToken);
+  });
+
+  handle('pos:syncBidirectional', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    return masterSync.syncBidirectional(auth.session.accessToken);
   });
 
   handle('pos:getMasterSyncStatus', () => ({
@@ -747,16 +888,37 @@ function registerIpc() {
     const categoryId = parsed.categoryId;
     const locationId = parsed.locationId;
 
-    if (!masterSqlite.counts().products) {
-      const synced = await masterSync.syncMasterData(auth.session.accessToken);
-      if (!synced.success && !masterSqlite.counts().products) return synced;
+    const qs = new URLSearchParams({ limit: '200' });
+    if (q) qs.set('q', q);
+    if (categoryId && categoryId !== 'All') qs.set('categoryId', categoryId);
+    if (locationId) qs.set('locationId', locationId);
+    const live = await posApi.searchProducts(auth.session.accessToken, qs.toString());
+    if (live?.success && Array.isArray(live.data) && live.data.length) {
+      return { success: true, data: live.data, source: 'live' };
     }
-    const products = masterSqlite.searchProducts({
-      query: q,
-      categoryId,
-    });
-    return { success: true, data: products };
-
+    try {
+      if (!masterSqlite.counts().products) {
+        const synced = await masterSync.syncMasterData(auth.session.accessToken, locationId);
+        if (!synced.success && !masterSqlite.counts().products) {
+          if (live?.success && Array.isArray(live.data)) return { success: true, data: live.data, source: 'live' };
+          return synced;
+        }
+      }
+      const products = masterSqlite.searchProducts({
+        query: q,
+        categoryId,
+      });
+      // Live came back empty (e.g. location-scoped stock rows missing) but the
+      // local replica has products — always serve the local rows so the sell
+      // page is never blank while offline data exists.
+      if (products.length) return { success: true, data: products, source: 'local' };
+      if (live?.success && Array.isArray(live.data)) return { success: true, data: live.data, source: 'live' };
+      return { success: true, data: products, source: 'local' };
+    } catch (err) {
+      console.error('[pos:searchProducts] local fallback failed', err.message);
+      if (live?.success && Array.isArray(live.data)) return { success: true, data: live.data, source: 'live' };
+      return { success: false, message: err.message || 'Product search failed' };
+    }
   });
 
 
@@ -812,20 +974,30 @@ function registerIpc() {
     return posApi.recordCashFlow(auth.session.accessToken, payload);
   });
 
-  // ─── OFFLINE-FIRST: Barcode lookup from local cache ──────────────────────
+  // ─── OFFLINE-FIRST: Barcode / QR / SKU lookup from local catalog ─────────
   ipcMain.handle('pos:byBarcode', async (_event, { code, locationId }) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    const products = localDb.getProducts();
-    if (products && products.length > 0) {
-      const match = products.find(
-        p => p.barcode && p.barcode.toLowerCase() === String(code).toLowerCase()
-      );
-      if (match) return { success: true, data: match };
-      return { success: false, message: `Barcode '${code}' not found in local cache.` };
+    const needle = String(code || '').trim();
+    if (!needle) return { success: false, message: 'Barcode is required' };
+
+    try { masterSqlite.reloadFromDisk(); } catch { /* ignore */ }
+    const local = masterSqlite.findByScanCode(needle);
+    if (local) return { success: true, data: local };
+
+    const cached = localDb.getProducts() || [];
+    const lower = needle.toLowerCase();
+    const cachedHit = cached.find((p) =>
+      [p.barcode, p.barcodeNumber, p.sku, p.qrCode, p.qr_code]
+        .some((v) => String(v || '').trim().toLowerCase() === lower)
+    );
+    if (cachedHit) return { success: true, data: cachedHit };
+
+    try {
+      return await posApi.byBarcode(auth.session.accessToken, needle, locationId);
+    } catch (err) {
+      return { success: false, message: err.message || `No product found for ${needle}` };
     }
-    // fallback to live API if cache is empty
-    return posApi.byBarcode(auth.session.accessToken, code, locationId);
   });
 
 
@@ -857,9 +1029,9 @@ function registerIpc() {
     if (!auth.ok) return auth.result;
 
     const token = auth.session.accessToken;
-    const salesQueue   = localDb.getSalesQueue();
+    const salesQueue = localDb.getSalesQueue();
     const returnsQueue = localDb.getReturnsQueue();
-    const shiftsQueue  = localDb.getShiftsQueue();
+    const shiftsQueue = localDb.getShiftsQueue();
 
     const results = { sales: null, returns: null, shifts: null, cacheRefreshed: false, errors: [] };
 
@@ -907,10 +1079,10 @@ function registerIpc() {
         posApi.fetchAllCustomers(token),
         posApi.fetchTaxContext(token),
       ]);
-      if (prodRes.success  && Array.isArray(prodRes.data))  localDb.saveProducts(prodRes.data);
-      if (catRes.success   && Array.isArray(catRes.data))   localDb.saveCategories(catRes.data);
-      if (custRes.success  && Array.isArray(custRes.data))  localDb.saveCustomers(custRes.data);
-      if (taxRes.success   && taxRes.data)                  localDb.saveTaxContext(taxRes.data);
+      if (prodRes.success && Array.isArray(prodRes.data)) localDb.saveProducts(prodRes.data);
+      if (catRes.success && Array.isArray(catRes.data)) localDb.saveCategories(catRes.data);
+      if (custRes.success && Array.isArray(custRes.data)) localDb.saveCustomers(custRes.data);
+      if (taxRes.success && taxRes.data) localDb.saveTaxContext(taxRes.data);
       results.cacheRefreshed = true;
       console.log('[sync] Local caches refreshed from server.');
     } catch (err) {
@@ -935,7 +1107,51 @@ function registerIpc() {
     const enriched = { ...payload, shiftId: activeShift.id };
     const saved = localDb.addReturnToQueue(enriched);
     console.log('[offline] Return queued locally:', saved.id);
+
+    // Update stock in local SQLite for "local flow only" desktop app parity
+    try {
+      masterSqlite.reloadFromDisk();
+      // Persist the return transaction locally in SQLite
+      masterSqlite.addLocalReturn(enriched);
+
+      for (const item of payload.items || []) {
+        const qty = Number(item.quantity) || 0;
+        if (qty > 0 && item.productId) {
+          // Adjust stock (returned items are added back to inventory)
+          const { previousStock, newStock, productName, unit } = masterSqlite.adjustProductStockLocally(item.productId, qty);
+          // Log stock movement
+          masterSqlite.addStockMovement({
+            productId: item.productId,
+            productName: productName || item.productName || 'Product',
+            type: 'stock_in',
+            quantity: qty,
+            previousStock,
+            newStock,
+            unit: unit || 'Pcs',
+            unitCost: Number(item.unitPrice) || 0,
+            stockType: 'bulk',
+            reason: `Sales Return (Original Inv: ${payload.saleId})`,
+            reference: saved.id || '',
+            notes: 'Restocked via sales return flow.',
+          });
+        }
+      }
+    } catch (sqliteErr) {
+      console.error('[processReturn] failed to update local SQLite stock/return:', sqliteErr.message);
+    }
+
     return { success: true, data: saved, message: 'Return saved locally. Will sync on next sync.' };
+  });
+
+  ipcMain.handle('pos:listLocalReturns', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    masterSqlite.reloadFromDisk();
+    return {
+      success: true,
+      offline: true,
+      data: { returns: masterSqlite.listAllLocalReturns() },
+    };
   });
 
 
@@ -961,8 +1177,21 @@ function registerIpc() {
   handle('pos:getCategories', async (_event, paramsString) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    masterSqlite.reloadFromDisk();
-    return { success: true, data: masterSqlite.getCategoryTree() };
+    try {
+      masterSqlite.reloadFromDisk();
+      return { success: true, data: masterSqlite.getCategoryTree() };
+    } catch (err) {
+      // Local catalog not open / read failed — try to open it once, then retry.
+      console.warn('[pos:getCategories] local read failed, reopening:', err.message);
+      try {
+        const { app } = require('electron');
+        await masterSqlite.open(app.getPath('userData'));
+        return { success: true, data: masterSqlite.getCategoryTree() };
+      } catch (err2) {
+        console.error('[pos:getCategories] reopen failed', err2.message);
+        return { success: false, message: err2.message || 'Local catalog unavailable' };
+      }
+    }
   });
 
 
@@ -1054,6 +1283,19 @@ function registerIpc() {
     return posApi.reopenShift(auth.session.accessToken, id);
   });
 
+  ipcMain.handle('pos:listLocalSales', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    masterSqlite.reloadFromDisk();
+    // Return raw local sales; the renderer computes totals/cashier grouping
+    // using its own helper functions (kept client-side only).
+    return {
+      success: true,
+      offline: true,
+      data: { sales: masterSqlite.listAllLocalSales() },
+    };
+  });
+
   ipcMain.handle('pos:listSales', async (_event, paramsString) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
@@ -1090,15 +1332,6 @@ function registerIpc() {
     return posApi.saveReceiptSettings(auth.session.accessToken, body);
   });
 
-
-  ipcMain.handle('pos:enterManagement', () => {
-    const auth = requireAdmin();
-    if (!auth.ok) return auth.result;
-    showManagementScreen();
-    return { success: true };
-  });
-
-
   ipcMain.handle('sales:enterSales', () => {
     console.log('[desktop] sales:enterSales called, switching to sales.html');
     showSalesScreen();
@@ -1122,7 +1355,35 @@ function registerIpc() {
   handle('catalog:list', () => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
+    // Refresh memory from disk so a stale/empty in-memory catalog can never
+    // hide on-disk categories from the Categories page.
+    masterSqlite.reloadFromDiskSafe();
     return { success: true, data: masterSqlite.listCatalog() };
+  });
+
+  handle('catalog:listSuppliers', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    masterSqlite.reloadFromDiskSafe();
+    let rows = masterSqlite.listSuppliers();
+    if (!rows.length && auth.session?.accessToken) {
+      try {
+        const fetched = await posApi.fetchAllSuppliers(auth.session.accessToken);
+        const list = Array.isArray(fetched?.data)
+          ? fetched.data
+          : Array.isArray(fetched?.data?.data)
+            ? fetched.data.data
+            : [];
+        if (list.length) {
+          masterSqlite.applyPage({ suppliers: list });
+          rows = masterSqlite.listSuppliers();
+        }
+        console.log('[catalog:listSuppliers] cloud', list.length, 'local', rows.length);
+      } catch (err) {
+        console.error('[catalog:listSuppliers] fetch failed', err.message);
+      }
+    }
+    return { success: true, data: rows };
   });
 
   handle('catalog:saveCategory', (_event, payload) => {
@@ -1152,6 +1413,8 @@ function registerIpc() {
   handle('catalog:listProducts', () => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
+    // Same safety: always surface the latest on-disk catalog to the Products page.
+    masterSqlite.reloadFromDiskSafe();
     return { success: true, data: masterSqlite.listProducts() };
   });
 
@@ -1165,6 +1428,73 @@ function registerIpc() {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
     return masterSqlite.deleteProduct(id);
+  });
+
+  // ── Local Stock Movements (offline-first inventory receiving) ─────────────
+  handle('pos:addStockIn', (_event, payload) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      const {
+        productId, quantity, unitCost = 0, stockType = 'bulk',
+        reason = 'Stock In', supplierId = null, supplierName = null,
+        reference = '', notes = '', boxCount, piecesPerBox,
+      } = payload || {};
+      if (!productId) return { success: false, message: 'Product ID is required' };
+      const qty = stockType === 'box'
+        ? (parseFloat(boxCount) || 0) * (parseFloat(piecesPerBox) || 0)
+        : parseFloat(quantity);
+      if (!qty || isNaN(qty) || qty <= 0) return { success: false, message: 'Valid quantity is required' };
+
+      const { previousStock, newStock, productName } = masterSqlite.adjustProductStockLocally(productId, qty);
+      const product = masterSqlite.listProducts().find(p => p.id === productId);
+      const unit = product?.stockUnitName || product?.stockUnit || 'Pcs';
+      const movement = masterSqlite.addStockMovement({
+        productId, productName, type: 'stock_in', quantity: qty,
+        previousStock, newStock, unit, unitCost: parseFloat(unitCost) || 0,
+        stockType, reason, supplierId, supplierName, reference, notes,
+      });
+      return { success: true, data: { movement, previousStock, newStock } };
+    } catch (err) {
+      return { success: false, message: err.message || 'Stock In failed' };
+    }
+  });
+
+  handle('pos:addStockOut', (_event, payload) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      const {
+        productId, quantity, unitCost = 0,
+        reason = 'Stock Out', reference = '', notes = '',
+      } = payload || {};
+      if (!productId) return { success: false, message: 'Product ID is required' };
+      const qty = parseFloat(quantity);
+      if (!qty || isNaN(qty) || qty <= 0) return { success: false, message: 'Valid quantity is required' };
+
+      const { previousStock, newStock, productName } = masterSqlite.adjustProductStockLocally(productId, -qty);
+      const product = masterSqlite.listProducts().find(p => p.id === productId);
+      const unit = product?.stockUnitName || product?.stockUnit || 'Pcs';
+      const movement = masterSqlite.addStockMovement({
+        productId, productName, type: 'stock_out', quantity: qty,
+        previousStock, newStock, unit, unitCost: parseFloat(unitCost) || 0,
+        stockType: 'bulk', reason, reference, notes,
+      });
+      return { success: true, data: { movement, previousStock, newStock } };
+    } catch (err) {
+      return { success: false, message: err.message || 'Stock Out failed' };
+    }
+  });
+
+  handle('pos:listStockMovements', (_event, params) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      const movements = masterSqlite.listStockMovements(params || {});
+      return { success: true, data: movements };
+    } catch (err) {
+      return { success: false, message: err.message || 'Failed to load movements' };
+    }
   });
 
   // ── Sales Orders ──────────────────────────────────────────────────────────
@@ -1236,17 +1566,24 @@ function registerIpc() {
 
   // ─── Offline sync status (pending queue counts) ───────────────────────────
   ipcMain.handle('pos:getSyncStatus', () => {
-    const sales   = localDb.getSalesQueue();
+    const sales = localDb.getSalesQueue();
     const returns = localDb.getReturnsQueue();
-    const shifts  = localDb.getShiftsQueue();
-    const total   = sales.length + returns.length + shifts.length;
+    const shifts = localDb.getShiftsQueue();
+    const total = sales.length + returns.length + shifts.length;
+    let catalogPending;
+    try {
+      const pc = masterSqlite.pendingCounts();
+      catalogPending = (pc.categories || 0) + (pc.subcategories || 0) + (pc.products || 0);
+    } catch { catalogPending = 0; }
     return {
       success: true,
       data: {
-        pendingSales:   sales.length,
+        pendingSales: sales.length,
         pendingReturns: returns.length,
-        pendingShifts:  shifts.length,
-        totalPending:   total,
+        pendingShifts: shifts.length,
+        totalPending: total,
+        catalogPending,
+        totalPendingAll: total + catalogPending,
       },
     };
   });
@@ -1303,7 +1640,7 @@ app.whenReady().then(async () => {
   createMainWindow();
   registerShortcuts();
   watchSessionExpiry();
-  setupAutoUpdate(app).catch(() => {});
+  setupAutoUpdate(app).catch(() => { });
 });
 
 app.on('activate', () => {
