@@ -269,14 +269,9 @@ async function boot() {
   await initLocationPicker();
   window.__bootSteps.push('initLocationPicker done');
   const locId = currentLocationId();
-  if (window.bisonLocation && bisonLocation.getLastSyncedLocationId() !== locId) {
-    try {
-      await api.pos.syncMasterData({ refresh: true, locationId: locId, skipReload: true });
-      bisonLocation.setLastSyncedLocationId(locId);
-    } catch (err) {
-      console.warn('[POS] location catalog refresh failed', err);
-    }
-  }
+  
+  // Don't auto-sync on boot - let user manually sync or sync in background
+  // This prevents app from getting stuck on slow network
   window.__bootSteps.push('about to getProfile');
 
   // Get Company profile info
@@ -342,15 +337,15 @@ function setupTabs() {
         }
       });
 
-      if (targetTab === 'held') loadHeldSales();
-      if (targetTab === 'shifts') loadShiftHistory();
-      if (targetTab === 'reports') loadShiftReports();
-      if (targetTab === 'sales') loadSalesRegister();
-      if (targetTab === 'categories') loadLocalCatalog();
-      if (targetTab === 'products') loadLocalProducts();
-      if (targetTab === 'settings') loadMachineInfo();
-      if (targetTab === 'stock') loadStockPanel();
-      if (targetTab === 'returns') loadReturnHistory();
+      if (targetTab === 'held') { try { loadHeldSales(); } catch(e) { console.warn('loadHeldSales not defined', e); } }
+      if (targetTab === 'shifts') { try { loadShiftHistory(); } catch(e) { console.warn('loadShiftHistory not defined', e); } }
+      if (targetTab === 'reports') { try { loadShiftReports(); } catch(e) { console.warn('loadShiftReports not defined', e); } }
+      if (targetTab === 'sales') { try { loadSalesRegister(); } catch(e) { console.warn('loadSalesRegister not defined', e); } }
+      if (targetTab === 'categories') { try { loadLocalCatalog(); } catch(e) { console.warn('loadLocalCatalog not defined', e); } }
+      if (targetTab === 'products') { try { loadLocalProducts(); } catch(e) { console.warn('loadLocalProducts not defined', e); } }
+      if (targetTab === 'settings') { try { loadMachineInfo(); } catch(e) { console.warn('loadMachineInfo not defined', e); } }
+      if (targetTab === 'stock') { try { loadStockPanel(); } catch(e) { console.warn('loadStockPanel not defined', e); } }
+      if (targetTab === 'returns') { try { loadReturnHistory(); } catch(e) { console.warn('loadReturnHistory not defined', e); } }
       if (targetTab === 'sell') {
         setTimeout(() => barcodeScanInp?.focus(), 50);
       }
@@ -482,17 +477,22 @@ async function applySyncedCatalog(catalog) {
 }
 
 async function loadCategories() {
-  let res = await api.pos.getCategories('tree=true');
-  let tree = unwrapCategoryTree(res);
+  // Load from local SQLite first
+  let res = await api.catalog.list();
+  let tree = Array.isArray(res?.data) ? res.data : [];
+  
+  // If local is empty, try sync then reload
   if (!tree.length && api?.pos?.syncMasterData) {
     try {
+      console.log('[POS] Local catalog empty, syncing...');
       await api.pos.syncMasterData({ refresh: true, locationId: currentLocationId(), skipReload: true });
-      res = await api.pos.getCategories('tree=true');
-      tree = unwrapCategoryTree(res);
+      res = await api.catalog.list();
+      tree = Array.isArray(res?.data) ? res.data : [];
     } catch (err) {
       console.warn('[POS] catalog refresh failed', err);
     }
   }
+  
   // Never blank the grid on a transient failure — keep whatever categories we
   // already have rendered (stash/local replica) instead of showing an empty page.
   if (tree.length || !categories.length) {
@@ -621,19 +621,45 @@ function handleCategorySelect(catId) {
 
 async function loadCategoryProducts(categoryId) {
   const locationId = currentLocationId() || '';
-  const payload = {
-    categoryId: categoryId,
-    locationId: locationId
-  };
 
   productsGrid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: var(--muted); padding: 48px;"><span class="spinner-sm" style="border-top-color: var(--brand); width: 24px; height: 24px;"></span> Loading products...</div>';
 
-  const res = await api.pos.searchProducts(payload);
-  if (res?.success && Array.isArray(res.data)) {
-    products = res.data;
+  // Load from local SQLite first
+  let res = await api.catalog.listProducts();
+  let productList = Array.isArray(res?.data) ? res.data : [];
+  
+  // Filter by category if specified
+  if (categoryId && categoryId !== 'All') {
+    productList = productList.filter(p => p.categoryId === categoryId || p.category_id === categoryId);
+  }
+  
+  if (productList.length) {
+    products = productList;
     renderProducts();
   } else {
-    productsGrid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: #ef4444; padding: 24px;">${res?.message || 'Error loading products'}</div>`;
+    // If local is empty, try sync then reload
+    if (api?.pos?.syncMasterData) {
+      try {
+        console.log('[POS] Local products empty, syncing...');
+        await api.pos.syncMasterData({ refresh: true, locationId: locationId, skipReload: true });
+        res = await api.catalog.listProducts();
+        productList = Array.isArray(res?.data) ? res.data : [];
+        if (categoryId && categoryId !== 'All') {
+          productList = productList.filter(p => p.categoryId === categoryId || p.category_id === categoryId);
+        }
+        if (productList.length) {
+          products = productList;
+          renderProducts();
+        } else {
+          productsGrid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: var(--muted); padding: 24px;">No products found</div>`;
+        }
+      } catch (err) {
+        console.warn('[POS] products refresh failed', err);
+        productsGrid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: #ef4444; padding: 24px;">Error loading products</div>`;
+      }
+    } else {
+      productsGrid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: var(--muted); padding: 24px;">No products found</div>`;
+    }
   }
 }
 
@@ -863,18 +889,19 @@ function attachHidBarcodeScanner() {
         setTimeout(() => { scanInp.style.borderColor = ''; scanInp.style.background = '#fff'; }, 800);
       }
       return true;
-      // Route to Returns search when Returns tab is active
-      if (isReturnsTabActive()) {
-        const searchInp = document.getElementById('return-search-invoice');
-        if (searchInp) {
-          searchInp.value = code;
-          document.getElementById('btn-search-return')?.click();
-        }
-        return true;
+    }
+    // Route to Returns search when Returns tab is active
+    if (isReturnsTabActive()) {
+      const searchInp = document.getElementById('return-search-invoice');
+      if (searchInp) {
+        searchInp.value = code;
+        document.getElementById('btn-search-return')?.click();
       }
-      void applyScannedCode(code);
       return true;
-    };
+    }
+    void applyScannedCode(code);
+    return true;
+  };
 
     document.addEventListener('keydown', (e) => {
       if (posSettings.enableBarcodeScanner === false) return;
@@ -1025,15 +1052,16 @@ function attachHidBarcodeScanner() {
   function addProductToCart(p) {
     const stock = p.currentStock ?? p.availableStock ?? 0;
 
-    // Check if stock is 0
+    // Warn if stock is 0 but still allow adding (don't block the sale).
+    // Many products may have 0 stock recorded locally but seller knows stock exists.
     if (stock <= 0) {
-      showToast(`Item stock is 0 - ${p.name}`, 'error');
-      return;
+      showToast(`⚠️ Low/zero stock for ${p.name} — adding anyway`, 'info');
     }
 
     const existing = cart.find(item => item.productId === p.id);
     if (existing) {
-      if (existing.quantity >= stock) {
+      // Only enforce stock ceiling when stock is tracked (> 0).
+      if (stock > 0 && existing.quantity >= stock) {
         showToast(`Cannot add more. Stock limit reached for ${p.name}!`, 'error');
         return;
       }

@@ -1,4 +1,9 @@
 
+// Force consistent userData path so dev mode (electron .) uses the same folder
+// as packaged builds — otherwise categories/products/sales are all blank because
+// '~/Library/Application Support/Electron' (dev default) is empty.
+const { app: _appForName } = require('electron');
+try { _appForName.setName('accounting-desktop-app'); } catch { /* main process only */ }
 
 const {
   app,
@@ -876,7 +881,7 @@ function registerIpc() {
     return res;
   });
 
-  // ─── OFFLINE-FIRST: Search products from local cache ─────────────────────
+  // ─── LOCAL-ONLY: Search products from local SQLite (no live API) ──────────
   ipcMain.handle('pos:searchProducts', async (_event, payload) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
@@ -886,37 +891,13 @@ function registerIpc() {
     const parsed = parseProductSearchPayload(payload);
     const q = parsed.q;
     const categoryId = parsed.categoryId;
-    const locationId = parsed.locationId;
 
-    const qs = new URLSearchParams({ limit: '200' });
-    if (q) qs.set('q', q);
-    if (categoryId && categoryId !== 'All') qs.set('categoryId', categoryId);
-    if (locationId) qs.set('locationId', locationId);
-    const live = await posApi.searchProducts(auth.session.accessToken, qs.toString());
-    if (live?.success && Array.isArray(live.data) && live.data.length) {
-      return { success: true, data: live.data, source: 'live' };
-    }
     try {
-      if (!masterSqlite.counts().products) {
-        const synced = await masterSync.syncMasterData(auth.session.accessToken, locationId);
-        if (!synced.success && !masterSqlite.counts().products) {
-          if (live?.success && Array.isArray(live.data)) return { success: true, data: live.data, source: 'live' };
-          return synced;
-        }
-      }
-      const products = masterSqlite.searchProducts({
-        query: q,
-        categoryId,
-      });
-      // Live came back empty (e.g. location-scoped stock rows missing) but the
-      // local replica has products — always serve the local rows so the sell
-      // page is never blank while offline data exists.
-      if (products.length) return { success: true, data: products, source: 'local' };
-      if (live?.success && Array.isArray(live.data)) return { success: true, data: live.data, source: 'live' };
+      masterSqlite.reloadFromDiskSafe();
+      const products = masterSqlite.searchProducts({ query: q, categoryId });
       return { success: true, data: products, source: 'local' };
     } catch (err) {
-      console.error('[pos:searchProducts] local fallback failed', err.message);
-      if (live?.success && Array.isArray(live.data)) return { success: true, data: live.data, source: 'live' };
+      console.error('[pos:searchProducts] local search failed', err.message);
       return { success: false, message: err.message || 'Product search failed' };
     }
   });
@@ -1497,10 +1478,26 @@ function registerIpc() {
     }
   });
 
-  // ── Sales Orders ──────────────────────────────────────────────────────────
+  // ── Sales Orders — local-first (show POS sales from SQLite, fallback API) ──
   ipcMain.handle('sales:getOrders', async (_event, params) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
+    // Always read local POS sales first so the Sales Register shows immediately.
+    try {
+      masterSqlite.reloadFromDiskSafe();
+      const localSales = masterSqlite.listAllLocalSales();
+      if (localSales.length) {
+        console.log('[sales:getOrders] serving', localSales.length, 'local sales');
+        return {
+          success: true,
+          offline: true,
+          data: { data: localSales, pagination: { total: localSales.length, pages: 1 } },
+        };
+      }
+    } catch (err) {
+      console.warn('[sales:getOrders] local read failed', err.message);
+    }
+    // No local sales — try live API.
     return salesApi.getOrders(auth.session.accessToken, params || {});
   });
 
@@ -1533,16 +1530,30 @@ function registerIpc() {
     return salesApi.deleteOrder(auth.session.accessToken, payload?.id);
   });
 
-  // ── Customers ─────────────────────────────────────────────────────────────
+  // ── Customers — local-first ───────────────────────────────────────────────
   ipcMain.handle('customers:list', async (_event, params) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
+    try {
+      masterSqlite.reloadFromDiskSafe();
+      const local = masterSqlite.searchCustomers({ query: '', limit: params?.limit || 500 });
+      if (local.length) return { success: true, data: local };
+    } catch (err) {
+      console.warn('[customers:list] local read failed', err.message);
+    }
     return salesApi.getCustomers(auth.session.accessToken, params || {});
   });
 
   ipcMain.handle('customers:search', async (_event, payload) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
+    try {
+      masterSqlite.reloadFromDiskSafe();
+      const local = masterSqlite.searchCustomers({ query: payload?.q || '', limit: payload?.limit || 20 });
+      if (local.length) return { success: true, data: local };
+    } catch (err) {
+      console.warn('[customers:search] local read failed', err.message);
+    }
     return salesApi.searchCustomers(
       auth.session.accessToken,
       payload?.q || '',
@@ -1550,18 +1561,35 @@ function registerIpc() {
     );
   });
 
-  // ── Products ──────────────────────────────────────────────────────────────
+  // ── Products — local-first ────────────────────────────────────────────────
   ipcMain.handle('products:list', async (_event, params) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
+    try {
+      masterSqlite.reloadFromDiskSafe();
+      const local = masterSqlite.listProducts();
+      if (local.length) return { success: true, data: local };
+    } catch (err) {
+      console.warn('[products:list] local read failed', err.message);
+    }
     return salesApi.getProducts(auth.session.accessToken, params || {});
   });
 
-  // ── Tax ───────────────────────────────────────────────────────────────────
+  // ── Tax — local-first (cache) ─────────────────────────────────────────────
   ipcMain.handle('tax:getContext', async () => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    return salesApi.getTaxContext(auth.session.accessToken);
+    // Try cached tax context from local JSON store first.
+    try {
+      const cached = localDb.getTaxContext();
+      if (cached) return { success: true, data: cached };
+    } catch { /* ignore */ }
+    const res = await salesApi.getTaxContext(auth.session.accessToken);
+    // Persist to cache for future offline use.
+    if (res?.success && res.data) {
+      try { localDb.saveTaxContext(res.data); } catch { /* ignore */ }
+    }
+    return res;
   });
 
   // ─── Offline sync status (pending queue counts) ───────────────────────────
