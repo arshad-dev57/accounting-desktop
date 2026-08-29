@@ -1528,7 +1528,8 @@
                 <h2>Process Sales Return</h2>
               </div>
               <div style="display:flex;gap:12px;margin-bottom:16px;">
-                <input type="text" class="inp-search" id="return-search-invoice" placeholder="Search by Invoice Number..." style="max-width:320px;" />
+                <input type="text" class="inp-search" id="return-search-invoice" data-pos-scan="1" placeholder="Search by Invoice Number..." style="max-width:320px;" autocomplete="off" />
+                <button class="btn-nav-action ghost" id="btn-scan-return" style="background-color:var(--brand);color:white;">📷 Scan</button>
                 <button class="btn-nav-action ghost" id="btn-search-return" style="background-color:var(--brand);color:white;">Search</button>
               </div>
               <div id="returns-list-wrap">

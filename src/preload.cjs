@@ -16,6 +16,7 @@ const ALLOWED_CHANNELS = new Set([
   'auth:logout',
   'app:getInfo',
   'app:openExternal',
+  'print:showDialog',
   'pos:listTerminals',
   'pos:getCurrentShift',
   'pos:getActiveShift',
@@ -270,5 +271,8 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
   app: {
     getInfo: () => invoke('app:getInfo'),
     openExternal: (url) => invoke('app:openExternal', url),
+  },
+  print: {
+    showDialog: (options) => invoke('print:showDialog', options),
   },
 });

@@ -827,6 +827,21 @@ function attachHidBarcodeScanner() {
     const code = buffer.trim();
     buffer = '';
     fastCount = 0;
+    
+    // For returns tab, accept any non-empty code regardless of length or speed
+    if (isReturnsTabActive() && code.length > 0) {
+      console.log('[Barcode Scanner] Returns tab - accepting code:', code);
+      const searchInp = document.getElementById('return-search-invoice');
+      if (searchInp) {
+        searchInp.value = code;
+        console.log('[Barcode Scanner] Setting search input value and clicking search');
+        document.getElementById('btn-search-return')?.click();
+      } else {
+        console.log('[Barcode Scanner] Search input not found!');
+      }
+      return true;
+    }
+    
     if (code.length < MIN_LEN) return false;
     if (reason !== 'enter' && !wasFast) return false;
     // Route to Products search when Products tab is active
@@ -865,27 +880,24 @@ function attachHidBarcodeScanner() {
       }
       return true;
     }
-    // Route to Returns search when Returns tab is active
-    if (isReturnsTabActive()) {
-      const searchInp = document.getElementById('return-search-invoice');
-      if (searchInp) {
-        searchInp.value = code;
-        document.getElementById('btn-search-return')?.click();
-      }
-      return true;
-    }
     void applyScannedCode(code);
     return true;
   };
 
   document.addEventListener('keydown', (e) => {
-    if (posSettings.enableBarcodeScanner === false) return;
-    if ((!isSellTabActive() && !isProductsTabActive() && !isStockTabActive() && !isReturnsTabActive()) || isPosOverlayOpen()) return;
+    if (posSettings.enableBarcodeScanner === false) {
+      console.log('[Barcode Scanner] Scanner disabled in settings');
+      return;
+    }
+    // Disable global scanner on returns tab to avoid interfering with QR code scanning
+    if (isReturnsTabActive()) return;
+    if ((!isSellTabActive() && !isProductsTabActive() && !isStockTabActive()) || isPosOverlayOpen()) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
 
     const target = e.target;
     const tag = String(target?.tagName || '').toLowerCase();
     const isScanField = target?.dataset?.posScan === '1' || target?.id === 'barcode-scan-box';
+    
     if (tag === 'textarea') return;
     if (tag === 'input' && !isScanField && !['text', 'search', 'number'].includes(String(target.type || '').toLowerCase())) {
       return;
@@ -1027,10 +1039,10 @@ function calculateTotals() {
 function addProductToCart(p) {
   const stock = p.currentStock ?? p.availableStock ?? 0;
 
-  // Warn if stock is 0 but still allow adding (don't block the sale).
-  // Many products may have 0 stock recorded locally but seller knows stock exists.
+  // Block adding if stock is 0
   if (stock <= 0) {
-    showToast(`⚠️ Low/zero stock for ${p.name} — adding anyway`, 'info');
+    showToast(`⚠️ Cannot add ${p.name} - Out of stock!`, 'error');
+    return;
   }
 
   const existing = cart.find(item => item.productId === p.id);
@@ -1280,21 +1292,7 @@ async function selectCustomer(c) {
   customerCreditInfo = null;
   customerSearchInp.value = c.name;
   customerDropdown.style.display = 'none';
-
-  // Get credit limit
-  const res = await api.pos.getCustomerCreditInfo(c.id);
-  if (res?.success && res.data) {
-    const cr = res.data;
-    document.getElementById('cc-limit').textContent = `$${Number(cr.creditLimit || 0).toFixed(2)}`;
-    document.getElementById('cc-owed').textContent = `$${Number(cr.outstandingBalance || 0).toFixed(2)}`;
-    document.getElementById('cc-avail').textContent = `$${Number(cr.availableCredit || 0).toFixed(2)}`;
-    document.getElementById('cc-points').textContent = cr.loyaltyPoints || 0;
-    customerCreditInfo = cr;
-    custCreditInfoCard.style.display = 'block';
-  } else {
-    customerCreditInfo = null;
-    custCreditInfoCard.style.display = 'none';
-  }
+  custCreditInfoCard.style.display = 'none';
 }
 
 // Click anywhere closes autocomplete customer dropdown
@@ -1590,10 +1588,16 @@ async function submitCompleteSale() {
     };
 
     // Update local stock quantities
-    cart.forEach(cartItem => {
+    cart.forEach(async (cartItem) => {
       const product = products.find(p => p.id === cartItem.productId);
       if (product) {
         product.currentStock = Math.max(0, (product.currentStock || 0) - cartItem.quantity);
+        // Save to local database
+        try {
+          await window.bisonDesktop.catalog.saveProduct(product);
+        } catch (err) {
+          console.error('[POS] Failed to update local stock:', err);
+        }
       }
     });
     renderProducts();
@@ -1638,7 +1642,9 @@ function renderReceipt() {
       changeAmount: lastSale.changeAmount || 0,
     });
     if (window.PosReceipt) {
-      box.innerHTML = window.PosReceipt.buildReceiptHtml(s, company, t);
+      const html = window.PosReceipt.buildReceiptHtml(s, company, t);
+      // Wrap with proper class for printReceiptNode
+      box.innerHTML = '<div class="pos-receipt-paper">' + html + '</div>';
       return;
     }
   } catch (err) {
@@ -1688,14 +1694,33 @@ function calculateTotalsFor(sale) {
 document.getElementById('btn-receipt-close').addEventListener('click', () => modalReceipt.style.display = 'none');
 document.getElementById('btn-receipt-new-sale').addEventListener('click', () => modalReceipt.style.display = 'none');
 document.getElementById('btn-receipt-print').addEventListener('click', () => {
-  window.print();
+  try {
+    const receiptBox = document.getElementById('receipt-paper-box');
+    const tpl = window.PosReceipt ? window.PosReceipt.loadReceiptTemplate() : { thermalPaperWidthMm: 80 };
+    const widthMm = tpl.thermalPaperWidthMm || 80;
+    
+    if (window.PosReceipt && typeof window.PosReceipt.printReceiptNode === 'function') {
+      window.PosReceipt.printReceiptNode(receiptBox, widthMm);
+    } else {
+      // Fallback to window.print()
+      window.print();
+    }
+    // Close modal after print
+    setTimeout(() => {
+      modalReceipt.style.display = 'none';
+    }, 1000);
+  } catch (err) {
+    console.error('[POS] Print error', err);
+    window.print();
+    setTimeout(() => {
+      modalReceipt.style.display = 'none';
+    }, 1000);
+  }
 });
 
 document.getElementById('btn-receipt-email').addEventListener('click', () => {
-  const email = prompt('Enter customer email to send receipt:', lastSale?.customerEmail || '');
-  if (email && email.includes('@')) {
-    alert(`Receipt queued to send to ${email}`);
-  }
+  // Email feature not implemented in Electron - prompt() not supported
+  showToast('Email feature not available in desktop app', 'info');
 });
 
 // ─── HOLD SALE ──────────────────────────────────────────────────────────────
@@ -1978,6 +2003,52 @@ async function loadReturnHistory() {
     wrap.innerHTML = `<div style="color:#ef4444;">Failed to load returns history: ${err.message || err}</div>`;
   }
 }
+
+document.getElementById('btn-scan-return').addEventListener('click', () => {
+  if (typeof window.openCodeScanner === 'function') {
+    window.openCodeScanner({
+      title: 'Scan Receipt Barcode',
+      onScan: (code) => {
+        document.getElementById('return-search-invoice').value = code;
+        document.getElementById('btn-search-return').click();
+      },
+    });
+  } else {
+    showToast('Scanner not available', 'error');
+  }
+});
+
+// USB Scanner support - simple and reliable for returns
+const returnSearchInp = document.getElementById('return-search-invoice');
+if (returnSearchInp) {
+  returnSearchInp.addEventListener('keydown', (e) => {
+    console.log('[Returns Input] Keydown event:', e.key, 'value:', e.target.value);
+    
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const code = returnSearchInp.value.trim();
+      console.log('[Returns Input] Enter key pressed, code:', code);
+      
+      if (code.length > 0) {
+        returnSearchInp.value = '';
+        console.log('[Returns Input] Triggering search with code:', code);
+        document.getElementById('btn-search-return').click();
+      }
+    }
+  });
+}
+
+// Auto-focus the input when Returns tab is opened
+document.querySelector('.tab-btn[data-tab="returns"]')?.addEventListener('click', () => {
+  setTimeout(() => {
+    const searchInp = document.getElementById('return-search-invoice');
+    if (searchInp) {
+      searchInp.focus();
+      searchInp.value = '';
+      console.log('[Returns Tab] Focused search input');
+    }
+  }, 100);
+});
 
 document.getElementById('btn-search-return').addEventListener('click', async () => {
   const inv = document.getElementById('return-search-invoice').value.trim();
@@ -2346,10 +2417,11 @@ async function printSaleSlip() {
   const paymentsRows = (sale.payments || []).map((p) => `<tr><td>${p.paymentMethod || '—'}</td><td style="text-align:right">${saleFmt(p.amount || 0)}</td></tr>`).join('');
   const html = `
     <!DOCTYPE html><html><head><title>Invoice ${sale.invoiceNumber || sale.orderNumber || sale.id}</title>
-    <style>body{font-family:monospace;font-size:12px;margin:0;padding:20px;}h2{font-size:16px;margin:0 0 4px;}
+    <style>body{font-family:monospace;font-size:12px;margin:0;padding:20px;width:80mm;}h2{font-size:16px;margin:0 0 4px;}
     .hdr{border-bottom:1px dashed #ccc;padding-bottom:8px;margin-bottom:12px;}table{width:100%;border-collapse:collapse;margin-bottom:12px;}
     th,td{border-bottom:1px dashed #eee;padding:2px 4px;}td{text-align:left;}tfoot{font-weight:bold}
-    .bc{text-align:center;padding:8px 0;}</style></head>
+    .bc{text-align:center;padding:8px 0;}
+    @page{size:80mm auto;margin:0;}</style></head>
     <body>
       <div class="hdr"><h2>Invoice: ${sale.invoiceNumber || sale.orderNumber || sale.id || '—'}</h2>
         Date: ${saleDateFormat(sale)} | Cashier: ${saleCashier(sale)} |
@@ -2409,7 +2481,8 @@ function buildSalesReportHtml(rows, range) {
     <style>body{font-family:Arial,sans-serif;font-size:12px;margin:0;padding:24px;}
     h2{margin:0 0 4px;font-size:18px;} .meta{color:#555;margin-bottom:16px;font-size:12px;}
     table{width:100%;border-collapse:collapse;} th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;}
-    th{background:#f2f2f2;} .tright{text-align:right;} .tfoot{font-weight:bold;background:#fafafa;}</style></head>
+    th{background:#f2f2f2;} .tright{text-align:right;} .tfoot{font-weight:bold;background:#fafafa;}
+    @page{size:A4;margin:20mm;}</style></head>
     <body>
       <h2>POS Sales Report</h2>
       <div class="meta">Date range: ${fromLabel} to ${toLabel}<br/>
@@ -3206,8 +3279,8 @@ function initProductPanel() {
       });
       return;
     }
-    const code = prompt('Scan or enter QR / barcode:');
-    if (code) setPf('qrCode', code);
+    // QR code input via prompt not supported in Electron
+    showToast('Use barcode scanner or enter QR code manually in the field', 'info');
   });
   document.getElementById('pf-qr-from-sku')?.addEventListener('click', () => {
     setPf('qrCode', ensurePfSku());

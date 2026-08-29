@@ -863,7 +863,7 @@ function renderForm() {
       if (!barcodeValue) { alert('No barcode to print. Please scan or enter a barcode first.'); return; }
       const win = window.open('', '_blank');
       if (!win) return;
-      win.document.write(`<html><head><title>Barcode - ${productName}</title><style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:sans-serif;}.barcode{font-family:monospace;font-size:48px;font-weight:700;letter-spacing:4px;margin:20px 0;}.name{font-size:18px;color:#555;}</style></head><body><div class="barcode">${barcodeValue}</div><div class="name">${productName}</div></body></html>`);
+      win.document.write(`<html><head><title>Barcode - ${productName}</title><style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:sans-serif;padding:20px;}.barcode{font-family:monospace;font-size:48px;font-weight:700;letter-spacing:4px;margin:20px 0;}.name{font-size:18px;color:#555;}@page{size:auto;margin:0;}</style></head><body><div class="barcode">${barcodeValue}</div><div class="name">${productName}</div></body></html>`);
       win.document.close();
       win.print();
     });
@@ -877,7 +877,7 @@ function renderForm() {
       if (!qrValue) { alert('No QR code to print.'); return; }
       const win = window.open('', '_blank');
       if (!win) return;
-      win.document.write(`<html><head><title>QR - ${productName}</title><style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:sans-serif;}.qr{font-family:monospace;font-size:32px;font-weight:700;letter-spacing:2px;margin:20px 0;word-break:break-all;max-width:400px;text-align:center;}.name{font-size:18px;color:#555;}</style></head><body><div class="qr">${qrValue}</div><div class="name">${productName}</div></body></html>`);
+      win.document.write(`<html><head><title>QR - ${productName}</title><style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:sans-serif;padding:20px;}.qr{font-family:monospace;font-size:32px;font-weight:700;letter-spacing:2px;margin:20px 0;word-break:break-all;max-width:400px;text-align:center;}.name{font-size:18px;color:#555;}@page{size:auto;margin:0;}</style></head><body><div class="qr">${qrValue}</div><div class="name">${productName}</div></body></html>`);
       win.document.close();
       win.print();
     });

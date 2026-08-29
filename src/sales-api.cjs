@@ -97,6 +97,21 @@ function getTaxContext(token) {
   return request(token, 'GET', '/api/tax/context');
 }
 
+function getPOSSales(token, params = {}) {
+  const qs = new URLSearchParams();
+  if (params.page)      qs.set('page', String(params.page));
+  if (params.limit)     qs.set('limit', String(params.limit));
+  if (params.search)    qs.set('search', params.search);
+  if (params.status)    qs.set('status', params.status);
+  if (params.sortBy)    qs.set('sortBy', params.sortBy);
+  if (params.sortOrder) qs.set('sortOrder', params.sortOrder);
+  return request(token, 'GET', `/api/pos/sales?${qs.toString()}`);
+}
+
+function deletePOSSale(token, id) {
+  return request(token, 'DELETE', `/api/pos/sales/${id}`);
+}
+
 module.exports = {
   getOrders,
   createOrder,
@@ -107,4 +122,6 @@ module.exports = {
   searchCustomers,
   getProducts,
   getTaxContext,
+  getPOSSales,
+  deletePOSSale,
 };

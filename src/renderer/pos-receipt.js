@@ -353,6 +353,169 @@
     };
   }
 
+  // ─── Advanced thermal print (mirrors web app printReceiptNode) ─────────────
+  var printInProgress = false;
+  var printQueue = [];
+
+  function printReceiptNode(node, widthMm) {
+    if (typeof document === 'undefined') {
+      throw new Error('Cannot print - document not available');
+    }
+
+    // If a print is already in progress, queue this one
+    if (printInProgress) {
+      printQueue.push({ node: node, widthMm: widthMm });
+      console.log('[POS] Print queued - another print in progress');
+      return;
+    }
+
+    printInProgress = true;
+
+    // Clean up any existing print iframes (but be more careful)
+    var existingIframes = document.querySelectorAll('iframe[title="POS thermal print"]');
+    for (var i = 0; i < existingIframes.length; i++) {
+      try { 
+        existingIframes[i].style.display = 'none';
+        setTimeout(function() { 
+          try { document.body.removeChild(existingIframes[i]); } catch (e) { /* ignore */ }
+        }, 1000);
+      } catch (e) { /* ignore */ }
+    }
+
+    // Find the actual receipt paper element if node is a wrapper
+    var receiptPaper = node.querySelector && node.querySelector('.pos-receipt-paper') ? node.querySelector('.pos-receipt-paper') : node;
+
+    // Clone the receipt node
+    var clone = receiptPaper.cloneNode(true);
+
+    // Fix relative image URLs to absolute
+    var cloneImages = clone.querySelectorAll('img');
+    for (var i = 0; i < cloneImages.length; i++) {
+      var img = cloneImages[i];
+      var src = img.getAttribute('src') || '';
+      if (src.startsWith('/')) {
+        img.setAttribute('src', window.location.origin + src);
+      }
+    }
+
+    // Convert canvas elements to images (for QR/barcode)
+    var sourceCanvases = Array.from(receiptPaper.querySelectorAll('canvas'));
+    var cloneCanvases = clone.querySelectorAll('canvas');
+    for (var j = 0; j < cloneCanvases.length; j++) {
+      var canvasEl = cloneCanvases[j];
+      var source = sourceCanvases[j];
+      if (!source) continue;
+      try {
+        var newImg = document.createElement('img');
+        newImg.src = source.toDataURL('image/png');
+        newImg.className = 'receipt-qr';
+        canvasEl.parentNode.replaceChild(newImg, canvasEl);
+      } catch (e) {
+        /* ignore */
+      }
+    }
+
+    var paperWidth = Number(widthMm) === 58 ? 58 : 80;
+
+    // Hidden iframe — only receipt content inside, nothing else
+    var iframe = document.createElement('iframe');
+    iframe.setAttribute('title', 'POS thermal print');
+    iframe.setAttribute('data-print-id', String(Date.now()));
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.style.opacity = '0';
+    iframe.style.pointerEvents = 'none';
+    iframe.style.zIndex = '-1';
+    document.body.appendChild(iframe);
+
+    var win = iframe.contentWindow;
+    var doc = win.document;
+
+    if (!win || !doc) {
+      try { document.body.removeChild(iframe); } catch (e) { /* ignore */ }
+      printInProgress = false;
+      processPrintQueue();
+      window.print();
+      return;
+    }
+
+    doc.open();
+    doc.write('<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="utf-8" />\n  <title>Receipt</title>\n  <style>\n    @page {\n      size: ' + paperWidth + 'mm auto;\n      margin: 0;\n    }\n    @media print {\n      @page {\n        size: ' + paperWidth + 'mm auto;\n        margin: 0;\n      }\n      body {\n        width: ' + paperWidth + 'mm !important;\n        max-width: ' + paperWidth + 'mm !important;\n      }\n      * {\n        -webkit-print-color-adjust: exact !important;\n        print-color-adjust: exact !important;\n      }\n    }\n    * {\n      box-sizing: border-box;\n    }\n    html, body {\n      margin: 0;\n      padding: 0;\n      width: ' + paperWidth + 'mm;\n      max-width: ' + paperWidth + 'mm;\n      background: #fff;\n      color: #000;\n    }\n    html, body, .pos-receipt-paper, .pos-receipt-paper * {\n      color: #000 !important;\n      font-weight: 700 !important;\n      -webkit-text-stroke: 0.25px #000;\n    }\n    body {\n      font-family: "Courier New", Courier, monospace;\n      font-size: 12px;\n      line-height: 1.2;\n      font-weight: 700;\n    }\n    .pos-receipt-paper {\n      width: 100% !important;\n      max-width: 100% !important;\n      margin: 0;\n      padding: 2px 4px 30px 4px;\n      background: #fff;\n    }\n    .no-print { display: none !important; }\n    img.company-logo {\n      max-width: ' + (paperWidth === 58 ? 100 : 140) + 'px;\n      height: auto;\n      display: block;\n      margin: 0 auto 4px;\n    }\n    img.receipt-qr {\n      width: ' + (paperWidth === 58 ? 100 : 140) + 'px;\n      height: ' + (paperWidth === 58 ? 100 : 140) + 'px;\n      image-rendering: pixelated;\n      display: block;\n      margin: 4px auto;\n    }\n    table { width: 100%; border-collapse: collapse; }\n    svg {\n      max-width: 100%;\n      height: auto;\n      display: block;\n      margin: 2px auto;\n    }\n    div, p { margin: 0; padding: 0; }\n  </style>\n</head><body>' + clone.outerHTML + '</body></html>');
+    doc.close();
+
+    var printed = false;
+    var printId = iframe.getAttribute('data-print-id');
+
+    var cleanup = function() {
+      setTimeout(function() {
+        try { 
+          // Only remove if it's still the same iframe
+          var currentIframe = document.querySelector('iframe[data-print-id="' + printId + '"]');
+          if (currentIframe) {
+            document.body.removeChild(currentIframe);
+          }
+          printInProgress = false;
+          processPrintQueue();
+        } catch (e) { 
+          printInProgress = false;
+          processPrintQueue();
+        }
+      }, 15000);
+    };
+
+    var printWhenReady = function() {
+      if (printed) return;
+      printed = true;
+      try {
+        win.focus();
+        win.print();
+        cleanup();
+      } catch (e) {
+        console.error('[POS] Print error', e);
+        printInProgress = false;
+        processPrintQueue();
+        window.print();
+      }
+    };
+
+    var images = Array.from(doc.images);
+    if (!images.length) {
+      setTimeout(printWhenReady, 500);
+      return;
+    }
+
+    var remaining = images.length;
+    var done = function() {
+      remaining -= 1;
+      if (remaining <= 0) setTimeout(printWhenReady, 300);
+    };
+    for (var k = 0; k < images.length; k++) {
+      var img = images[k];
+      if (img.complete) {
+        done();
+      } else {
+        img.onload = done;
+        img.onerror = done;
+      }
+    }
+
+    // Force print after 5s even if images stall
+    setTimeout(function() { if (!printed) printWhenReady(); }, 5000);
+  }
+
+  function processPrintQueue() {
+    if (printQueue.length > 0) {
+      var next = printQueue.shift();
+      setTimeout(function() {
+        printReceiptNode(next.node, next.widthMm);
+      }, 500);
+    }
+  }
+
   global.PosReceipt = {
     DEFAULT_RECEIPT_TEMPLATE: DEFAULT_RECEIPT_TEMPLATE,
     loadReceiptTemplate: loadReceiptTemplate,
@@ -363,5 +526,6 @@
     receiptBarcodeValue: receiptBarcodeValue,
     code128BarcodeSvg: code128BarcodeSvg,
     money: money,
+    printReceiptNode: printReceiptNode,
   };
 })(window);

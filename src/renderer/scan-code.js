@@ -12,6 +12,9 @@
     'codabar',
     'itf',
     'data_matrix',
+    'pdf417',
+    'aztec',
+    'maxi_code',
   ];
 
   function normalizeScanCode(raw) {
@@ -183,7 +186,20 @@
           return;
         }
 
-        const detector = new BarcodeDetector({ formats: FORMATS });
+        // Try to create detector with all supported formats
+        let detector;
+        try {
+          detector = new BarcodeDetector({ formats: FORMATS });
+        } catch (e) {
+          // If specific formats fail, try without format restriction
+          try {
+            detector = new BarcodeDetector();
+          } catch (e2) {
+            status.textContent = 'Camera open — USB scanner or type the code';
+            input.focus();
+            return;
+          }
+        }
         const tick = async () => {
           if (settled) return;
           if (video.readyState >= 2) {

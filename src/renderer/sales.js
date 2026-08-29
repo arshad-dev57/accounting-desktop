@@ -8,6 +8,7 @@ window.addEventListener('error', (event) => {
 const api = window.bisonDesktop;
 
 let orders = [];
+let posSales = [];
 let products = [];
 let taxContext = null;
 let pricingModel = 'exclusive';
@@ -54,6 +55,7 @@ const detailCustomer = document.getElementById('detail-customer');
 const detailBody = document.getElementById('detail-body');
 const btnBackToPos = document.getElementById('btn-back-to-pos');
 const btnLogout = document.getElementById('btn-logout');
+const btnDeleteAll = document.getElementById('btn-delete-all');
 
 // Form DOM refs
 const formError = document.getElementById('form-error');
@@ -179,6 +181,7 @@ function showCreateView() {
 async function fetchOrders() {
   tableBody.innerHTML = `<div class="empty-state"><svg class="spin" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#014582" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg><p>Loading orders…</p></div>`;
   try {
+    // Fetch Sales Orders
     const res = await api.sales.getOrders({
       page: currentPage,
       limit: PAGE_LIMIT,
@@ -191,13 +194,23 @@ async function fetchOrders() {
       priority: priorityFilter || undefined,
     });
 
+    // Fetch POS Sales
+    const posRes = await api.sales.getPOSSales({
+      page: currentPage,
+      limit: PAGE_LIMIT,
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+      search: searchTerm || undefined,
+      status: statusFilter || undefined,
+    });
+
     if (!res?.success) {
       tableBody.innerHTML = `<div class="empty-state" style="color:#dc2626;">${res?.message || 'Failed to load orders'}</div>`;
       return;
     }
 
+    // Process Sales Orders
     const raw = res.data;
-    // API may return { data: [], pagination: {} } or array directly
     if (raw && !Array.isArray(raw) && raw.data) {
       orders = raw.data;
       const pag = raw.pagination || {};
@@ -218,10 +231,26 @@ async function fetchOrders() {
       totalPages = 1; hasNext = false; hasPrev = false;
     }
 
+    // Process POS Sales
+    if (posRes?.success) {
+      const posRaw = posRes.data;
+      if (posRaw && !Array.isArray(posRaw) && posRaw.data) {
+        posSales = posRaw.data;
+      } else {
+        posSales = Array.isArray(posRaw) ? posRaw : [];
+      }
+    } else {
+      posSales = [];
+    }
+
+    // Combine both datasets
+    const allRecords = [...orders, ...posSales];
+    totalRecords = allRecords.length;
+
     // KPIs (on current page — mirrors Next.js behaviour)
-    kpiPending.textContent = orders.filter(o => o.orderStatus === 'Pending').length;
-    kpiProcessing.textContent = orders.filter(o => o.orderStatus === 'Processing').length;
-    kpiDelivered.textContent = orders.filter(o => o.orderStatus === 'Delivered').length;
+    kpiPending.textContent = allRecords.filter(o => o.orderStatus === 'Pending' || o.status === 'Pending').length;
+    kpiProcessing.textContent = allRecords.filter(o => o.orderStatus === 'Processing' || o.status === 'Processing').length;
+    kpiDelivered.textContent = allRecords.filter(o => o.orderStatus === 'Delivered' || o.status === 'Delivered').length;
 
     renderTable();
     renderPagination();
@@ -232,43 +261,58 @@ async function fetchOrders() {
 
 // ─── Render table ─────────────────────────────────────────────────────────────
 function renderTable() {
-  if (!orders.length) {
+  const allRecords = [...orders, ...posSales];
+  
+  if (!allRecords.length) {
     tableBody.innerHTML = `<div class="empty-state"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg><p style="font-size:15px;font-weight:600;margin-bottom:4px;">No sales orders yet</p><p>Create your first sales order to get started</p></div>`;
     return;
   }
 
-  const rows = orders.map((order, idx) => {
-    const id = order._id || order.id || '';
-    const transitions = getTransitions(order.orderStatus);
-    const statusOpts = [`<option value="${order.orderStatus}">${order.orderStatus}</option>`,
+  const rows = allRecords.map((record, idx) => {
+    // Check if this is a POS sale (has invoiceNumber field)
+    const isPOS = record.invoiceNumber !== undefined;
+    const id = record._id || record.id || '';
+    
+    // Map POS sale fields to order fields
+    const orderNumber = isPOS ? record.invoiceNumber : (record.orderNumber || '—');
+    const customerName = record.customerName || '—';
+    const customerEmail = record.customerEmail || null;
+    const status = isPOS ? (record.status || 'Completed') : (record.orderStatus || 'Draft');
+    const paymentStatus = isPOS ? (record.paidAmount >= record.grandTotal ? 'Paid' : 'Unpaid') : (record.paymentStatus || 'Pending');
+    const priority = record.priority || 'Medium';
+    const total = Number(record.grandTotal || record.totalAmount || 0);
+    const date = isPOS ? (record.createdAt || record.saleDate) : (record.orderDate || null);
+    const isSalesOrder = !isPOS;
+    
+    const transitions = isSalesOrder ? getTransitions(status) : [];
+    const statusOpts = [`<option value="${status}">${status}</option>`,
     ...transitions.map(s => `<option value="${s}">${s}</option>`)].join('');
-    const canCancel = ['Draft', 'Pending', 'Processing'].includes(order.orderStatus);
-    const canDelete = ['Draft', 'Cancelled'].includes(order.orderStatus);
-    const total = Number(order.grandTotal || order.totalAmount || 0);
+    const canCancel = isSalesOrder && ['Draft', 'Pending', 'Processing'].includes(status);
+    const canDelete = isSalesOrder ? ['Draft', 'Cancelled'].includes(status) : true; // POS sales can be deleted
 
-    return `<tr data-id="${id}" data-idx="${idx}">
-      <td><span class="order-num">${order.orderNumber || '—'}</span></td>
+    return `<tr data-id="${id}" data-idx="${idx}" data-type="${isPOS ? 'pos' : 'order'}">
+      <td><span class="order-num">${orderNumber}</span></td>
       <td>
-        <div class="customer-name">${order.customerName || '—'}</div>
-        ${order.customerEmail ? `<div class="customer-email">${order.customerEmail}</div>` : ''}
+        <div class="customer-name">${customerName}</div>
+        ${customerEmail ? `<div class="customer-email">${customerEmail}</div>` : ''}
       </td>
-      <td><span class="${pillClass(STATUS_PILL, order.orderStatus)}">${order.orderStatus}</span></td>
-      <td><span class="${pillClass(PAYMENT_PILL, order.paymentStatus)}">${order.paymentStatus}</span></td>
-      <td><span class="${pillClass(PRIORITY_PILL, order.priority)}">${order.priority}</span></td>
+      <td><span class="${pillClass(STATUS_PILL, status)}">${status}</span></td>
+      <td><span class="${pillClass(PAYMENT_PILL, paymentStatus)}">${paymentStatus}</span></td>
+      <td><span class="${pillClass(PRIORITY_PILL, priority)}">${priority}</span></td>
       <td style="font-weight:600;color:#1e293b;">${money(total)}</td>
-      <td style="color:var(--muted);font-size:12px;">${order.orderDate ? new Date(order.orderDate).toLocaleDateString() : '—'}</td>
+      <td style="color:var(--muted);font-size:12px;">${date ? new Date(date).toLocaleDateString() : '—'}</td>
       <td>
         <div class="actions-cell">
-          <button class="icon-btn" title="View" data-action="view" data-idx="${idx}">
+          <button class="icon-btn" title="View" data-action="view" data-idx="${idx}" data-type="${isPOS ? 'pos' : 'order'}">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
-          <select class="status-select" data-action="status" data-id="${id}" title="Change Status" ${transitions.length === 0 ? 'disabled' : ''}>
+          ${isSalesOrder ? `<select class="status-select" data-action="status" data-id="${id}" title="Change Status" ${transitions.length === 0 ? 'disabled' : ''}>
             ${statusOpts}
-          </select>
+          </select>` : ''}
           ${canCancel ? `<button class="icon-btn warn" title="Cancel" data-action="cancel" data-id="${id}">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>` : ''}
-          ${canDelete ? `<button class="icon-btn danger" title="Delete" data-action="delete" data-id="${id}">
+          ${canDelete ? `<button class="icon-btn danger" title="Delete" data-action="delete" data-id="${id}" data-type="${isPOS ? 'pos' : 'order'}">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
           </button>` : ''}
         </div>
@@ -286,7 +330,12 @@ function renderTable() {
 
   // Wire up events on the new DOM
   tableBody.querySelectorAll('[data-action="view"]').forEach(btn => {
-    btn.addEventListener('click', () => openDetailModal(orders[Number(btn.dataset.idx)]));
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.idx);
+      const type = btn.dataset.type;
+      const record = type === 'pos' ? posSales[idx] : orders[idx];
+      openDetailModal(record, type === 'pos');
+    });
   });
   tableBody.querySelectorAll('[data-action="status"]').forEach(sel => {
     sel.addEventListener('change', async () => {
@@ -297,7 +346,15 @@ function renderTable() {
     btn.addEventListener('click', () => handleCancelOrder(btn.dataset.id));
   });
   tableBody.querySelectorAll('[data-action="delete"]').forEach(btn => {
-    btn.addEventListener('click', () => handleDeleteOrder(btn.dataset.id));
+    btn.addEventListener('click', () => {
+      const type = btn.dataset.type;
+      const id = btn.dataset.id;
+      if (type === 'pos') {
+        handleDeletePOSSale(id);
+      } else {
+        handleDeleteOrder(id);
+      }
+    });
   });
 }
 
@@ -341,15 +398,67 @@ async function handleDeleteOrder(id) {
   } catch (err) { alert(err.message || 'Error'); }
 }
 
+async function handleDeletePOSSale(id) {
+  if (!confirm('Are you sure you want to delete this POS sale? This action cannot be undone.')) return;
+  try {
+    const res = await api.sales.deletePOSSale(id);
+    if (!res?.success) { alert(res?.message || 'Failed to delete POS sale'); }
+    fetchOrders();
+  } catch (err) { alert(err.message || 'Error'); }
+}
+
+async function handleDeleteAll() {
+  const allRecords = [...orders, ...posSales];
+  if (!allRecords.length) {
+    alert('No orders to delete.');
+    return;
+  }
+  if (!confirm(`Are you sure you want to delete ALL ${allRecords.length} records? This action cannot be undone.`)) return;
+  try {
+    // Delete records one by one (API might not have bulk delete)
+    let successCount = 0;
+    let failCount = 0;
+    for (const record of allRecords) {
+      const id = record._id || record.id || '';
+      const isPOS = record.invoiceNumber !== undefined;
+      if (!id) continue;
+      try {
+        let res;
+        if (isPOS) {
+          res = await api.sales.deletePOSSale(id);
+        } else {
+          res = await api.sales.deleteOrder(id);
+        }
+        if (res?.success) successCount++;
+        else failCount++;
+      } catch (err) {
+        failCount++;
+      }
+    }
+    if (failCount > 0) {
+      alert(`Deleted ${successCount} records. ${failCount} records failed to delete.`);
+    } else {
+      alert(`Successfully deleted all ${successCount} records.`);
+    }
+    fetchOrders();
+  } catch (err) { alert(err.message || 'Error deleting records'); }
+}
+
 // ─── Order Detail Modal ───────────────────────────────────────────────────────
-function openDetailModal(order) {
-  detailOrderNum.textContent = order.orderNumber || '';
-  detailCustomer.textContent = order.customerName || '';
+function openDetailModal(record, isPOS = false) {
+  const orderNumber = isPOS ? (record.invoiceNumber || '—') : (record.orderNumber || '—');
+  const customerName = record.customerName || '—';
+  const status = isPOS ? (record.status || 'Completed') : (record.orderStatus || 'Draft');
+  const paymentStatus = isPOS ? (record.paidAmount >= record.grandTotal ? 'Paid' : 'Unpaid') : (record.paymentStatus || 'Pending');
+  const date = isPOS ? (record.createdAt || record.saleDate) : (record.orderDate || null);
+  const tax = Number(record.taxTotal || 0);
+  const grand = Number(record.grandTotal || record.totalAmount || 0);
+  const items = record.items || [];
 
-  const tax = Number(order.taxTotal || 0);
-  const grand = Number(order.grandTotal || order.totalAmount || 0);
+  detailOrderNum.textContent = orderNumber;
+  detailCustomer.textContent = customerName;
 
-  const itemRows = (order.items || []).map(item => `
+  const itemRows = items.map(item => `
     <tr>
       <td style="padding:8px 12px;">${item.productName || '—'}</td>
       <td style="padding:8px 12px;font-family:monospace;font-size:12px;">${item.sku || '—'}</td>
@@ -364,8 +473,8 @@ function openDetailModal(order) {
       </td>
     </tr>`).join('');
 
-  const shipping = order.shippingAddress;
-  const shippingBlock = shipping && (shipping.street || shipping.city) ? `
+  const shipping = record.shippingAddress;
+  const shippingBlock = !isPOS && shipping && (shipping.street || shipping.city) ? `
     <div style="margin-top:18px;">
       <p style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Shipping Address</p>
       <div style="background:#f8fafc;border-radius:10px;padding:12px;font-size:13px;color:#374151;line-height:1.6;">
@@ -379,23 +488,23 @@ function openDetailModal(order) {
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;">
       <div>
         <p style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Status</p>
-        <span class="${pillClass(STATUS_PILL, order.orderStatus)}">${order.orderStatus}</span>
+        <span class="${pillClass(STATUS_PILL, status)}">${status}</span>
       </div>
       <div>
         <p style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Payment</p>
-        <span class="${pillClass(PAYMENT_PILL, order.paymentStatus)}">${order.paymentStatus}</span>
+        <span class="${pillClass(PAYMENT_PILL, paymentStatus)}">${paymentStatus}</span>
       </div>
       <div>
-        <p style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Order Date</p>
-        <p style="font-size:13px;color:#374151;">${order.orderDate ? new Date(order.orderDate).toLocaleDateString() : '—'}</p>
+        <p style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${isPOS ? 'Sale Date' : 'Order Date'}</p>
+        <p style="font-size:13px;color:#374151;">${date ? new Date(date).toLocaleDateString() : '—'}</p>
       </div>
-      <div>
+      ${!isPOS ? `<div>
         <p style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Expected Delivery</p>
-        <p style="font-size:13px;color:#374151;">${order.expectedDeliveryDate ? new Date(order.expectedDeliveryDate).toLocaleDateString() : 'N/A'}</p>
-      </div>
+        <p style="font-size:13px;color:#374151;">${record.expectedDeliveryDate ? new Date(record.expectedDeliveryDate).toLocaleDateString() : 'N/A'}</p>
+      </div>` : '<div></div>'}
     </div>
     <div style="margin-bottom:18px;">
-      <p style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Order Items</p>
+      <p style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">${isPOS ? 'Sale Items' : 'Order Items'}</p>
       <div style="border:1px solid var(--line);border-radius:10px;overflow:hidden;">
         <table style="width:100%;border-collapse:collapse;font-size:13px;">
           <thead style="background:#f8fafc;">
@@ -978,6 +1087,7 @@ btnBackToPos.addEventListener('click', () => {
   window.location.href = './sell.html';
 });
 btnLogout.addEventListener('click', () => api.auth.logout());
+btnDeleteAll.addEventListener('click', handleDeleteAll);
 api.auth.onExpired(() => api.auth.logout());
 
 btnCreate.addEventListener('click', () => { showCreateView(); loadProducts(); loadTaxContext(); });
