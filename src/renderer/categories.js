@@ -2,7 +2,6 @@
 
 const api = window.bisonDesktop;
 
-// Guard: agar api available nahi toh early error show karo
 if (!api) {
   document.addEventListener('DOMContentLoaded', () => {
     const tw = document.getElementById('table-wrap');

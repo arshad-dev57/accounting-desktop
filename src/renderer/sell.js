@@ -48,16 +48,26 @@ function currentLocationId() {
 
 async function initLocationPicker() {
   const select = document.getElementById('location-select');
-  if (!select || !window.bisonLocation) return;
-  locationList = await bisonLocation.loadLocations(api);
+  if (!select) return;
+  // Load from local cache (no live API call)
+  try {
+    const res = await api.pos.listLocations();
+    locationList = Array.isArray(res?.data) ? res.data : [];
+  } catch (err) {
+    locationList = [];
+  }
   const preferred =
-    bisonLocation.getStoredLocationId() ||
+    (window.bisonLocation ? bisonLocation.getStoredLocationId() : '') ||
     currentTerminal?.locationId ||
     currentTerminal?.location?.id ||
     '';
-  const chosen = bisonLocation.fillLocationSelect(select, locationList, preferred, { allowAll: true });
-  bisonLocation.setStoredLocationId(chosen);
-  applySelectedLocation(chosen);
+  if (window.bisonLocation) {
+    const chosen = bisonLocation.fillLocationSelect(select, locationList, preferred, { allowAll: true });
+    bisonLocation.setStoredLocationId(chosen);
+    applySelectedLocation(chosen);
+  } else {
+    applySelectedLocation(preferred);
+  }
   select.addEventListener('change', () => {
     void onLocationChanged(select.value);
   });
@@ -73,17 +83,7 @@ function applySelectedLocation(id) {
 async function onLocationChanged(id) {
   if (window.bisonLocation) bisonLocation.setStoredLocationId(id);
   applySelectedLocation(id);
-  const locId = currentLocationId();
-  showToast('Loading catalog for this location…', 'success');
-  try {
-    const res = await api.pos.syncMasterData({ refresh: true, locationId: locId, skipReload: true });
-    if (res && res.success === false) {
-      showToast(res.message || 'Cloud sync failed — local changes kept and will retry on next sync', 'error');
-    }
-    if (res && res.success !== false && window.bisonLocation) bisonLocation.setLastSyncedLocationId(locId);
-  } catch (err) {
-    showToast(err.message || 'Could not refresh this location', 'error');
-  }
+  // Load catalog from local DB — no live API sync on location change
   await loadCategories();
   await loadCategoryProducts(selectedCategoryId || 'All');
   if (typeof loadLocalCatalog === 'function') loadLocalCatalog();
@@ -481,17 +481,12 @@ async function loadCategories() {
   let res = await api.catalog.list();
   let tree = Array.isArray(res?.data) ? res.data : [];
 
-  // If local is empty, try sync then reload
-  if (!tree.length && api?.pos?.syncMasterData) {
-    try {
-      console.log('[POS] Local catalog empty, syncing...');
-      await api.pos.syncMasterData({ refresh: true, locationId: currentLocationId(), skipReload: true });
-      res = await api.catalog.list();
-      tree = Array.isArray(res?.data) ? res.data : [];
-    } catch (err) {
-      console.warn('[POS] catalog refresh failed', err);
-    }
+  // If local is empty, show a message — user should use Sync button to load from cloud
+  if (!tree.length) {
+    console.warn('[POS] Local catalog empty — use Sync button to load from cloud');
+    // Leave tree empty; the empty state will be rendered below
   }
+
 
   // Never blank the grid on a transient failure — keep whatever categories we
   // already have rendered (stash/local replica) instead of showing an empty page.
@@ -637,29 +632,9 @@ async function loadCategoryProducts(categoryId) {
     products = productList;
     renderProducts();
   } else {
-    // If local is empty, try sync then reload
-    if (api?.pos?.syncMasterData) {
-      try {
-        console.log('[POS] Local products empty, syncing...');
-        await api.pos.syncMasterData({ refresh: true, locationId: locationId, skipReload: true });
-        res = await api.catalog.listProducts();
-        productList = Array.isArray(res?.data) ? res.data : [];
-        if (categoryId && categoryId !== 'All') {
-          productList = productList.filter(p => p.categoryId === categoryId || p.category_id === categoryId);
-        }
-        if (productList.length) {
-          products = productList;
-          renderProducts();
-        } else {
-          productsGrid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: var(--muted); padding: 24px;">No products found</div>`;
-        }
-      } catch (err) {
-        console.warn('[POS] products refresh failed', err);
-        productsGrid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: #ef4444; padding: 24px;">Error loading products</div>`;
-      }
-    } else {
-      productsGrid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: var(--muted); padding: 24px;">No products found</div>`;
-    }
+    // If local is empty, show message — user should use Sync button
+    console.warn('[POS] Local products empty — use Sync button to load from cloud');
+    productsGrid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: var(--muted); padding: 24px;">No products found — use Sync to load from cloud</div>`;
   }
 }
 
@@ -1843,9 +1818,11 @@ document.getElementById('btn-suspend-shift').addEventListener('click', async () 
 });
 
 // Kick drawer
-btnKickDrawer.addEventListener('click', () => {
-  alert('Cash drawer kick command sent!');
-});
+if (btnKickDrawer) {
+  btnKickDrawer.addEventListener('click', () => {
+    alert('Cash drawer kick command sent!');
+  });
+}
 
 // ─── T2: RETURNS TAB (offline-first) ──────────────────────────────────────────
 function renderReturnForm(sale, sourceLabel) {
@@ -2554,8 +2531,8 @@ async function loadSalesRegister() {
   }
 }
 
-let localCatalog = [];
-let localSuppliers = [];
+var localCatalog = [];
+var localSuppliers = [];
 let catTab = 'cats';
 let catEditing = null;
 

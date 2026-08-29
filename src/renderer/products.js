@@ -1019,21 +1019,11 @@ async function reload() {
   products = Array.isArray(res?.data) ? res.data : [];
   console.log('[products] products loaded:', products.length);
 
-  // Sync try karo agar empty — but render HAMESHA hoga
+  // If empty, show message — user should press Sync to load from cloud
   if (products.length === 0) {
-    console.warn('[products] No products found, trying to sync...');
-    try {
-      const syncRes = await api.pos.syncMasterData({ refresh: true, skipReload: true });
-      console.log('[products] Sync result:', syncRes);
-      if (syncRes?.success) {
-        const retryRes = await api.catalog.listProducts();
-        products = Array.isArray(retryRes?.data) ? retryRes.data : [];
-        console.log('[products] After sync, products loaded:', products.length);
-      }
-    } catch (err) {
-      console.error('[products] Sync failed:', err);
-    }
+    console.warn('[products] No products found — use Sync button to load from cloud');
   }
+
 
   // Render ZAROOR karo
   render();
@@ -1129,7 +1119,9 @@ async function initLocationPicker() {
   }
 
   try {
-    const locations = await bisonLocation.loadLocations(api);
+    // Load from local cache — no live API call
+    const locRes = await api.pos.listLocations();
+    const locations = Array.isArray(locRes?.data) ? locRes.data : [];
     const chosen = bisonLocation.fillLocationSelect(
       select,
       locations,
@@ -1141,19 +1133,12 @@ async function initLocationPicker() {
     select.addEventListener('change', async () => {
       const locationId = bisonLocation.effectiveId(select.value);
       bisonLocation.setStoredLocationId(select.value);
-      try {
-        const res = await api.pos.syncMasterData({ refresh: true, locationId, skipReload: true });
-        if (res && res.success === false) {
-          console.warn('Cloud sync failed:', res.message);
-        } else {
-          bisonLocation.setLastSyncedLocationId(locationId);
-        }
-      } catch (err) {
-        console.error('Location sync failed', err);
-      }
+      // No live API sync on location change — just reload local catalog
+      bisonLocation.setLastSyncedLocationId(locationId);
       await loadSettings();
       await reload();
     });
+
 
     // NOTE: No automatic location refresh on load. Previously this triggered a
     // full catalog refresh (clearCatalog + keepOnlyProductIds for that location),

@@ -164,6 +164,60 @@ function deleteHeldSale(id) {
   return true;
 }
 
+// ─── LOCATIONS CACHE ──────────────────────────────────────────────────────────
+function getLocations() {
+  return readJson('cache_locations.json', [{ id: 'default', name: 'Main Location', code: 'MAIN', isDefault: true, isActive: true }]);
+}
+
+function saveLocations(locationsList) {
+  return writeJson('cache_locations.json', locationsList);
+}
+
+// ─── TERMINALS CACHE ──────────────────────────────────────────────────────────
+function getTerminals() {
+  return readJson('cache_terminals.json', [{ id: 'default-terminal', name: 'Main Terminal', code: 'TERM01', locationId: 'default', location: { id: 'default', name: 'Main Location' } }]);
+}
+
+function saveTerminals(terminalsList) {
+  return writeJson('cache_terminals.json', terminalsList);
+}
+
+// ─── ACTIVE SHIFT CACHE ───────────────────────────────────────────────────────
+function getActiveShift() {
+  return readJson('active_shift.json', null);
+}
+
+function saveActiveShift(shift) {
+  return writeJson('active_shift.json', shift);
+}
+
+// ─── SHIFTS HISTORY ───────────────────────────────────────────────────────────
+function getShiftsHistory() {
+  return readJson('history_shifts.json', []);
+}
+
+function addShiftToHistory(shift) {
+  const history = getShiftsHistory();
+  history.unshift(shift);
+  writeJson('history_shifts.json', history.slice(0, 100)); // keep last 100
+}
+
+// ─── RECEIPT SETTINGS CACHE ───────────────────────────────────────────────────
+function getReceiptSettings() {
+  return readJson('receipt_settings.json', {
+    storeName: 'Bison POS',
+    address: 'Main St',
+    phone: '000-000-0000',
+    email: 'info@bison.com',
+    website: 'www.bison.com',
+    footer: 'Thank you for shopping with us!',
+  });
+}
+
+function saveReceiptSettings(settings) {
+  return writeJson('receipt_settings.json', settings);
+}
+
 module.exports = {
   initialize,
   getProducts,
@@ -186,4 +240,14 @@ module.exports = {
   getHeldSales,
   addHeldSale,
   deleteHeldSale,
+  getLocations,
+  saveLocations,
+  getTerminals,
+  saveTerminals,
+  getActiveShift,
+  saveActiveShift,
+  getShiftsHistory,
+  addShiftToHistory,
+  getReceiptSettings,
+  saveReceiptSettings,
 };

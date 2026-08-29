@@ -516,6 +516,13 @@ function searchCustomers({ query = '', limit = 20 } = {}) {
   });
 }
 
+function getCustomerById(id) {
+  const row = get(`SELECT * FROM customers WHERE id = ? AND is_deleted = 0`, [id]);
+  if (!row) return null;
+  return row;
+}
+
+
 function keepOnlyProductIds(ids) {
   const list = (ids || []).map((id) => String(id || '').trim()).filter(Boolean);
   const now = new Date().toISOString();
@@ -1304,7 +1311,9 @@ module.exports = {
   searchProducts,
   findByScanCode,
   searchCustomers,
+  getCustomerById,
   upsertCustomer,
+
   getCategoryTree,
   counts,
   addLocalSale,

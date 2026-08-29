@@ -50,23 +50,22 @@ async function boot() {
   const user = session?.user || {};
   userEl.textContent = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email || '';
   const syncEl = document.getElementById('sync-status');
+  // Show local catalog status immediately — no live sync on startup (use manual Sync button)
   try {
-    const locationId = window.bisonLocation
-      ? bisonLocation.effectiveId(bisonLocation.getStoredLocationId())
-      : '';
-    const synced = await api.pos.syncMasterData({ locationId });
-    if (window.bisonLocation && locationId) bisonLocation.setLastSyncedLocationId(locationId);
+    const statusRes = await api.pos.getMasterSyncStatus();
     if (syncEl) {
-      if (synced?.success) {
-        const c = synced.counts || {};
-        syncEl.textContent = `Catalog ready · ${c.products || 0} products`;
+      const c = statusRes?.data || {};
+      const total = (c.products || 0);
+      if (total > 0) {
+        syncEl.textContent = `Catalog ready · ${total} products`;
       } else {
-        syncEl.textContent = synced?.message || 'Catalog sync will retry when online';
+        syncEl.textContent = 'Catalog empty — use Sync to load from cloud';
       }
     }
   } catch (err) {
-    if (syncEl) syncEl.textContent = err.message || 'Catalog sync failed';
+    if (syncEl) syncEl.textContent = 'Local catalog status unavailable';
   }
+
   const adminBtn = document.getElementById('admin');
   if (adminBtn && (session?.isAdmin || ['admin', 'owner', 'superadmin', 'company_admin'].includes(String(user.role || '').toLowerCase()))) {
     adminBtn.classList.remove('hidden');
@@ -93,6 +92,8 @@ async function boot() {
   selectedId = terminals[0]?.id || '';
   renderTerminals();
 }
+
+
 
 openBtn.addEventListener('click', async () => {
   hideError();
