@@ -8,7 +8,7 @@ function money(n) {
 }
 
 function fmt(n) {
-  return `$${money(n).toFixed(2)}`;
+  return `PKR ${money(n).toFixed(2)}`;
 }
 
 function cashierName(sale) {

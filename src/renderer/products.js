@@ -25,6 +25,21 @@ let suppliers = [];
 let settingsData = {};
 let editing = null;
 let currentFormTab = 'basic';
+let taxContext = { enabled: false, configured: false, defaultRate: null, pricingModel: 'exclusive', rates: [] };
+
+function isTaxEnabled() {
+  return Boolean(taxContext?.enabled);
+}
+
+function defaultCompanyTaxRate() {
+  const r = taxContext?.defaultRate;
+  if (r && typeof r === 'object') return Number(r.rate) || 0;
+  return Number(r) || 0;
+}
+
+function defaultCompanyTaxType() {
+  return taxContext?.pricingModel === 'inclusive' ? 'Inclusive' : 'Exclusive';
+}
 
 const tableWrap = document.getElementById('table-wrap');
 const searchInp = document.getElementById('search');
@@ -48,13 +63,14 @@ function render() {
     return;
   }
   tableWrap.innerHTML = `<table>
-    <thead><tr><th>SKU</th><th>Name</th><th>Category</th><th>Supplier</th><th>Price</th><th>Stock</th><th>Actions</th></tr></thead>
+    <thead><tr><th>SKU</th><th>Name</th><th>Category</th><th>Supplier</th><th>Price</th>${isTaxEnabled() ? '<th>Tax</th>' : ''}<th>Stock</th><th>Actions</th></tr></thead>
     <tbody>${rows.map((p) => `<tr>
       <td style="font-family:monospace;font-size:12px;">${p.sku || '—'}</td>
       <td><b>${p.name || '—'}</b></td>
       <td>${p.categoryName || '—'}</td>
       <td>${p.supplierName || '—'}</td>
-      <td>${Number(p.sellingPrice || 0).toFixed(2)}</td>
+      <td>PKR ${Number(p.sellingPrice || 0).toFixed(2)}</td>
+      ${isTaxEnabled() ? `<td>${Number(p.taxRate || 0) ? `${Number(p.taxRate).toFixed(2)}%` : '—'}</td>` : ''}
       <td>${Number(p.currentStock || 0).toLocaleString()}</td>
       <td>
         <button class="icon-btn" data-edit="${p.id || p._id}">✎</button>
@@ -78,6 +94,28 @@ async function loadSettings() {
       suppliers = [];
     }
 
+    try {
+      const taxRes = await api.tax.getContext();
+      if (taxRes?.success && taxRes.data) taxContext = taxRes.data;
+    } catch (err) {
+      console.warn('Failed to load tax context', err);
+      taxContext = { enabled: false };
+    }
+
+    const taxPill = document.getElementById('tax-status-pill');
+    if (taxPill) {
+      if (isTaxEnabled()) {
+        taxPill.style.display = '';
+        taxPill.textContent = `Tax ON · ${defaultCompanyTaxRate()}%`;
+      } else {
+        taxPill.style.display = 'none';
+      }
+    }
+
+    const taxTypes = isTaxEnabled()
+      ? [{ _id: '1', name: 'Exclusive' }, { _id: '2', name: 'Inclusive' }]
+      : [];
+
     settingsData = {
       productType: [{ _id: '1', name: 'Raw Material' }, { _id: '2', name: 'Finished Good' }, { _id: '3', name: 'Service' }],
       stockUnit: [{ _id: '1', name: 'Pcs' }, { _id: '2', name: 'KG' }, { _id: '3', name: 'Meter' }, { _id: '4', name: 'Box' }],
@@ -85,7 +123,7 @@ async function loadSettings() {
       dimensionUnit: [{ _id: '1', name: 'cm' }, { _id: '2', name: 'inch' }, { _id: '3', name: 'mm' }],
       size: [{ _id: '1', name: 'S' }, { _id: '2', name: 'M' }, { _id: '3', name: 'L' }, { _id: '4', name: 'XL' }],
       shippingClass: [{ _id: '1', name: 'Standard' }, { _id: '2', name: 'Express' }, { _id: '3', name: 'Heavy' }],
-      taxType: [{ _id: '1', name: 'Exclusive' }, { _id: '2', name: 'Inclusive' }],
+      taxType: taxTypes,
       rackLocation: [{ _id: '1', name: 'A1' }, { _id: '2', name: 'A2' }, { _id: '3', name: 'B1' }],
       zone: [{ _id: '1', name: 'Zone A' }, { _id: '2', name: 'Zone B' }, { _id: '3', name: 'Zone C' }],
       storageCondition: [{ _id: '1', name: 'Ambient' }, { _id: '2', name: 'Cold' }, { _id: '3', name: 'Frozen' }],
@@ -450,17 +488,27 @@ function renderForm() {
               <option value="GBP" ${editing?.currency === 'GBP' ? 'selected' : ''}>GBP</option>
             </select>
           </div>
-          <div class="field">
-            <label>Tax Rate (%)</label>
-            <input type="number" step="0.01" id="f-tax-rate" value="${editing?.taxRate || ''}" />
+          ${isTaxEnabled() ? `
+          <div class="field" id="f-tax-rate-wrap">
+            <label>Tax Rate (%) ${taxContext.regime ? `· ${taxContext.regime}` : ''}</label>
+            <input type="number" step="0.01" id="f-tax-rate" value="${editing?.taxRate != null && editing?.taxRate !== '' ? editing.taxRate : defaultCompanyTaxRate()}" />
+            ${(taxContext.rates || []).length ? `<div style="font-size:11px;color:#64748b;margin-top:4px;">Company default: ${defaultCompanyTaxRate()}% (${defaultCompanyTaxType()})</div>` : ''}
           </div>
-          <div class="field">
+          <div class="field" id="f-tax-type-wrap">
             <label>Tax Type</label>
             <select id="f-tax-type">
               <option value="">Select type...</option>
-              ${(settingsData.taxType || []).map(t => `<option value="${t.name}" ${editing?.taxType === t.name ? 'selected' : ''}>${t.name}</option>`).join('')}
+              ${(settingsData.taxType || []).map(t => {
+                const selected = editing?.taxType
+                  ? editing.taxType === t.name
+                  : t.name === defaultCompanyTaxType();
+                return `<option value="${t.name}" ${selected ? 'selected' : ''}>${t.name}</option>`;
+              }).join('')}
             </select>
-          </div>
+          </div>` : `
+          <input type="hidden" id="f-tax-rate" value="0" />
+          <input type="hidden" id="f-tax-type" value="" />
+          `}
           <div class="field">
             <label>Stock Unit</label>
             <select id="f-stock-unit">
@@ -917,8 +965,8 @@ async function handleFormSubmit(e) {
     sellingPrice: Number(document.getElementById('f-selling-price').value) || 0,
     landingCost: Number(document.getElementById('f-landing-cost').value) || 0,
     currency: document.getElementById('f-currency').value,
-    taxRate: Number(document.getElementById('f-tax-rate').value) || 0,
-    taxType: document.getElementById('f-tax-type').value,
+    taxRate: isTaxEnabled() ? (Number(document.getElementById('f-tax-rate')?.value) || 0) : 0,
+    taxType: isTaxEnabled() ? (document.getElementById('f-tax-type')?.value || defaultCompanyTaxType()) : '',
     stockUnit: document.getElementById('f-stock-unit').value,
     currentStock: Number(document.getElementById('f-current-stock').value) || 0,
     minimumStock: Number(document.getElementById('f-minimum-stock').value) || 0,
@@ -1119,22 +1167,49 @@ async function initLocationPicker() {
   }
 
   try {
-    // Load from local cache — no live API call
+    let isAdmin = false;
+    try {
+      const session = await api.auth.getSession();
+      const role = String(session?.user?.role || '').toLowerCase();
+      isAdmin = !!(session?.isAdmin || ['admin', 'owner', 'superadmin', 'company_admin'].includes(role));
+    } catch (_) { /* ignore */ }
+
+    // Load from local cache — already scoped for non-admins by main process
     const locRes = await api.pos.listLocations();
     const locations = Array.isArray(locRes?.data) ? locRes.data : [];
+    if (locRes?.isAdmin != null) isAdmin = !!locRes.isAdmin;
+
     const chosen = bisonLocation.fillLocationSelect(
       select,
       locations,
       bisonLocation.getStoredLocationId(),
-      { allowAll: false }
+      { allowAll: isAdmin }
     );
     bisonLocation.setStoredLocationId(chosen);
+
+    if (!isAdmin) {
+      select.disabled = locations.length <= 1;
+      select.title = locations.length <= 1 ? 'Your assigned location' : 'Your assigned locations';
+    } else {
+      select.disabled = false;
+      select.title = '';
+    }
 
     select.addEventListener('change', async () => {
       const locationId = bisonLocation.effectiveId(select.value);
       bisonLocation.setStoredLocationId(select.value);
-      // No live API sync on location change — just reload local catalog
-      bisonLocation.setLastSyncedLocationId(locationId);
+      try {
+        const catalog = await api.pos.syncMasterData({
+          refresh: true,
+          locationId: locationId || undefined,
+          skipReload: true,
+        });
+        if (catalog?.success) {
+          bisonLocation.setLastSyncedLocationId(locationId);
+        }
+      } catch (err) {
+        console.warn('[products] location catalog refresh failed:', err);
+      }
       await loadSettings();
       await reload();
     });

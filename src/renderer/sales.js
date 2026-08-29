@@ -89,7 +89,7 @@ const cpickerError = document.getElementById('cpicker-error');
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 function money(n) {
-  return new Intl.NumberFormat('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n) || 0);
+  return `PKR ${new Intl.NumberFormat('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n) || 0)}`;
 }
 
 function computeTax(qty, unitPrice, taxRate, model) {

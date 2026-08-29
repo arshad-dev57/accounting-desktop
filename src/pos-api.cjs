@@ -110,6 +110,10 @@ function syncOfflineSales(token, payload) {
   return request(token, 'POST', '/api/pos/sales/sync', payload);
 }
 
+function checkUserStatus(token) {
+  return request(token, 'GET', '/api/users/me');
+}
+
 function processReturn(token, payload) {
   return request(token, 'POST', '/api/pos/returns', payload);
 }
@@ -261,7 +265,8 @@ async function fetchAllCustomers(token) {
 }
 
 function fetchTaxContext(token) {
-  return request(token, 'GET', '/api/pos/tax-context');
+  // Company tax profile from Tax Compliance (web) — same as /api/tax/context
+  return request(token, 'GET', '/api/tax/context');
 }
 
 // ─── Customers (Warehouse) ───────────────────────────────────────────────────
@@ -390,4 +395,5 @@ module.exports = {
   fetchAllSuppliers,
   fetchAllCustomers,
   fetchTaxContext,
+  checkUserStatus,
 };

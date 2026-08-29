@@ -136,7 +136,218 @@ function loadAuthOrPos() {
 
 function isAdminUser(user) {
   const role = String(user?.role || '').toLowerCase().trim();
-  return role === 'admin' || role === 'owner' || role === 'superadmin' || role === 'company_admin';
+  return (
+    role === 'admin' ||
+    role === 'owner' ||
+    role === 'superadmin' ||
+    role === 'company_admin' ||
+    user?.isLocationAdmin === true
+  );
+}
+
+/** Assigned location IDs for a non-admin user (empty = no access). Admins return null (= all). */
+function getUserLocationIds(user) {
+  if (!user) return [];
+  if (isAdminUser(user)) return null;
+  if (Array.isArray(user.locationIds) && user.locationIds.length) {
+    return user.locationIds.map(String);
+  }
+  if (Array.isArray(user.locations) && user.locations.length) {
+    return user.locations.map((l) => String(l.id || l._id || '')).filter(Boolean);
+  }
+  return [];
+}
+
+function filterLocationsForUser(user, list) {
+  const rows = Array.isArray(list) ? list : [];
+  const allowed = getUserLocationIds(user);
+  if (allowed === null) return rows; // admin — all
+  if (!allowed.length) return [];
+  const set = new Set(allowed);
+  return rows.filter((l) => set.has(String(l.id || l._id || '')));
+}
+
+function filterTerminalsForUser(user, list) {
+  const rows = Array.isArray(list) ? list : [];
+  const allowed = getUserLocationIds(user);
+  if (allowed === null) return rows; // admin — all
+  if (!allowed.length) return [];
+  const set = new Set(allowed);
+  return rows.filter((t) => {
+    const locId = String(t.locationId || t.location?.id || '');
+    return locId && set.has(locId);
+  });
+}
+
+function currentUserId(sessionOrUser) {
+  const u = sessionOrUser?.user || sessionOrUser || {};
+  return String(u.id || u._id || sessionOrUser?.userId || '').trim();
+}
+
+/** Resolve locationId from a sale/return/held record (stamped or via terminal cache). */
+function resolveRecordLocationId(record) {
+  if (!record || typeof record !== 'object') return '';
+  const direct = String(record.locationId || record.location?.id || '').trim();
+  if (direct && direct !== 'all') return direct;
+  const termId = String(record.terminalId || record.terminal?.id || '').trim();
+  if (!termId) return '';
+  try {
+    const terminals = localDb.getTerminals();
+    const t = (terminals || []).find((x) => String(x.id) === termId);
+    return String(t?.locationId || t?.location?.id || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Non-admin: keep only records for their assigned location(s).
+ * Prefer locationId; fall back to cashier/userId match so old untagged rows
+ * belonging to this cashier still show; hide other locations' data.
+ */
+function filterRecordsForUser(user, records) {
+  const rows = Array.isArray(records) ? records : [];
+  const allowed = getUserLocationIds(user);
+  if (allowed === null) return rows; // admin — everything
+  if (!allowed.length) return [];
+  const set = new Set(allowed.map(String));
+  const uid = currentUserId(user);
+  return rows.filter((r) => {
+    const locId = resolveRecordLocationId(r);
+    if (locId) return set.has(locId);
+    // Untagged legacy row: only show if clearly this cashier's
+    const cashier = String(r.cashierId || r.userId || r.cashier?.id || '').trim();
+    return uid && cashier && cashier === uid;
+  });
+}
+
+/** Stamp user/location onto offline POS payloads before local persist. */
+function stampScopedPayload(auth, payload = {}) {
+  const user = auth.session?.user || {};
+  const uid = currentUserId(user);
+  const terminal =
+    activeShift?.terminal ||
+    (() => {
+      try {
+        return (localDb.getTerminals() || []).find(
+          (t) => String(t.id) === String(activeShift?.terminalId || payload.terminalId || '')
+        );
+      } catch {
+        return null;
+      }
+    })();
+  const locationId =
+    String(payload.locationId || '').trim() ||
+    String(activeShift?.terminal?.locationId || activeShift?.terminal?.location?.id || '').trim() ||
+    String(terminal?.locationId || terminal?.location?.id || '').trim() ||
+    (getUserLocationIds(user) || [])[0] ||
+    '';
+
+  return {
+    ...payload,
+    shiftId: activeShift?.id || payload.shiftId,
+    terminalId: activeShift?.terminalId || payload.terminalId || terminal?.id,
+    locationId: locationId || undefined,
+    userId: uid || undefined,
+    cashierId: uid || undefined,
+    cashierName:
+      payload.cashierName ||
+      [user.firstName, user.lastName].filter(Boolean).join(' ') ||
+      user.email ||
+      undefined,
+  };
+}
+
+/** Clear active shift if it belongs to another user / out-of-scope location. */
+function resetActiveShiftForUser(user) {
+  try {
+    const saved = localDb.getActiveShift();
+    if (!saved) {
+      activeShift = null;
+      return;
+    }
+    const uid = currentUserId(user);
+    const shiftUser = String(saved.cashier?.id || saved.userId || saved.cashierId || '').trim();
+    const locId = String(
+      saved.terminal?.locationId || saved.terminal?.location?.id || saved.locationId || ''
+    ).trim();
+    const allowed = getUserLocationIds(user);
+    const locOk = allowed === null || !locId || allowed.includes(locId);
+    const userOk = !shiftUser || !uid || shiftUser === uid;
+    if (!locOk || !userOk || saved.status === 'Closed') {
+      console.log('[scope] clearing active shift for new user/location scope');
+      localDb.saveActiveShift(null);
+      activeShift = null;
+      return;
+    }
+    activeShift = saved;
+  } catch (err) {
+    console.warn('[scope] resetActiveShift failed', err.message);
+    activeShift = null;
+  }
+}
+
+/** Pull locations + terminals from cloud (or session.user.locations) and cache locally, scoped. */
+async function refreshScopedCatalogCaches(token, user) {
+  let locations = [];
+  let terminals = [];
+
+  try {
+    const locRes = await posApi.listLocations(token);
+    if (locRes?.success && Array.isArray(locRes.data)) {
+      locations = locRes.data;
+    }
+  } catch (err) {
+    console.warn('[scope] listLocations failed:', err.message);
+  }
+
+  // Fallback to locations embedded in login user object
+  if (!locations.length && Array.isArray(user?.locations) && user.locations.length) {
+    locations = user.locations;
+  }
+
+  locations = filterLocationsForUser(user, locations);
+  try { localDb.saveLocations(locations); } catch (err) {
+    console.warn('[scope] saveLocations failed:', err.message);
+  }
+
+  try {
+    const termRes = await posApi.listTerminals(token);
+    if (termRes?.success && Array.isArray(termRes.data)) {
+      terminals = termRes.data;
+    } else {
+      console.warn('[scope] listTerminals:', termRes?.message || 'no data');
+    }
+  } catch (err) {
+    console.warn('[scope] listTerminals failed:', err.message);
+  }
+
+  terminals = filterTerminalsForUser(user, terminals);
+
+  // Offline / empty fallback: if user has locations but no terminals yet,
+  // seed a local counter per location so shift screen is usable.
+  if (!terminals.length && locations.length) {
+    terminals = locations.map((loc) => ({
+      id: `local-term-${loc.id}`,
+      name: `${loc.name || 'Store'} Counter`,
+      code: `T-${String(loc.code || loc.id || 'POS').replace(/\s+/g, '').slice(0, 8).toUpperCase()}`,
+      locationId: loc.id,
+      location: { id: loc.id, name: loc.name, code: loc.code, type: loc.type },
+      isActive: true,
+      status: 'Active',
+    }));
+    console.log(`[scope] seeded ${terminals.length} local terminal(s) for assigned location(s)`);
+  }
+
+  try { localDb.saveTerminals(terminals); } catch (err) {
+    console.warn('[scope] saveTerminals failed:', err.message);
+  }
+
+  console.log(
+    `[scope] cached ${locations.length} location(s), ${terminals.length} terminal(s)` +
+    (isAdminUser(user) ? ' (admin=all)' : ' (scoped)')
+  );
+  return { locations, terminals };
 }
 
 function requireAuth() {
@@ -182,6 +393,15 @@ async function completeLoginAndOpenPos(rawBody) {
   if (!user) {
     return { success: false, message: 'Login succeeded but user profile could not be loaded' };
   }
+
+  // Ensure location scope fields are present (getMe / OTP should include them)
+  if (!Array.isArray(user.locationIds) && Array.isArray(user.locations)) {
+    user.locationIds = user.locations.map((l) => l.id || l._id).filter(Boolean);
+  }
+  if (user.isLocationAdmin == null) {
+    user.isLocationAdmin = isAdminUser(user);
+  }
+
   authStore.writeSession(userData(), {
     accessToken: token,
     refreshToken,
@@ -189,7 +409,60 @@ async function completeLoginAndOpenPos(rawBody) {
   });
   await applyAuthCookies(token, refreshToken);
   pendingLogin = null;
-  activeShift = null;
+  resetActiveShiftForUser(user);
+
+  // Seed local location/terminal caches scoped to this user
+  try {
+    // Immediately cache locations from login payload (works offline too)
+    if (Array.isArray(user.locations) && user.locations.length) {
+      localDb.saveLocations(filterLocationsForUser(user, user.locations));
+    }
+    await refreshScopedCatalogCaches(token, user);
+  } catch (err) {
+    console.warn('[desktop] scope cache seed failed:', err.message);
+  }
+
+  // Non-admin with zero assigned locations cannot use POS
+  if (!isAdminUser(user)) {
+    const ids = getUserLocationIds(user);
+    if (!ids || ids.length === 0) {
+      authStore.clearSession(userData());
+      return {
+        success: false,
+        message: 'No warehouse location assigned to your account. Ask an admin to assign a location.',
+      };
+    }
+
+    // Pull catalog for THIS location only so stock/products match the warehouse
+    try {
+      const locId = ids[0];
+      console.log('[scope] refreshing catalog for assigned location', locId);
+      await masterSync.refreshCatalog(token, locId);
+    } catch (err) {
+      console.warn('[scope] location catalog refresh failed:', err.message);
+    }
+  } else {
+    // Admin login after a cashier session: restore company-wide catalog
+    // (cashier sync may have wiped stock via keepOnlyProductIds).
+    try {
+      console.log('[scope] admin login — refreshing full catalog');
+      await masterSync.refreshCatalog(token, '');
+    } catch (err) {
+      console.warn('[scope] admin catalog refresh failed:', err.message);
+    }
+  }
+
+  // Pull company tax profile (enabled + rates from web Tax Compliance)
+  try {
+    const taxRes = await posApi.fetchTaxContext(token);
+    if (taxRes?.success && taxRes.data) {
+      localDb.saveTaxContext(taxRes.data);
+      console.log('[desktop] tax context cached · enabled=', Boolean(taxRes.data.enabled));
+    }
+  } catch (err) {
+    console.warn('[desktop] tax context fetch failed:', err.message);
+  }
+
   console.log('[desktop] session ready, opening shift screen', user.email || user.id);
   showShiftScreen();
   return { success: true };
@@ -723,6 +996,7 @@ function registerIpc() {
         refreshToken: s.refreshToken || '',
         user: s.user || null,
         isAdmin: isAdminUser(s.user),
+        locationIds: getUserLocationIds(s.user),
       })
       : null;
   });
@@ -756,6 +1030,7 @@ function registerIpc() {
         refreshToken: s.refreshToken,
         user: s.user,
         isAdmin: isAdminUser(s.user),
+        locationIds: getUserLocationIds(s.user),
       }
       : null;
   });
@@ -813,10 +1088,15 @@ function registerIpc() {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
     try {
-      const list = localDb.getTerminals();
-      return { success: true, data: list };
+      const list = filterTerminalsForUser(auth.session.user, localDb.getTerminals());
+      return {
+        success: true,
+        data: list,
+        scoped: !isAdminUser(auth.session.user),
+        locationIds: getUserLocationIds(auth.session.user),
+      };
     } catch (err) {
-      return { success: true, data: [{ id: 'default-terminal', name: 'Main Terminal', code: 'TERM01', locationId: 'default', location: { id: 'default', name: 'Main Location' } }] };
+      return { success: true, data: [] };
     }
   });
 
@@ -824,20 +1104,41 @@ function registerIpc() {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
     try {
-      const list = localDb.getLocations();
-      return { success: true, data: list };
+      const list = filterLocationsForUser(auth.session.user, localDb.getLocations());
+      return {
+        success: true,
+        data: list,
+        scoped: !isAdminUser(auth.session.user),
+        isAdmin: isAdminUser(auth.session.user),
+        locationIds: getUserLocationIds(auth.session.user),
+      };
     } catch (err) {
-      return { success: true, data: [{ id: 'default', name: 'Main Location', code: 'MAIN', isDefault: true, isActive: true }] };
+      return { success: true, data: [], isAdmin: isAdminUser(auth.session?.user) };
     }
   });
 
   handle('pos:syncMasterData', async (event, payload) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    const locationId = String(payload?.locationId || '').trim();
+
+    let locationId = String(payload?.locationId || '').trim();
+    // Non-admin: never sync "all" — force one of their assigned locations
+    if (!isAdminUser(auth.session.user)) {
+      const allowed = getUserLocationIds(auth.session.user) || [];
+      if (!locationId || locationId === 'all' || !allowed.includes(locationId)) {
+        locationId = allowed[0] || '';
+      }
+      if (!locationId) {
+        return { success: false, message: 'No warehouse location assigned to your account' };
+      }
+    }
+
     if (payload && payload.refresh) {
       const result = await masterSync.refreshCatalog(auth.session.accessToken, locationId);
       console.log('[pos:syncMasterData] refresh', result?.counts, 'location', locationId || 'all', result?.message || result?.success);
+      try {
+        await refreshScopedCatalogCaches(auth.session.accessToken, auth.session.user);
+      } catch (_) { /* ignore */ }
       if (!payload.skipReload) {
         setTimeout(() => {
           try { event.sender.reloadIgnoringCache(); } catch { /* window gone */ }
@@ -869,7 +1170,33 @@ function registerIpc() {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
     activeShift = localDb.getActiveShift();
-    return { success: true, data: activeShift };
+    if (!activeShift) return { success: true, data: null };
+
+    // Attach terminal + location for sell screen (scoped)
+    const terminals = filterTerminalsForUser(auth.session.user, localDb.getTerminals());
+    const terminal =
+      terminals.find((t) => String(t.id) === String(activeShift.terminalId)) ||
+      null;
+
+    // Non-admin: if active shift terminal is outside scope, force close it
+    if (!isAdminUser(auth.session.user) && activeShift.terminalId && !terminal) {
+      console.warn('[scope] active shift terminal outside user access — clearing');
+      activeShift = null;
+      localDb.saveActiveShift(null);
+      return { success: true, data: null };
+    }
+
+    return {
+      success: true,
+      data: {
+        ...activeShift,
+        terminal: terminal || activeShift.terminal || null,
+        cashier: activeShift.cashier || {
+          id: auth.session.user?.id,
+          name: [auth.session.user?.firstName, auth.session.user?.lastName].filter(Boolean).join(' ') || auth.session.user?.email,
+        },
+      },
+    };
   });
 
   ipcMain.handle('pos:getActiveShift', () => activeShift);
@@ -877,15 +1204,50 @@ function registerIpc() {
   ipcMain.handle('pos:openShift', async (_event, payload) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
+
+    const terminalId = String(payload?.terminalId || '').trim();
+    if (!terminalId) {
+      return { success: false, message: 'Select a terminal first' };
+    }
+
+    const allowedTerminals = filterTerminalsForUser(auth.session.user, localDb.getTerminals());
+    const terminal = allowedTerminals.find((t) => String(t.id) === terminalId);
+    if (!terminal) {
+      return {
+        success: false,
+        message: isAdminUser(auth.session.user)
+          ? 'Terminal not found'
+          : 'You can only open a shift on a terminal at your assigned location',
+      };
+    }
+
+    const locations = filterLocationsForUser(auth.session.user, localDb.getLocations());
+    const location =
+      locations.find((l) => String(l.id) === String(terminal.locationId || terminal.location?.id)) ||
+      terminal.location ||
+      null;
+
     const shiftId = `local-shift-${Date.now()}`;
     const newShift = {
       id: shiftId,
-      terminalId: payload?.terminalId || 'default-terminal',
+      terminalId: terminal.id,
+      locationId: location?.id || terminal.locationId || null,
+      userId: auth.session.user?.id,
       status: 'Open',
       openingCash: Number(payload?.openingCash || 0),
       notes: payload?.notes || '',
       openedAt: new Date().toISOString(),
       cashFlows: [],
+      terminal: {
+        ...terminal,
+        location: location || terminal.location || null,
+        locationId: location?.id || terminal.locationId || null,
+      },
+      cashier: {
+        id: auth.session.user?.id,
+        name: [auth.session.user?.firstName, auth.session.user?.lastName].filter(Boolean).join(' ') || auth.session.user?.email,
+        role: auth.session.user?.role,
+      },
     };
     activeShift = newShift;
     localDb.saveActiveShift(newShift);
@@ -951,18 +1313,12 @@ function registerIpc() {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
     if (!activeShift?.id) return { success: false, message: 'Open a shift first' };
-    // Stamp the payload with shift info before saving locally
-    const enriched = {
-      ...payload,
-      shiftId: activeShift.id,
-      terminalId: activeShift.terminalId,
-      cashierId: auth.session.userId || auth.session.id,
-    };
+    const enriched = stampScopedPayload(auth, payload);
     const saved = localDb.addSaleToQueue(enriched);
     try { masterSqlite.addLocalSale(enriched); } catch (err) {
       console.warn('[sqlite] local sale persist failed', err.message);
     }
-    console.log('[offline] Sale queued locally:', saved.id);
+    console.log('[offline] Sale queued locally:', saved.id, 'loc=', enriched.locationId);
     return { success: true, data: saved, message: 'Sale saved locally. Will sync on next sync.' };
   });
 
@@ -982,7 +1338,7 @@ function registerIpc() {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
     try {
-      const history = localDb.getShiftsHistory();
+      const history = filterRecordsForUser(auth.session.user, localDb.getShiftsHistory());
       return { success: true, data: history };
     } catch (err) {
       return { success: true, data: [] };
@@ -1066,14 +1422,17 @@ function registerIpc() {
   ipcMain.handle('pos:holdSale', async (_event, payload) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    const saved = localDb.addHeldSale(payload);
+    const saved = localDb.addHeldSale(stampScopedPayload(auth, payload));
     return { success: true, data: saved };
   });
 
   ipcMain.handle('pos:getHeldSales', async () => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    return { success: true, data: localDb.getHeldSales() };
+    return {
+      success: true,
+      data: filterRecordsForUser(auth.session.user, localDb.getHeldSales()),
+    };
   });
 
   ipcMain.handle('pos:deleteHeldSale', async (_event, id) => {
@@ -1090,8 +1449,9 @@ function registerIpc() {
     if (!auth.ok) return auth.result;
 
     const token = auth.session.accessToken;
-    const salesQueue = localDb.getSalesQueue();
-    const returnsQueue = localDb.getReturnsQueue();
+    // Non-admin only syncs their location's queued sales/returns
+    const salesQueue = filterRecordsForUser(auth.session.user, localDb.getSalesQueue());
+    const returnsQueue = filterRecordsForUser(auth.session.user, localDb.getReturnsQueue());
     const shiftsQueue = localDb.getShiftsQueue();
 
     const results = { sales: null, returns: null, shifts: null, cacheRefreshed: false, errors: [] };
@@ -1132,9 +1492,8 @@ function registerIpc() {
           .filter((r) => r.status === 'success' || r.status === 'skipped')
           .map((r) => r.id);
 
-        if (syncedIds.length === salesQueue.length) {
-          localDb.clearSalesQueue();
-        } else if (syncedIds.length > 0) {
+        // Never wipe the full queue — other users/locations may have pending rows
+        if (syncedIds.length > 0) {
           localDb.removeFromSalesQueue(syncedIds);
         }
 
@@ -1169,11 +1528,36 @@ function registerIpc() {
 
     // 2) Upload queued returns
     if (returnsQueue.length > 0) {
-      const res = await posApi.syncOfflineSales(token, { returns: returnsQueue });
+      // Ensure every queued return has the correct type flag for backend routing
+      const sanitizedReturns = returnsQueue.map((ret) => ({
+        ...ret,
+        type: 'RETURN',
+        originalSaleId: ret.originalSaleId || ret.saleId,
+        refundMethod: ret.refundMethod || 'Cash',
+        reason: ret.reason || 'Customer return',
+      }));
+
+      const res = await posApi.syncOfflineSales(token, { returns: sanitizedReturns });
       results.returns = res;
       if (res.success) {
-        localDb.clearReturnsQueue();
-        console.log(`[sync] ${returnsQueue.length} return(s) uploaded.`);
+        const returnResults = Array.isArray(res.data) ? res.data : [];
+        const syncedIds = returnResults
+          .filter((r) => r.status === 'success' || r.status === 'skipped')
+          .map((r) => r.id);
+
+        if (syncedIds.length > 0) {
+          localDb.removeFromReturnsQueue(syncedIds);
+        }
+
+        const failed = returnResults.filter((r) => r.status === 'failed');
+        if (failed.length > 0) {
+          const reasons = failed.map((r) => r.reason || r.id).join('; ');
+          console.error(`[sync] Return failures: ${reasons}`);
+          results.errors.push(
+            `${failed.length} return(s) failed to sync: ${reasons}`
+          );
+        }
+        console.log(`[sync] ${syncedIds.length}/${returnsQueue.length} return(s) uploaded.`);
       } else {
         results.errors.push(`Returns sync failed: ${res.message}`);
       }
@@ -1191,8 +1575,11 @@ function registerIpc() {
 
     // 4) Refresh local caches with fresh data from the server
     try {
+      const scopeLoc =
+        (!isAdminUser(auth.session.user) && (getUserLocationIds(auth.session.user) || [])[0]) ||
+        '';
       const [prodRes, catRes, custRes, taxRes] = await Promise.all([
-        posApi.fetchAllProducts(token),
+        posApi.fetchAllProducts(token, scopeLoc || undefined),
         posApi.fetchAllCategories(token),
         posApi.fetchAllCustomers(token),
         posApi.fetchTaxContext(token),
@@ -1201,6 +1588,23 @@ function registerIpc() {
       if (catRes.success && Array.isArray(catRes.data)) localDb.saveCategories(catRes.data);
       if (custRes.success && Array.isArray(custRes.data)) localDb.saveCustomers(custRes.data);
       if (taxRes.success && taxRes.data) localDb.saveTaxContext(taxRes.data);
+
+      // Also refresh location/terminal caches scoped to this user
+      try {
+        await refreshScopedCatalogCaches(token, auth.session.user);
+      } catch (scopeErr) {
+        console.warn('[sync] scope cache refresh failed:', scopeErr.message);
+      }
+
+      // Non-admin: reload SQLite catalog for their warehouse only
+      if (scopeLoc) {
+        try {
+          await masterSync.refreshCatalog(token, scopeLoc);
+        } catch (catErr) {
+          console.warn('[sync] scoped catalog refresh failed:', catErr.message);
+        }
+      }
+
       results.cacheRefreshed = true;
       console.log('[sync] Local caches refreshed from server.');
     } catch (err) {
@@ -1222,9 +1626,16 @@ function registerIpc() {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
     if (!activeShift?.id) return { success: false, message: 'Open a shift first' };
-    const enriched = { ...payload, shiftId: activeShift.id };
+
+    const enriched = stampScopedPayload(auth, {
+      ...payload,
+      type: 'RETURN',
+      originalSaleId: payload.originalSaleId || payload.saleId,
+      refundMethod: payload.refundMethod || 'Cash',
+      reason: payload.reason || 'Customer return',
+    });
     const saved = localDb.addReturnToQueue(enriched);
-    console.log('[offline] Return queued locally:', saved.id);
+    console.log('[offline] Return queued locally:', saved.id, 'loc=', enriched.locationId);
 
     // Update stock in local SQLite for "local flow only" desktop app parity
     try {
@@ -1264,12 +1675,24 @@ function registerIpc() {
   ipcMain.handle('pos:listLocalReturns', async () => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    masterSqlite.reloadFromDisk();
     return {
       success: true,
       offline: true,
-      data: { returns: masterSqlite.listAllLocalReturns() },
+      data: { returns: filterRecordsForUser(auth.session.user, localDb.getReturnsQueue()) },
     };
+  });
+
+  ipcMain.handle('pos:clearReturnsQueue', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    // Non-admin: only delete their scoped returns; admin clears all
+    if (!isAdminUser(auth.session.user)) {
+      const mine = filterRecordsForUser(auth.session.user, localDb.getReturnsQueue());
+      localDb.removeFromReturnsQueue(mine.map((r) => r.id));
+      return { success: true, message: 'Your queued returns deleted.' };
+    }
+    localDb.clearReturnsQueue();
+    return { success: true, message: 'All queued returns deleted.' };
   });
 
 
@@ -1279,68 +1702,170 @@ function registerIpc() {
 
     try {
       masterSqlite.reloadFromDiskSafe();
-      const localSales = masterSqlite.listAllLocalSales();
-      // Filter sales belonging to the current shift
-      const shiftSales = localSales.filter(s => String(s.shiftId) === String(shiftId));
+      const localSales = filterRecordsForUser(
+        auth.session.user,
+        masterSqlite.listAllLocalSales()
+      );
 
-      // Load active/history shift info
       const currentShift = localDb.getActiveShift();
       const historyShifts = localDb.getShiftsHistory();
-      const shiftInfo = (currentShift && currentShift.id === shiftId) 
-        ? currentShift 
-        : historyShifts.find(s => s.id === shiftId) || { openingCash: 0, cashFlows: [] };
+      const shiftInfo = (currentShift && String(currentShift.id) === String(shiftId))
+        ? currentShift
+        : historyShifts.find((s) => String(s.id) === String(shiftId)) || { openingCash: 0, cashFlows: [] };
+
+      const shiftOpenedAt = shiftInfo.openedAt || shiftInfo.createdAt || null;
+      const uid = String(auth.session.user?.id || shiftInfo.cashier?.id || shiftInfo.cashierId || '').trim();
+      const shiftSales = localSales.filter((s) => {
+        if (String(s.shiftId || '') === String(shiftId)) return true;
+        // Older queued sales may lack shiftId — attribute by cashier + open time
+        if (!s.shiftId && shiftOpenedAt && uid) {
+          const sameCashier = String(s.cashierId || s.userId || '') === uid;
+          const afterOpen = new Date(s.createdAt || s.created_at || 0) >= new Date(shiftOpenedAt);
+          return sameCashier && afterOpen;
+        }
+        return false;
+      });
+
+      let localReturns = [];
+      try {
+        localReturns = filterRecordsForUser(
+          auth.session.user,
+          masterSqlite.listAllLocalReturns?.() || []
+        );
+      } catch {
+        localReturns = [];
+      }
+      const shiftReturns = localReturns.filter(
+        (r) => String(r.shiftId || '') === String(shiftId)
+          || shiftSales.some((s) => String(s.id) === String(r.saleId || r.originalSaleId || ''))
+      );
 
       const openingCash = Number(shiftInfo.openingCash || 0);
-      
+      const cashier = shiftInfo.cashier || auth.session.user || {};
+      const cashierName = [cashier.firstName, cashier.lastName].filter(Boolean).join(' ')
+        || cashier.email
+        || shiftInfo.cashierName
+        || 'Cashier';
+
       let cashSales = 0;
+      let cardSales = 0;
+      let creditSales = 0;
+      let otherSales = 0;
       let totalSales = 0;
       let taxTotal = 0;
       let discountTotal = 0;
-      let paymentsBreakdown = {};
+      let itemsSold = 0;
+      const paymentsBreakdown = {};
+      const productTally = new Map();
+
+      const saleAmount = (sale) => {
+        const explicit = Number(sale.grandTotal ?? sale.total ?? sale.totalAmount ?? sale.finalTotal ?? 0);
+        if (explicit > 0) return explicit;
+        const items = sale.items || [];
+        return items.reduce((sum, i) => {
+          const line = Number(i.lineTotal) || (Number(i.quantity || 1) * Number(i.unitPrice || 0));
+          return sum + line;
+        }, 0);
+      };
 
       for (const sale of shiftSales) {
-        const total = Number(sale.total || sale.totalAmount || sale.finalTotal || 0);
+        const total = saleAmount(sale);
         totalSales += total;
-        taxTotal += Number(sale.taxAmount || sale.tax || 0);
-        discountTotal += Number(sale.discount || sale.discountAmount || 0);
+        taxTotal += Number(sale.taxTotal ?? sale.taxAmount ?? sale.tax ?? 0);
+        discountTotal += Number(sale.discountTotal ?? sale.discount ?? sale.discountAmount ?? 0);
 
-        const method = String(sale.paymentMethod || sale.paymentMode || 'Cash').trim();
-        if (!paymentsBreakdown[method]) {
-          paymentsBreakdown[method] = 0;
+        for (const item of sale.items || []) {
+          const qty = Number(item.quantity || 0);
+          itemsSold += qty;
+          const key = String(item.productName || item.name || item.sku || 'Item');
+          const cur = productTally.get(key) || { name: key, qty: 0, amount: 0 };
+          cur.qty += qty;
+          cur.amount += Number(item.lineTotal) || (qty * Number(item.unitPrice || 0));
+          productTally.set(key, cur);
         }
-        paymentsBreakdown[method] += total;
 
-        if (method.toLowerCase() === 'cash') {
-          cashSales += total;
+        const pays = Array.isArray(sale.payments) && sale.payments.length
+          ? sale.payments
+          : [{ paymentMethod: sale.paymentMethod || sale.paymentMode || 'Cash', amount: total }];
+
+        for (const p of pays) {
+          const method = String(p.paymentMethod || 'Cash').trim() || 'Cash';
+          const amt = Number(p.amount ?? 0) || total;
+          paymentsBreakdown[method] = (paymentsBreakdown[method] || 0) + amt;
+          const m = method.toLowerCase();
+          if (m === 'cash') cashSales += amt;
+          else if (m.includes('card')) cardSales += amt;
+          else if (m.includes('credit')) creditSales += amt;
+          else otherSales += amt;
+        }
+        if (String(sale.notes || '').toLowerCase().includes('credit sale') && creditSales === 0) {
+          creditSales += total;
         }
       }
 
-      // Cash flows
+      let returnsTotal = 0;
+      let returnsCount = 0;
+      for (const r of shiftReturns) {
+        returnsCount += 1;
+        returnsTotal += Number(r.refundAmount ?? r.total ?? r.grandTotal ?? 0);
+      }
+
       let cashIn = 0;
       let cashOut = 0;
       for (const flow of shiftInfo.cashFlows || []) {
         const amt = Number(flow.amount || 0);
-        if (flow.type === 'in') {
-          cashIn += amt;
-        } else if (flow.type === 'out') {
-          cashOut += amt;
-        }
+        if (flow.type === 'in') cashIn += amt;
+        else if (flow.type === 'out') cashOut += amt;
       }
 
       const expectedCash = openingCash + cashSales + cashIn - cashOut;
+      const topProducts = [...productTally.values()]
+        .sort((a, b) => b.qty - a.qty)
+        .slice(0, 8);
+
+      const recentSales = shiftSales
+        .slice()
+        .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+        .slice(0, 12)
+        .map((s) => ({
+          id: s.id,
+          invoiceNumber: s.invoiceNumber || s.orderNumber || s.id,
+          customerName: s.customerName || s.customer?.name || 'Walk-in',
+          total: saleAmount(s),
+          paymentMethod: (s.payments || []).map((p) => p.paymentMethod).filter(Boolean).join(', ')
+            || s.paymentMethod
+            || 'Cash',
+          createdAt: s.createdAt || s.created_at || null,
+          itemsCount: (s.items || []).reduce((n, i) => n + Number(i.quantity || 0), 0),
+        }));
 
       const report = {
+        shiftId,
+        status: shiftInfo.status || 'Open',
+        openedAt: shiftInfo.openedAt || shiftInfo.createdAt || null,
+        terminalName: shiftInfo.terminalName || shiftInfo.terminal?.name || '',
+        locationName: shiftInfo.locationName || shiftInfo.location?.name || '',
+        cashierName,
         openingCash,
         cashSales,
+        cardSales,
+        creditSales,
+        otherSales,
         cashIn,
         cashOut,
         expectedCash,
         totalSales,
         taxTotal,
         discountTotal,
-        netSales: totalSales - taxTotal,
+        netSales: Math.max(0, totalSales - discountTotal),
         salesCount: shiftSales.length,
+        itemsSold,
+        avgTicket: shiftSales.length ? totalSales / shiftSales.length : 0,
+        returnsCount,
+        returnsTotal,
         paymentsBreakdown,
+        topProducts,
+        recentSales,
       };
 
       return { success: true, data: report };
@@ -1565,12 +2090,11 @@ function registerIpc() {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
     masterSqlite.reloadFromDisk();
-    // Return raw local sales; the renderer computes totals/cashier grouping
-    // using its own helper functions (kept client-side only).
+    const sales = filterRecordsForUser(auth.session.user, masterSqlite.listAllLocalSales());
     return {
       success: true,
       offline: true,
-      data: { sales: masterSqlite.listAllLocalSales() },
+      data: { sales },
     };
   });
 
@@ -1579,7 +2103,7 @@ function registerIpc() {
     if (!auth.ok) return auth.result;
     try {
       masterSqlite.reloadFromDiskSafe();
-      const localSales = masterSqlite.listAllLocalSales();
+      const localSales = filterRecordsForUser(auth.session.user, masterSqlite.listAllLocalSales());
       return { success: true, data: localSales };
     } catch (err) {
       return { success: false, message: err.message || 'Failed to list sales' };
@@ -1727,7 +2251,35 @@ function registerIpc() {
     if (!auth.ok) return auth.result;
     // Same safety: always surface the latest on-disk catalog to the Products page.
     masterSqlite.reloadFromDiskSafe();
-    return { success: true, data: masterSqlite.listProducts() };
+    const products = masterSqlite.listProducts();
+    // Lean sync used to drop costPrice — restore from the full API cache when SQLite has 0
+    try {
+      const cached = localDb.getProducts() || [];
+      if (cached.length) {
+        const costById = new Map();
+        for (const c of cached) {
+          const id = String(c.id || c._id || '');
+          const cost = Number(c.costPrice ?? c.cost_price ?? c.landingCost ?? 0);
+          if (id && Number.isFinite(cost) && cost > 0) costById.set(id, cost);
+        }
+        let patched = 0;
+        for (const p of products) {
+          const id = String(p.id || '');
+          if (!(Number(p.costPrice) > 0) && costById.has(id)) {
+            const cost = costById.get(id);
+            p.costPrice = cost;
+            if (typeof masterSqlite.patchProductCost === 'function') {
+              masterSqlite.patchProductCost(id, cost);
+              patched += 1;
+            }
+          }
+        }
+        if (patched) console.log('[catalog:listProducts] backfilled costPrice for', patched, 'products');
+      }
+    } catch (err) {
+      console.warn('[catalog:listProducts] cost backfill skipped', err.message);
+    }
+    return { success: true, data: products };
   });
 
   handle('catalog:saveProduct', (_event, payload) => {
@@ -1893,23 +2445,49 @@ function registerIpc() {
     }
   });
 
-  // ── Tax — local-first (cache) ─────────────────────────────────────────────
+  // ── Tax — company profile from web (cached locally, refresh when online) ──
   ipcMain.handle('tax:getContext', async () => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    try {
+
+    const offlineFallback = () => {
       const cached = localDb.getTaxContext();
-      if (cached) return { success: true, data: cached };
-    } catch { /* ignore */ }
-    // Return a default/mock tax context to avoid API lag
-    return {
-      success: true,
-      data: {
-        taxRates: [{ id: 'gst-18', name: 'GST', rate: 18, type: 'Percentage' }],
-        defaultTaxRate: 18,
-        defaultTaxType: 'Exclusive',
-      }
+      if (cached) return { success: true, data: cached, source: 'cache' };
+      return {
+        success: true,
+        data: localDb.normalizeTaxContext({ enabled: false, configured: false }),
+        source: 'default',
+      };
     };
+
+    try {
+      const token = auth.session?.accessToken;
+      if (token) {
+        const live = await posApi.fetchTaxContext(token);
+        if (live?.success && live.data) {
+          localDb.saveTaxContext(live.data);
+          return { success: true, data: localDb.getTaxContext(), source: 'live' };
+        }
+      }
+    } catch (err) {
+      console.warn('[tax:getContext] live fetch failed', err.message);
+    }
+    return offlineFallback();
+  });
+
+  ipcMain.handle('tax:refreshContext', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      const live = await posApi.fetchTaxContext(auth.session.accessToken);
+      if (live?.success && live.data) {
+        localDb.saveTaxContext(live.data);
+        return { success: true, data: localDb.getTaxContext() };
+      }
+      return { success: false, message: live?.message || 'Could not refresh tax settings' };
+    } catch (err) {
+      return { success: false, message: err.message || 'Tax refresh failed' };
+    }
   });
 
   // ─── Offline sync status (pending queue counts) ───────────────────────────
@@ -1958,11 +2536,28 @@ function registerIpc() {
 
 function watchSessionExpiry() {
   if (sessionWatchTimer) clearInterval(sessionWatchTimer);
-  sessionWatchTimer = setInterval(() => {
+  let pingCounter = 0;
+  sessionWatchTimer = setInterval(async () => {
     const sessionData = authStore.readSession(userData());
+
+    // JWT expiry check (every 30 s)
     if (sessionData && authStore.isExpired(sessionData)) {
       authStore.clearSession(userData());
       appView?.webContents.send('auth:expired');
+      return;
+    }
+
+    // Company active status ping (every ~2 min = every 4th tick)
+    pingCounter += 1;
+    if (sessionData?.accessToken && pingCounter % 4 === 0) {
+      try {
+        const statusRes = await posApi.checkUserStatus(sessionData.accessToken);
+        if (statusRes?.code === 'COMPANY_INACTIVE') {
+          authStore.clearSession(userData());
+          appView?.webContents.send('auth:company-inactive');
+          showLoginScreen();
+        }
+      } catch (_) { /* network error — ignore, will retry next cycle */ }
     }
   }, 30_000);
 }

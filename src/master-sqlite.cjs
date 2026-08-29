@@ -342,6 +342,23 @@ function upsertProduct(row) {
   if (!idValue) return;
   const id = resolveSyncId('products', row.syncId, idValue);
   const syncStatus = row.syncStatus && row.syncStatus !== 'SYNCED' ? row.syncStatus : 'SYNCED';
+  const hasCostKey = Object.prototype.hasOwnProperty.call(row, 'costPrice')
+    || Object.prototype.hasOwnProperty.call(row, 'cost_price')
+    || Object.prototype.hasOwnProperty.call(row, 'landingCost');
+  const existing = get('SELECT cost_price, payload FROM products WHERE id = ?', [id]);
+  const incomingCost = Number(row.costPrice ?? row.cost_price ?? row.landingCost ?? 0);
+  // Don't wipe a known cost when a lean sync payload omits pricing
+  const costPrice = hasCostKey
+    ? incomingCost
+    : Number(existing?.cost_price ?? incomingCost ?? 0);
+  const prevPayload = parseJson(existing?.payload, {});
+  const payloadObj = {
+    ...prevPayload,
+    ...row,
+    costPrice,
+    sellingPrice: Number(row.price ?? row.sellingPrice ?? prevPayload.sellingPrice ?? 0),
+  };
+  delete payloadObj.payload;
   run(
     `INSERT INTO products (
         id, category_id, subcategory_id, name, sku, barcode, price,
@@ -387,8 +404,8 @@ function upsertProduct(row) {
       Number(row.currentStock ?? row.availableStock ?? 0),
       pickImage(row),
       row.description || '',
-      Number(row.costPrice ?? row.cost_price ?? 0),
-      toPayloadJson(row),
+      costPrice,
+      JSON.stringify(payloadObj),
       row.isActive === false || row.isDeleted ? 0 : 1,
       row.isDeleted ? 1 : 0,
       row.updatedAt || new Date().toISOString(),
@@ -932,6 +949,24 @@ function listProducts() {
   }));
 }
 
+/** Restore cost_price when lean sync wiped it (cost column / payload = 0). */
+function patchProductCost(id, cost) {
+  const productId = String(id || '').trim();
+  const n = Number(cost);
+  if (!productId || !Number.isFinite(n) || n < 0) return false;
+  const row = get('SELECT cost_price, payload FROM products WHERE id = ?', [productId]);
+  if (!row) return false;
+  if (Number(row.cost_price) > 0) return false;
+  const extra = parseJson(row.payload, {});
+  extra.costPrice = n;
+  run(
+    `UPDATE products SET cost_price = ?, payload = ? WHERE id = ?`,
+    [n, JSON.stringify(extra), productId]
+  );
+  persist();
+  return true;
+}
+
 function generateSku(name) {
   const prefix = String(name || 'PRD').replace(/[^A-Za-z0-9]/g, '').slice(0, 6).toUpperCase() || 'PRD';
   let n = Number(get('SELECT COUNT(*) AS n FROM products')?.n || 0) + 1;
@@ -1334,6 +1369,7 @@ module.exports = {
   saveSubcategory,
   deleteSubcategory,
   listProducts,
+  patchProductCost,
   saveProduct,
   deleteProduct,
   newSyncId,

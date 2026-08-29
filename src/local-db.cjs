@@ -71,11 +71,48 @@ function saveCustomers(customersList) {
 
 // ─── TAX CONTEXT CACHE ────────────────────────────────────────────────────────
 function getTaxContext() {
-  return readJson('cache_tax_context.json', null);
+  const raw = readJson('cache_tax_context.json', null);
+  return raw ? normalizeTaxContext(raw) : null;
+}
+
+/** Normalize cloud/local tax payload for POS UI (enabled flag + default rate). */
+function normalizeTaxContext(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      enabled: false,
+      configured: false,
+      defaultRate: null,
+      pricingModel: 'exclusive',
+      regime: null,
+      countryCode: null,
+      rates: [],
+      profile: null,
+    };
+  }
+  const rateObj = raw.defaultRate && typeof raw.defaultRate === 'object'
+    ? raw.defaultRate
+    : (Number(raw.defaultRate ?? raw.defaultTaxRate) > 0
+      ? { rate: Number(raw.defaultRate ?? raw.defaultTaxRate) }
+      : null);
+  const rates = Array.isArray(raw.rates)
+    ? raw.rates
+    : (Array.isArray(raw.taxRates) ? raw.taxRates : []);
+  return {
+    ...raw,
+    enabled: Boolean(raw.enabled ?? raw.taxEnabled ?? raw.profile?.taxEnabled),
+    configured: Boolean(raw.configured ?? raw.profile),
+    defaultRate: rateObj,
+    pricingModel: raw.pricingModel
+      || (String(raw.defaultTaxType || '').toLowerCase().includes('inclusive') ? 'inclusive' : 'exclusive'),
+    regime: raw.regime || raw.profile?.regime || null,
+    countryCode: raw.countryCode || raw.profile?.countryCode || null,
+    rates,
+    profile: raw.profile || null,
+  };
 }
 
 function saveTaxContext(taxCtx) {
-  return writeJson('cache_tax_context.json', taxCtx);
+  return writeJson('cache_tax_context.json', normalizeTaxContext(taxCtx));
 }
 
 // ─── SALES QUEUE (TO SYNC) ────────────────────────────────────────────────────
@@ -128,6 +165,14 @@ function addReturnToQueue(returnPayload) {
 
 function clearReturnsQueue() {
   return writeJson('queue_returns.json', []);
+}
+
+function removeFromReturnsQueue(ids) {
+  const idSet = new Set(Array.isArray(ids) ? ids.map(String) : [String(ids)]);
+  const queue = getReturnsQueue();
+  const remaining = queue.filter((r) => !idSet.has(String(r.id)));
+  writeJson('queue_returns.json', remaining);
+  return remaining.length;
 }
 
 // ─── SHIFTS LOGS & ACTIONS ─────────────────────────────────────────────────────
@@ -236,6 +281,7 @@ module.exports = {
   saveCustomers,
   getTaxContext,
   saveTaxContext,
+  normalizeTaxContext,
   getSalesQueue,
   addSaleToQueue,
   clearSalesQueue,
@@ -243,6 +289,7 @@ module.exports = {
   getReturnsQueue,
   addReturnToQueue,
   clearReturnsQueue,
+  removeFromReturnsQueue,
   getShiftsQueue,
   addShiftActionToQueue,
   clearShiftsQueue,

@@ -55,6 +55,15 @@
     api.auth.openLogin();
   });
 
+  api.auth.onCompanyInactive(function () {
+    try {
+      localStorage.removeItem('auth_token');
+      localStorage.removeItem('refresh_token');
+      localStorage.removeItem('user');
+    } catch (_) {}
+    api.auth.openLogin();
+  });
+
   api.auth.getSession().then(function (session) {
     applySession(session);
     enforceRoute();

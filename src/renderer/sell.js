@@ -49,25 +49,53 @@ function currentLocationId() {
 async function initLocationPicker() {
   const select = document.getElementById('location-select');
   if (!select) return;
-  // Load from local cache (no live API call)
+
+  let isAdmin = false;
+  try {
+    const session = await api.auth.getSession();
+    isAdmin = !!(session?.isAdmin || isAdminRole(session?.user?.role));
+  } catch (_) { /* ignore */ }
+
+  // Load from local cache (already scoped by main process for non-admins)
   try {
     const res = await api.pos.listLocations();
     locationList = Array.isArray(res?.data) ? res.data : [];
+    if (res?.isAdmin != null) isAdmin = !!res.isAdmin;
   } catch (err) {
     locationList = [];
   }
+
   const preferred =
     (window.bisonLocation ? bisonLocation.getStoredLocationId() : '') ||
     currentTerminal?.locationId ||
     currentTerminal?.location?.id ||
     '';
+
   if (window.bisonLocation) {
-    const chosen = bisonLocation.fillLocationSelect(select, locationList, preferred, { allowAll: true });
+    // Admins can pick "All locations"; normal users only see their assigned ones
+    const chosen = bisonLocation.fillLocationSelect(select, locationList, preferred, {
+      allowAll: isAdmin,
+    });
     bisonLocation.setStoredLocationId(chosen);
     applySelectedLocation(chosen);
   } else {
     applySelectedLocation(preferred);
   }
+
+  // Lock picker when non-admin has only one location
+  if (!isAdmin) {
+    if (locationList.length <= 1) {
+      select.disabled = true;
+      select.title = 'Your assigned location';
+    } else {
+      select.disabled = false;
+      select.title = 'Your assigned locations';
+    }
+  } else {
+    select.disabled = false;
+    select.title = '';
+  }
+
   select.addEventListener('change', () => {
     void onLocationChanged(select.value);
   });
@@ -83,7 +111,35 @@ function applySelectedLocation(id) {
 async function onLocationChanged(id) {
   if (window.bisonLocation) bisonLocation.setStoredLocationId(id);
   applySelectedLocation(id);
-  // Load catalog from local DB — no live API sync on location change
+
+  const locationId = window.bisonLocation ? bisonLocation.effectiveId(id) : String(id || '');
+
+  // Pull stock/catalog for the selected warehouse — local SQLite was often
+  // overwritten by the last user's location-scoped sync.
+  try {
+    if (typeof showToast === 'function') {
+      showToast(locationId ? 'Loading catalog for this location…' : 'Loading full catalog…', 'info');
+    }
+    const catalog = await api.pos.syncMasterData({
+      refresh: true,
+      locationId: locationId || undefined,
+      skipReload: true,
+    });
+    if (catalog?.success && typeof applySyncedCatalog === 'function') {
+      await applySyncedCatalog(catalog);
+    }
+    if (window.bisonLocation) bisonLocation.setLastSyncedLocationId(locationId);
+    if (typeof showToast === 'function' && catalog?.success) {
+      const n = catalog.counts?.products || 0;
+      showToast(`Location catalog ready · ${n} products`, 'success');
+    }
+  } catch (err) {
+    console.warn('[location] catalog refresh failed:', err);
+    if (typeof showToast === 'function') {
+      showToast(err?.message || 'Could not refresh location catalog', 'error');
+    }
+  }
+
   await loadCategories();
   await loadCategoryProducts(selectedCategoryId || 'All');
   if (typeof loadLocalCatalog === 'function') loadLocalCatalog();
@@ -281,12 +337,15 @@ async function boot() {
     companyProfile = profRes.data;
   }
 
-  // Get Tax context
+  // Get Tax context (company Tax Compliance from web → local cache)
   const taxRes = await api.tax.getContext();
-  window.__bootSteps.push('getTaxContext done: ' + taxRes?.success);
+  window.__bootSteps.push('getTaxContext done: ' + taxRes?.success + ' enabled=' + taxRes?.data?.enabled);
   if (taxRes?.success) {
     taxContext = taxRes.data;
+  } else {
+    taxContext = { enabled: false, configured: false };
   }
+  applyCompanyTaxUi();
   window.__bootSteps.push('about loadCategories');
 
   // Set top information
@@ -319,6 +378,41 @@ async function boot() {
   await loadCategories();
 
   updateOfflineCount();
+}
+
+function applyCompanyTaxUi() {
+  const enabled = Boolean(taxContext?.enabled);
+  const taxRow = document.getElementById('tax-summary-row');
+  if (taxRow && !enabled) taxRow.style.display = 'none';
+
+  const taxFields = document.getElementById('pf-tax-fields');
+  if (taxFields) taxFields.style.display = enabled ? 'contents' : 'none';
+
+  const banner = document.getElementById('tax-status-banner');
+  if (banner) {
+    if (enabled) {
+      const rate = resolveTaxRate(taxContext?.defaultRate);
+      banner.style.display = 'block';
+      banner.textContent = `Company tax ON · ${taxContext.regime || 'Tax'} · default ${rate}% (${taxContext.pricingModel || 'exclusive'})`;
+    } else {
+      banner.style.display = 'none';
+    }
+  }
+}
+
+async function refreshCompanyTaxContext() {
+  try {
+    const res = typeof api.tax.refreshContext === 'function'
+      ? await api.tax.refreshContext()
+      : await api.tax.getContext();
+    if (res?.success && res.data) {
+      taxContext = res.data;
+      applyCompanyTaxUi();
+      calculateTotals();
+    }
+  } catch (err) {
+    console.warn('[tax] refresh failed', err);
+  }
 }
 
 function setupTabs() {
@@ -383,28 +477,72 @@ async function updateOfflineCount() {
     const msg = document.getElementById('sync-overlay-msg');
     btnSync.disabled = true;
     if (overlay) overlay.classList.add('show');
-    if (msg) msg.textContent = 'Uploading local changes to the cloud, then pulling the latest catalog…';
+
     try {
+      // ── STEP 1: Upload all queued offline sales FIRST ──────────────────────
+      if (msg) msg.textContent = 'Uploading pending sales to the cloud…';
+      let salesResult = null;
+      try {
+        salesResult = await api.pos.syncOfflineSales();
+      } catch (_) { /* ignore — e.g. no internet */ }
+
+      // ── STEP 2: Refresh catalog (skipReload so main process does not
+      //   issue its own reloadIgnoringCache before sales upload finishes) ────
+      if (msg) msg.textContent = 'Pulling the latest catalog from the cloud…';
       const catalog = await api.pos.syncMasterData({
         refresh: true,
         locationId: currentLocationId(),
+        skipReload: true,
       });
-      if (msg) msg.textContent = 'Updating the local catalog…';
-      try { await api.pos.syncOfflineSales(); } catch (_) { /* offline queue optional */ }
+
       if (catalog?.offline || catalog?.code === 'OFFLINE') {
         showToast(catalog?.message || 'No internet connection. Sync skipped.', 'error');
         if (overlay) overlay.classList.remove('show');
         await updateOfflineCount();
         return;
       }
+
       if (catalog?.success) {
         const n = catalog.counts?.products || 0;
         const c = catalog.counts?.categories || 0;
         const u = catalog.counts?.customers || 0;
         if (window.bisonLocation) bisonLocation.setLastSyncedLocationId(currentLocationId());
-        showToast(`Cloud catalog synced · ${c} categories, ${n} products, ${u} customers`, 'success');
+
+        // Build sales sync summary for toast
+        let salesToast = '';
+        const saleResults = Array.isArray(salesResult?.data?.sales?.data)
+          ? salesResult.data.sales.data
+          : [];
+        if (saleResults.length > 0) {
+          const synced  = saleResults.filter(r => r.status === 'success').length;
+          const skipped = saleResults.filter(r => r.status === 'skipped').length;
+          const failed  = saleResults.filter(r => r.status === 'failed').length;
+          if (synced > 0 || skipped > 0) {
+            salesToast = ` · ${synced} sale(s) uploaded`;
+            if (skipped > 0) salesToast += `, ${skipped} already on cloud`;
+          }
+          if (failed > 0) salesToast += `, ${failed} failed (will retry)`;
+        }
+
+        // Build returns sync summary for toast
+        const returnResults = Array.isArray(salesResult?.data?.returns?.data)
+          ? salesResult.data.returns.data
+          : [];
+        if (returnResults.length > 0) {
+          const rSynced  = returnResults.filter(r => r.status === 'success').length;
+          const rSkipped = returnResults.filter(r => r.status === 'skipped').length;
+          const rFailed  = returnResults.filter(r => r.status === 'failed').length;
+          if (rSynced > 0 || rSkipped > 0) {
+            salesToast += ` · ${rSynced} return(s) uploaded`;
+            if (rSkipped > 0) salesToast += `, ${rSkipped} already on cloud`;
+          }
+          if (rFailed > 0) salesToast += `, ${rFailed} return(s) failed (will retry)`;
+        }
+
+        showToast(`Cloud catalog synced · ${c} categories, ${n} products, ${u} customers${salesToast}`, 'success');
         if (overlay) overlay.classList.remove('show');
         await applySyncedCatalog(catalog);
+        try { await refreshCompanyTaxContext(); } catch (_) { /* ignore */ }
         window.location.replace(`./sell.html?ts=${Date.now()}`);
         return;
       } else {
@@ -677,7 +815,7 @@ function renderProducts() {
       </div>
       <b>${p.name}</b>
       <span>SKU: ${p.sku || 'N/A'}</span>
-      <div class="prod-card-price">$${Number(p.sellingPrice || 0).toFixed(2)}</div>
+      <div class="prod-card-price">${pkr(p.sellingPrice)}</div>
       <div class="prod-card-stock" style="color: ${p.currentStock <= 0 ? '#ef4444' : p.currentStock <= 5 ? '#f59e0b' : '#10b981'}">
         Stock: ${p.currentStock || 0}
       </div>
@@ -824,10 +962,7 @@ function routeScannedCode(code) {
           .some((v) => String(v || '').trim() === trimmed)
       );
       if (matched) {
-        stockSelectedProduct = matched;
-        const productSelect = document.getElementById('stock-product-select');
-        if (productSelect) productSelect.value = matched.id;
-        onStockProductSelected(matched);
+        applyStockProductSelection(matched);
         showStockFormAlert('Product matched successfully!', 'success');
       } else {
         showStockFormAlert(`No local product found for barcode/SKU: ${trimmed}`, 'error');
@@ -906,9 +1041,6 @@ function attachHidBarcodeScanner() {
     const isScanField = target?.dataset?.posScan === '1' || target?.id === 'barcode-scan-box';
 
     if (tag === 'textarea') return;
-    if (tag === 'input' && !isScanField && !['text', 'search', 'number'].includes(String(target.type || '').toLowerCase())) {
-      return;
-    }
 
     const isEnter = e.key === 'Enter' || e.key === 'NumpadEnter';
 
@@ -926,6 +1058,12 @@ function attachHidBarcodeScanner() {
       return;
     }
 
+    // Normal text/search/number fields (product search, qty, etc.): never treat as HID wedge
+    if (tag === 'input' || tag === 'select') {
+      clearBuffer();
+      return;
+    }
+
     if (isEnter || e.key === 'Tab') {
       if (buffer.trim().length >= MIN_LEN) {
         e.preventDefault();
@@ -940,12 +1078,7 @@ function attachHidBarcodeScanner() {
     if (e.key.length !== 1) return;
 
     const now = Date.now();
-    // Slow manual typing in a search box is not a scanner wedge burst
-    if (tag === 'input' && lastAt && now - lastAt > 180) {
-      buffer = e.key;
-    } else {
-      buffer += e.key;
-    }
+    buffer += e.key;
     lastAt = now;
     if (timer) clearTimeout(timer);
     timer = setTimeout(flushBuffer, IDLE_MS);
@@ -956,9 +1089,16 @@ attachHidBarcodeScanner();
 setTimeout(() => barcodeScanInp?.focus(), 200);
 
 // ─── CART persistence ────────────────────────────────────────────────────────
+const POS_CURRENCY = 'PKR';
+
 function money(n) {
   const v = Number(n);
   return Number.isFinite(v) ? v : 0;
+}
+
+/** Display money amounts in PKR across POS UI */
+function pkr(n) {
+  return `${POS_CURRENCY} ${money(n).toFixed(2)}`;
 }
 
 function lineAmount(item) {
@@ -991,7 +1131,7 @@ function calculateTotals() {
 
     let lineTax = 0;
     if (taxContext?.enabled) {
-      const rate = money(item.taxRate);
+      const rate = resolveTaxRate(item.taxRate);
       if (pricingModel === 'inclusive') {
         lineTax = netLinePrice - (netLinePrice / (1 + (rate / 100)));
       } else {
@@ -1018,19 +1158,19 @@ function calculateTotals() {
   if (cartQtyCountEl) cartQtyCountEl.textContent = qtyTotal;
   const itemsQtyEl = document.getElementById('cart-items-qty-total');
   if (itemsQtyEl) itemsQtyEl.textContent = String(qtyTotal);
-  if (cartSubtotalEl) cartSubtotalEl.textContent = `$${money(subtotal).toFixed(2)}`;
-  if (cartDiscountValueEl) cartDiscountValueEl.textContent = `-$${money(discountTotal).toFixed(2)}`;
+  if (cartSubtotalEl) cartSubtotalEl.textContent = `${pkr(subtotal)}`;
+  if (cartDiscountValueEl) cartDiscountValueEl.textContent = `-${pkr(discountTotal)}`;
 
   if (taxContext?.enabled && finalTax > 0) {
     if (taxSummaryRow) taxSummaryRow.style.display = 'flex';
     if (taxRegimeLabel) taxRegimeLabel.textContent = `${regime}${pricingModel === 'inclusive' ? ' (incl.)' : ''}`;
-    if (cartTaxValueEl) cartTaxValueEl.textContent = `$${money(finalTax).toFixed(2)}`;
+    if (cartTaxValueEl) cartTaxValueEl.textContent = `${pkr(finalTax)}`;
   } else if (taxSummaryRow) {
     taxSummaryRow.style.display = 'none';
   }
 
-  if (cartGrandTotalEl) cartGrandTotalEl.textContent = `$${money(grandTotal).toFixed(2)}`;
-  if (checkoutGrandTotalEl) checkoutGrandTotalEl.textContent = `$${money(grandTotal).toFixed(2)}`;
+  if (cartGrandTotalEl) cartGrandTotalEl.textContent = `${pkr(grandTotal)}`;
+  if (checkoutGrandTotalEl) checkoutGrandTotalEl.textContent = `${pkr(grandTotal)}`;
 
   const disabled = cart.length === 0;
   if (btnCheckoutTrigger) btnCheckoutTrigger.disabled = disabled;
@@ -1040,6 +1180,15 @@ function calculateTotals() {
   if (btnClearCart) btnClearCart.style.display = disabled ? 'none' : 'block';
 
   return { subtotal, discountTotal, taxTotal: finalTax, grandTotal };
+}
+
+function resolveTaxRate(raw) {
+  if (raw == null || raw === '') return 0;
+  if (typeof raw === 'object') {
+    raw = raw.rate ?? raw.value ?? raw.percentage ?? raw.taxRate ?? 0;
+  }
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
 }
 
 function addProductToCart(p) {
@@ -1061,17 +1210,19 @@ function addProductToCart(p) {
     existing.quantity += 1;
     existing.lineTotal = existing.quantity * existing.unitPrice;
   } else {
-    const rate = p.taxRate || (taxContext?.enabled ? taxContext.defaultRate : 0) || 0;
+    const rate = resolveTaxRate(p.taxRate)
+      || (taxContext?.enabled ? resolveTaxRate(taxContext.defaultRate) : 0);
+    const unitPrice = Number(p.sellingPrice || p.price || 0) || 0;
     cart.push({
       productId: p.id,
       productName: p.name,
       sku: p.sku || '',
       quantity: 1,
-      unitPrice: Number(p.sellingPrice || 0),
+      unitPrice,
       discount: 0,
-      taxRate: rate,
+      taxRate: taxContext?.enabled ? rate : 0,
       taxAmount: 0,
-      lineTotal: Number(p.sellingPrice || 0),
+      lineTotal: unitPrice,
       currentStock: stock,
       isCustom: false
     });
@@ -1089,9 +1240,9 @@ function renderCartList() {
       <div class="cart-item-row-top">
         <div class="cart-item-info">
           <b>${item.productName}</b>
-          <span>${item.quantity} × $${Number(item.unitPrice || 0).toFixed(2)}</span>
+          <span>${item.quantity} × ${pkr(item.unitPrice)}</span>
         </div>
-        <div class="cart-item-total">$${(Number(item.unitPrice || 0) * Number(item.quantity || 0)).toFixed(2)}</div>
+        <div class="cart-item-total">${pkr(Number(item.unitPrice || 0) * Number(item.quantity || 0))}</div>
       </div>
       <div class="cart-item-controls">
         <div class="cart-item-qty">
@@ -1155,7 +1306,7 @@ function updateCustomLinePreview() {
   if (!el) return;
   const price = parseCustomPrice();
   const qty = parseCustomQty();
-  el.textContent = `$${(price * qty).toFixed(2)}`;
+  el.textContent = `${pkr(price * qty)}`;
 }
 
 if (customLinePriceInp) customLinePriceInp.addEventListener('input', updateCustomLinePreview);
@@ -1199,7 +1350,7 @@ btnAddCustomLine?.addEventListener('click', () => {
     quantity: qty,
     unitPrice: price,
     discount: 0,
-    taxRate: money(taxContext?.defaultRate),
+    taxRate: taxContext?.enabled ? resolveTaxRate(taxContext?.defaultRate) : 0,
     taxAmount: 0,
     lineTotal: price * qty,
     currentStock: 9999,
@@ -1356,7 +1507,7 @@ function canSellOnCredit(amount) {
   const limit = money(customerCreditInfo?.creditLimit);
   const available = money(customerCreditInfo?.availableCredit);
   if (limit > 0 && amount > available + 0.009) {
-    alert(`Credit limit exceeded. Available: $${available.toFixed(2)}`);
+    alert(`Credit limit exceeded. Available: ${pkr(available)}`);
     return false;
   }
   return true;
@@ -1383,7 +1534,7 @@ function openCheckout(method) {
 
   const custEl = document.getElementById('checkout-customer-label');
   if (custEl) custEl.textContent = selectedCustomer?.name || 'Walk-in Customer';
-  document.getElementById('checkout-modal-total').textContent = `$${totals.grandTotal.toFixed(2)}`;
+  document.getElementById('checkout-modal-total').textContent = `${pkr(totals.grandTotal)}`;
 
   payments = [{ paymentMethod: method || 'Cash', amount: totals.grandTotal, reference: '' }];
   focusedPaymentIndex = 0;
@@ -1467,15 +1618,15 @@ function updateCheckoutChange() {
 
   if (credit && diff >= -0.009) {
     label.textContent = 'On account:';
-    value.textContent = `$${totals.grandTotal.toFixed(2)}`;
+    value.textContent = `${pkr(totals.grandTotal)}`;
     value.style.color = '#0f766e';
   } else if (diff >= 0) {
     label.textContent = 'Change Due:';
-    value.textContent = `$${diff.toFixed(2)}`;
+    value.textContent = `${pkr(diff)}`;
     value.style.color = '#10b981';
   } else {
     label.textContent = 'Still Owed:';
-    value.textContent = `$${Math.abs(diff).toFixed(2)}`;
+    value.textContent = `${pkr(Math.abs(diff))}`;
     value.style.color = '#ef4444';
   }
 }
@@ -1537,7 +1688,7 @@ async function submitCompleteSale() {
   if (saleHasCredit() && !canSellOnCredit(totals.grandTotal)) return;
 
   if (paidTotal < totals.grandTotal) {
-    alert(`Insufficient payment. Need $${totals.grandTotal.toFixed(2)}, got $${paidTotal.toFixed(2)}`);
+    alert(`Insufficient payment. Need ${pkr(totals.grandTotal)}, got ${pkr(paidTotal)}`);
     return;
   }
 
@@ -1561,7 +1712,7 @@ async function submitCompleteSale() {
       quantity: i.quantity,
       unitPrice: i.unitPrice,
       discount: i.discount,
-      taxRate: i.taxRate,
+      taxRate: resolveTaxRate(i.taxRate),
       pricingModel,
       taxType: pricingModel === 'inclusive' ? 'Inclusive' : 'Exclusive',
       isCustom: i.isCustom
@@ -1583,10 +1734,24 @@ async function submitCompleteSale() {
     // Cloud returns { sale: {...} } but the offline queue returns the saved
     // sale object directly — accept both shapes so invoiceNumber/id survive.
     const saleData = res.data.sale || res.data;
+    const snapItems = (Array.isArray(saleData?.items) && saleData.items.length ? saleData.items : cart).map((i) => ({
+      ...i,
+      productName: i.productName || i.name,
+      quantity: Number(i.quantity) || 0,
+      unitPrice: Number(i.unitPrice) || 0,
+      discount: resolveTaxRate(i.discount),
+      taxRate: resolveTaxRate(i.taxRate),
+      lineTotal: Number(i.lineTotal) || ((Number(i.quantity) || 0) * (Number(i.unitPrice) || 0)),
+    }));
     lastSale = {
       ...saleData,
-      items: saleData?.items || cart,
+      items: snapItems,
       payments: saleData?.payments || payload.payments,
+      subtotal: totals.subtotal,
+      discountTotal: totals.discountTotal,
+      taxTotal: totals.taxTotal,
+      grandTotal: totals.grandTotal,
+      totalAmount: totals.grandTotal,
       paidAmount: paidTotal,
       changeAmount: paidTotal - totals.grandTotal,
       cashierName: cashierMetaEl.textContent.replace('Cashier: ', ''),
@@ -1669,11 +1834,11 @@ function legacyRenderReceipt() {
   let itemsHtml = '';
   lastSale.items.forEach(i => {
     const lineTotal = i.lineTotal || (i.unitPrice * i.quantity);
-    itemsHtml += `<div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>${i.productName || i.name} x ${i.quantity}</span><span>$${Number(lineTotal).toFixed(2)}</span></div>`;
+    itemsHtml += `<div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>${i.productName || i.name} x ${i.quantity}</span><span>${pkr(lineTotal)}</span></div>`;
   });
   let paymentsHtml = '';
   lastSale.payments.forEach(p => {
-    paymentsHtml += `<div style="display:flex;justify-content:space-between;font-size:11px;"><span>Payment (${p.paymentMethod})</span><span>$${Number(p.amount || 0).toFixed(2)}</span></div>`;
+    paymentsHtml += `<div style="display:flex;justify-content:space-between;font-size:11px;"><span>Payment (${p.paymentMethod})</span><span>${pkr(p.amount)}</span></div>`;
   });
   const finalTax = Number(lastSale.taxTotal || 0);
   const grandTotal = Number(lastSale.totalAmount || lastSale.grandTotal || 0);
@@ -1684,11 +1849,11 @@ function legacyRenderReceipt() {
     <div style="font-size:11px;border-bottom:1px dashed #ccc;padding-bottom:8px;margin-bottom:8px;"><b>Invoice:</b> ${lastSale.invoiceNumber || lastSale.orderNumber || 'Draft'}<br/><b>Date:</b> ${dateStr}<br/><b>Cashier:</b> ${lastSale.cashierName || 'Staff'}<br/><b>Customer:</b> ${lastSale.customerName || 'Walk-in Customer'}</div>
     <div style="border-bottom:1px dashed #ccc;padding-bottom:8px;margin-bottom:8px;">${itemsHtml}</div>
     <div style="border-bottom:1px dashed #ccc;padding-bottom:8px;margin-bottom:8px;font-size:11px;">
-      <div style="display:flex;justify-content:space-between;"><span>Subtotal</span><span>$${Number(lastSale.subtotal || grandTotal).toFixed(2)}</span></div>
-      ${lastSale.discountTotal > 0 ? `<div style="display:flex;justify-content:space-between;color:#d97706;"><span>Discount</span><span>-$${Number(lastSale.discountTotal).toFixed(2)}</span></div>` : ''}
-      ${finalTax > 0 ? `<div style="display:flex;justify-content:space-between;"><span>GST</span><span>$${finalTax.toFixed(2)}</span></div>` : ''}
-      <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:bold;margin-top:4px;"><span>Total</span><span>$${grandTotal.toFixed(2)}</span></div></div>
-    <div style="border-bottom:1px dashed #ccc;padding-bottom:8px;margin-bottom:8px;">${paymentsHtml}<div style="display:flex;justify-content:space-between;font-size:11px;font-weight:bold;margin-top:2px;"><span>Change Return</span><span>$${change.toFixed(2)}</span></div></div>
+      <div style="display:flex;justify-content:space-between;"><span>Subtotal</span><span>${pkr(lastSale.subtotal || grandTotal)}</span></div>
+      ${lastSale.discountTotal > 0 ? `<div style="display:flex;justify-content:space-between;color:#d97706;"><span>Discount</span><span>-${pkr(lastSale.discountTotal)}</span></div>` : ''}
+      ${finalTax > 0 ? `<div style="display:flex;justify-content:space-between;"><span>GST</span><span>${pkr(finalTax)}</span></div>` : ''}
+      <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:bold;margin-top:4px;"><span>Total</span><span>${pkr(grandTotal)}</span></div></div>
+    <div style="border-bottom:1px dashed #ccc;padding-bottom:8px;margin-bottom:8px;">${paymentsHtml}<div style="display:flex;justify-content:space-between;font-size:11px;font-weight:bold;margin-top:2px;"><span>Change Return</span><span>${pkr(change)}</span></div></div>
     <div style="text-align:center;font-size:10px;color:#777;margin-top:8px;">Thank you for shopping with us!<br/>Power by Bisonstechs POS Desktop</div>`;
 }
 
@@ -1863,7 +2028,7 @@ function renderReturnForm(sale, sourceLabel) {
       <div style="background:#fff;padding:16px;border-radius:12px;border:1px solid var(--line);margin-top:10px;">
         <div style="display:flex;justify-content:space-between;margin-bottom:12px;">
           <b>Invoice: ${invNo}</b>
-          <span style="font-weight:700;color:var(--brand);">$${Number(sale.totalAmount || sale.grandTotal || 0).toFixed(2)}</span>
+          <span style="font-weight:700;color:var(--brand);">${pkr(sale.totalAmount || sale.grandTotal)}</span>
         </div>
         <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">
           Customer: ${sale.customerName || (sale.customer && sale.customer.name) || 'Walk-in Customer'} | Date: ${new Date(sale.orderDate || sale.createdAt || Date.now()).toLocaleDateString()} | Source: ${sourceLabel}
@@ -1872,9 +2037,9 @@ function renderReturnForm(sale, sourceLabel) {
           <thead>
             <tr>
               <th>Item</th>
-              <th>Qty</th>
-              <th>Price</th>
-              <th>Refund Qty</th>
+              <th>Qty Sold</th>
+              <th>Unit Price</th>
+              <th>Return Qty</th>
             </tr>
           </thead>
           <tbody>
@@ -1882,12 +2047,31 @@ function renderReturnForm(sale, sourceLabel) {
               <tr>
                 <td>${i.productName || i.name}</td>
                 <td>${i.quantity}</td>
-                <td>$${Number(i.unitPrice).toFixed(2)}</td>
-                <td><input type="number" class="return-qty-inp" data-idx="${idx}" value="0" min="0" max="${i.quantity}" style="width:50px;" /></td>
+                <td>${pkr(i.unitPrice)}</td>
+                <td><input type="number" class="return-qty-inp" data-idx="${idx}" value="0" min="0" max="${i.quantity}" style="width:56px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;" /></td>
               </tr>
             `).join('')}
           </tbody>
         </table>
+
+        <div style="margin-top:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <label style="font-size:13px;font-weight:600;color:var(--muted);">Refund Method:</label>
+          <select id="refund-method-select" style="padding:6px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:#fff;">
+            <option value="Cash">Cash</option>
+            <option value="Card">Card</option>
+            <option value="Bank Transfer">Bank Transfer</option>
+            <option value="Store Credit">Store Credit</option>
+          </select>
+          <label style="font-size:13px;font-weight:600;color:var(--muted);">Reason:</label>
+          <select id="return-reason-select" style="padding:6px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:#fff;">
+            <option value="Customer return">Customer return</option>
+            <option value="Defective item">Defective item</option>
+            <option value="Wrong item">Wrong item</option>
+            <option value="Overcharged">Overcharged</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+
         <button class="btn-add-custom" id="btn-submit-refund" style="margin-top:14px;background-color:#ef4444;">Process Refund</button>
       </div>
     `;
@@ -1915,9 +2099,16 @@ function renderReturnForm(sale, sourceLabel) {
       return;
     }
 
+    const refundMethod = document.getElementById('refund-method-select')?.value || 'Cash';
+    const reason = document.getElementById('return-reason-select')?.value || 'Customer return';
+
     const payload = {
       saleId: sale.id || sale._id,
-      items: refundItems
+      originalSaleId: sale.id || sale._id,
+      items: refundItems,
+      refundMethod,
+      reason,
+      type: 'RETURN',
     };
 
     const retRes = await api.pos.processReturn(payload);
@@ -1942,7 +2133,7 @@ function renderReturnForm(sale, sourceLabel) {
         taxTotal: 0,
         discountTotal: 0,
         grandTotal: refundTotal,
-        payments: [{ paymentMethod: 'Cash Refund', amount: refundTotal }],
+        payments: [{ paymentMethod: refundMethod + ' Refund', amount: refundTotal }],
         paidAmount: refundTotal,
         changeAmount: 0,
         status: 'RETURNED (offline — will sync)',
@@ -1972,6 +2163,10 @@ async function loadReturnHistory() {
     }
 
     let html = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <span style="font-size:13px;font-weight:600;color:var(--muted);">${list.length} return(s) in local queue</span>
+        <button id="btn-delete-all-returns" style="padding:5px 12px;background:#ef4444;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">Delete All</button>
+      </div>
       <table class="returns-table">
         <thead>
           <tr>
@@ -1995,7 +2190,7 @@ async function loadReturnHistory() {
           <td><b>${r.saleId || '—'}</b></td>
           <td>${dateStr}</td>
           <td><span style="font-size:12px;color:var(--muted);" title="${itemsStr}">${itemsStr}</span></td>
-          <td style="font-weight:700;color:#ef4444;">-$${total.toFixed(2)}</td>
+          <td style="font-weight:700;color:#ef4444;">-${pkr(total)}</td>
         </tr>
       `;
     });
@@ -2005,9 +2200,94 @@ async function loadReturnHistory() {
       </table>
     `;
     wrap.innerHTML = html;
+
+    document.getElementById('btn-delete-all-returns')?.addEventListener('click', async () => {
+      if (!confirm(`Delete all ${list.length} queued return(s) from local storage? This cannot be undone.`)) return;
+      const delRes = await api.pos.clearReturnsQueue();
+      if (delRes?.success) {
+        showToast('All local returns deleted.', 'success');
+        loadReturnHistory();
+      } else {
+        showToast(delRes?.message || 'Delete failed', 'error');
+      }
+    });
+
   } catch (err) {
     wrap.innerHTML = `<div style="color:#ef4444;">Failed to load returns history: ${err.message || err}</div>`;
   }
+}
+
+function saleMatchesReturnScan(sale, scanned) {
+  if (window.PosReceipt && typeof window.PosReceipt.saleMatchesReceiptScan === 'function') {
+    return window.PosReceipt.saleMatchesReceiptScan(sale, scanned);
+  }
+  const n = (v) => String(v || '').trim().toLowerCase();
+  const inv = String(scanned || '').trim();
+  if (!inv || !sale) return false;
+  return (
+    n(sale.invoiceNumber) === n(inv) ||
+    n(sale.orderNumber) === n(inv) ||
+    n(sale.id) === n(inv) ||
+    n(sale._id) === n(inv)
+  );
+}
+
+async function searchReturnByCode(rawCode) {
+  const inv = String(rawCode || '').trim();
+  const searchInp = document.getElementById('return-search-invoice');
+  if (searchInp) searchInp.value = inv;
+  if (!inv) return;
+
+  const wrap = document.getElementById('returns-list-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<div style="color:var(--muted)">Searching transaction...</div>';
+
+  // OFFLINE-FIRST: match full invoice OR receipt barcode digits (what Code128 prints).
+  try {
+    const local = await api.pos.listLocalSales();
+    const localSales = local?.data?.sales || [];
+    const localHit = localSales.find((s) => saleMatchesReturnScan(s, inv));
+    if (localHit) {
+      renderReturnForm(localHit, 'local');
+      return;
+    }
+  } catch { /* local read failed — fall through */ }
+
+  // Recent POS sales (synced) — same flexible barcode match
+  try {
+    const posRes = await api.pos.listSales('page=1&limit=100');
+    const posSales = posRes?.data?.sales || posRes?.data || [];
+    if (Array.isArray(posSales)) {
+      const posHit = posSales.find((s) => saleMatchesReturnScan(s, inv));
+      if (posHit) {
+        renderReturnForm(posHit, 'cloud');
+        return;
+      }
+    }
+  } catch { /* ignore */ }
+
+  // Cloud order search (full invoice / partial). Also try POS-L-<digits> if scan was numeric.
+  const dig = inv.replace(/\D/g, '').replace(/^0+/, '');
+  const queries = [inv];
+  if (dig && dig !== inv) queries.push(dig);
+  if (dig && !/^pos-l-/i.test(inv)) queries.push(`POS-L-${dig}`);
+
+  for (const q of queries) {
+    try {
+      const res = await api.sales.getOrders({ search: q, limit: 25 });
+      const rows = Array.isArray(res?.data)
+        ? res.data
+        : (res?.data?.orders || res?.data?.sales || []);
+      if (!(res?.success && Array.isArray(rows) && rows.length)) continue;
+      const hit = rows.find((s) => saleMatchesReturnScan(s, inv));
+      if (hit) {
+        renderReturnForm(hit, 'cloud');
+        return;
+      }
+    } catch { /* try next query */ }
+  }
+
+  wrap.innerHTML = '<div style="color:#ef4444;">Transaction not found! Scan the receipt barcode or type the full invoice (e.g. POS-L-…).</div>';
 }
 
 document.getElementById('btn-scan-return').addEventListener('click', () => {
@@ -2015,8 +2295,7 @@ document.getElementById('btn-scan-return').addEventListener('click', () => {
     window.openCodeScanner({
       title: 'Scan Receipt Barcode',
       onScan: (code) => {
-        document.getElementById('return-search-invoice').value = code;
-        document.getElementById('btn-search-return').click();
+        searchReturnByCode(code);
       },
     });
   } else {
@@ -2024,22 +2303,14 @@ document.getElementById('btn-scan-return').addEventListener('click', () => {
   }
 });
 
-// USB Scanner support - simple and reliable for returns
+// USB Scanner support - Enter submits the scanned code (do NOT clear before search)
 const returnSearchInp = document.getElementById('return-search-invoice');
 if (returnSearchInp) {
   returnSearchInp.addEventListener('keydown', (e) => {
-    console.log('[Returns Input] Keydown event:', e.key, 'value:', e.target.value);
-    
     if (e.key === 'Enter') {
       e.preventDefault();
       const code = returnSearchInp.value.trim();
-      console.log('[Returns Input] Enter key pressed, code:', code);
-      
-      if (code.length > 0) {
-        returnSearchInp.value = '';
-        console.log('[Returns Input] Triggering search with code:', code);
-        document.getElementById('btn-search-return').click();
-      }
+      if (code.length > 0) searchReturnByCode(code);
     }
   });
 }
@@ -2051,85 +2322,157 @@ document.querySelector('.tab-btn[data-tab="returns"]')?.addEventListener('click'
     if (searchInp) {
       searchInp.focus();
       searchInp.value = '';
-      console.log('[Returns Tab] Focused search input');
     }
   }, 100);
 });
 
 document.getElementById('btn-search-return').addEventListener('click', async () => {
   const inv = document.getElementById('return-search-invoice').value.trim();
-  if (!inv) return;
-
-  // Quick return logic layout
-  const wrap = document.getElementById('returns-list-wrap');
-  wrap.innerHTML = '<div style="color:var(--muted)">Searching transaction...</div>';
-  const norm = (v) => String(v || '').trim().toLowerCase();
-
-  // OFFLINE-FIRST: search the local sales cache before hitting the API, so
-  // receipt-number lookup works even without internet.
-  try {
-    const local = await api.pos.listLocalSales();
-    const localSales = local?.data?.sales || [];
-    const localHit = localSales.find((s) =>
-      norm(s.invoiceNumber) === norm(inv) ||
-      norm(s.orderNumber) === norm(inv) ||
-      norm(s.id) === norm(inv)
-    );
-    if (localHit) {
-      renderReturnForm(localHit, 'local');
-      return;
-    }
-  } catch { /* local read failed — fall through to API */ }
-
-  // Not found locally (or local cache unavailable) — try the cloud.
-  const res = await api.sales.getOrders({ search: inv, limit: 1 });
-  if (res?.success && Array.isArray(res.data) && res.data.length > 0) {
-    renderReturnForm(res.data[0], 'cloud');
-  } else {
-    wrap.innerHTML = '<div style="color:#ef4444;">Transaction not found!</div>';
-  }
+  await searchReturnByCode(inv);
 });
 
 // ─── T3: REPORTS TAB ──────────────────────────────────────────────────────────
 async function loadShiftReports() {
   const wrap = document.getElementById('reports-cards-grid');
-  wrap.innerHTML = '<div>Loading reports...</div>';
+  const kpiRow = document.getElementById('reports-kpi-row');
+  const metaEl = document.getElementById('reports-cashier-meta');
+  const recentPanel = document.getElementById('reports-recent-panel');
+  const productsPanel = document.getElementById('reports-products-panel');
+  const recentWrap = document.getElementById('reports-recent-sales');
+  const topWrap = document.getElementById('reports-top-products');
+
+  if (wrap) wrap.innerHTML = '<div class="report-card">Loading reports…</div>';
+  if (kpiRow) kpiRow.innerHTML = '';
+
+  if (!activeShift?.id) {
+    if (wrap) wrap.innerHTML = '<div class="report-card">Open a shift to see cashier reports.</div>';
+    return;
+  }
 
   const res = await api.pos.getShiftReport(activeShift.id);
-  if (res?.success && res.data) {
-    const report = res.data;
-    wrap.innerHTML = `
+  if (!(res?.success && res.data)) {
+    if (wrap) wrap.innerHTML = `<div class="report-card">${res?.message || 'Could not load current shift reports'}</div>`;
+    return;
+  }
+
+  const report = res.data;
+  const openedLabel = report.openedAt ? new Date(report.openedAt).toLocaleString() : '—';
+  if (metaEl) {
+    metaEl.textContent = [
+      report.cashierName || 'Cashier',
+      report.terminalName ? `· ${report.terminalName}` : '',
+      report.locationName ? `· ${report.locationName}` : '',
+      `· ${report.status || 'Open'}`,
+      `· since ${openedLabel}`,
+    ].filter(Boolean).join(' ');
+  }
+
+  if (kpiRow) {
+    const kpis = [
+      ['Receipts', report.salesCount || 0],
+      ['Gross sales', pkr(report.totalSales)],
+      ['Items sold', report.itemsSold || 0],
+      ['Avg ticket', pkr(report.avgTicket)],
+      ['Cash sales', pkr(report.cashSales)],
+      ['Card sales', pkr(report.cardSales)],
+      ['Credit sales', pkr(report.creditSales)],
+      ['Returns', `${report.returnsCount || 0} · ${pkr(report.returnsTotal)}`],
+    ];
+    kpiRow.innerHTML = kpis.map(([label, val]) => `
+      <div class="kpi"><span>${label}</span><b>${val}</b></div>
+    `).join('');
+  }
+
+  const payRows = Object.entries(report.paymentsBreakdown || {});
+  wrap.innerHTML = `
+      <div class="report-card">
+        <h4 style="margin:0 0 12px 0;">Cashier</h4>
+        <div class="totals-row"><span>Name</span><b>${report.cashierName || '—'}</b></div>
+        <div class="totals-row"><span>Terminal</span><b>${report.terminalName || '—'}</b></div>
+        <div class="totals-row"><span>Location</span><b>${report.locationName || '—'}</b></div>
+        <div class="totals-row"><span>Shift status</span><b>${report.status || 'Open'}</b></div>
+        <div class="totals-row"><span>Opened</span><b>${openedLabel}</b></div>
+      </div>
+
       <div class="report-card">
         <h4 style="margin:0 0 12px 0;">Shift Cash Summary</h4>
-        <div class="totals-row"><span>Opening Cash</span><b>$${Number(report.openingCash || 0).toFixed(2)}</b></div>
-        <div class="totals-row"><span>Cash Sales</span><b>$${Number(report.cashSales || 0).toFixed(2)}</b></div>
-        <div class="totals-row"><span>Cash Inflow</span><b>$${Number(report.cashIn || 0).toFixed(2)}</b></div>
-        <div class="totals-row"><span>Cash Outflow</span><b>-$${Number(report.cashOut || 0).toFixed(2)}</b></div>
+        <div class="totals-row"><span>Opening Cash</span><b>${pkr(report.openingCash)}</b></div>
+        <div class="totals-row"><span>Cash Sales</span><b>${pkr(report.cashSales)}</b></div>
+        <div class="totals-row"><span>Cash Inflow</span><b>${pkr(report.cashIn)}</b></div>
+        <div class="totals-row"><span>Cash Outflow</span><b>-${pkr(report.cashOut)}</b></div>
         <div class="totals-row" style="border-top:1px solid var(--line);padding-top:6px;margin-top:6px;">
-          <span>Expected Cash</span><b>$${Number(report.expectedCash || 0).toFixed(2)}</b>
+          <span>Expected Cash</span><b>${pkr(report.expectedCash)}</b>
         </div>
       </div>
-      
+
       <div class="report-card">
         <h4 style="margin:0 0 12px 0;">Sales Summary</h4>
-        <div class="totals-row"><span>Total Sales</span><b>$${Number(report.totalSales || 0).toFixed(2)}</b></div>
-        <div class="totals-row"><span>GST Tax</span><b>$${Number(report.taxTotal || 0).toFixed(2)}</b></div>
-        <div class="totals-row"><span>Discounts</span><b>-$${Number(report.discountTotal || 0).toFixed(2)}</b></div>
-        <div class="totals-row"><span>Net Sales</span><b>$${Number(report.netSales || 0).toFixed(2)}</b></div>
+        <div class="totals-row"><span>Total Sales</span><b>${pkr(report.totalSales)}</b></div>
+        <div class="totals-row"><span>GST Tax</span><b>${pkr(report.taxTotal)}</b></div>
+        <div class="totals-row"><span>Discounts</span><b>-${pkr(report.discountTotal)}</b></div>
+        <div class="totals-row"><span>Net Sales</span><b>${pkr(report.netSales)}</b></div>
         <div class="totals-row"><span>Receipts Issued</span><b>${report.salesCount || 0}</b></div>
+        <div class="totals-row"><span>Items Sold</span><b>${report.itemsSold || 0}</b></div>
+        <div class="totals-row"><span>Average Ticket</span><b>${pkr(report.avgTicket)}</b></div>
+        <div class="totals-row"><span>Returns</span><b>${report.returnsCount || 0} (${pkr(report.returnsTotal)})</b></div>
       </div>
 
       <div class="report-card">
         <h4 style="margin:0 0 12px 0;">Payment Methods</h4>
-        ${Object.entries(report.paymentsBreakdown || {}).map(([method, amount]) => `
-          <div class="totals-row"><span>${method}</span><b>$${Number(amount).toFixed(2)}</b></div>
-        `).join('')}
+        ${payRows.length
+          ? payRows.map(([method, amount]) => `
+          <div class="totals-row"><span>${method}</span><b>${pkr(amount)}</b></div>
+        `).join('')
+          : '<div class="totals-row"><span>No payments yet</span><b>—</b></div>'}
+        <div class="totals-row" style="border-top:1px solid var(--line);padding-top:6px;margin-top:6px;">
+          <span>Card</span><b>${pkr(report.cardSales)}</b>
+        </div>
+        <div class="totals-row"><span>Credit</span><b>${pkr(report.creditSales)}</b></div>
+        <div class="totals-row"><span>Other</span><b>${pkr(report.otherSales)}</b></div>
       </div>
     `;
-  } else {
-    wrap.innerHTML = '<div>Could not load current shift reports</div>';
+
+  const recent = report.recentSales || [];
+  if (recentPanel && recentWrap) {
+    if (!recent.length) {
+      recentPanel.style.display = 'none';
+    } else {
+      recentPanel.style.display = 'block';
+      recentWrap.innerHTML = `<table>
+        <thead><tr><th>Invoice</th><th>Time</th><th>Customer</th><th>Pay</th><th>Items</th><th style="text-align:right">Total</th></tr></thead>
+        <tbody>${recent.map((s) => `<tr>
+          <td>${s.invoiceNumber || '—'}</td>
+          <td>${s.createdAt ? new Date(s.createdAt).toLocaleString() : '—'}</td>
+          <td>${s.customerName || 'Walk-in'}</td>
+          <td>${s.paymentMethod || '—'}</td>
+          <td>${s.itemsCount || 0}</td>
+          <td style="text-align:right;font-weight:700">${pkr(s.total)}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+    }
+  }
+
+  const tops = report.topProducts || [];
+  if (productsPanel && topWrap) {
+    if (!tops.length) {
+      productsPanel.style.display = 'none';
+    } else {
+      productsPanel.style.display = 'block';
+      topWrap.innerHTML = `<table>
+        <thead><tr><th>Product</th><th>Qty</th><th style="text-align:right">Amount</th></tr></thead>
+        <tbody>${tops.map((p) => `<tr>
+          <td>${p.name}</td>
+          <td>${p.qty}</td>
+          <td style="text-align:right;font-weight:700">${pkr(p.amount)}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+    }
   }
 }
+
+document.getElementById('btn-refresh-reports')?.addEventListener('click', () => {
+  loadShiftReports().catch((err) => console.warn('refresh reports', err));
+});
 
 function saleMoney(n) {
   const v = Number(n);
@@ -2137,7 +2480,7 @@ function saleMoney(n) {
 }
 
 function saleFmt(n) {
-  return `$${saleMoney(n).toFixed(2)}`;
+  return pkr(n);
 }
 
 function saleCashier(sale) {
@@ -2695,7 +3038,7 @@ function renderLocalProducts() {
       <td>${p.sku || '—'}</td>
       <td>${p.barcode || '—'}</td>
       <td>${p.subcategoryName || p.categoryName || '—'}</td>
-      <td>$${Number(p.sellingPrice || 0).toFixed(2)}</td>
+      <td>${pkr(p.sellingPrice)}</td>
       <td>${Number(p.currentStock || 0)}</td>
       <td style="text-align:right;padding-right:20px;"><button type="button" class="icon-btn" data-edit-prod="${p.id}" title="Edit">✎</button> <button type="button" class="icon-btn del" data-del-prod="${p.id}" title="Delete">🗑</button></td>
     </tr>`).join('')
@@ -2841,7 +3184,8 @@ function resetProdForm() {
   setPf('isReturnable', true);
   setPf('productType', 'Physical');
   setPf('currency', 'PKR');
-  setPf('taxType', 'Exclusive');
+  setPf('taxType', taxContext?.pricingModel === 'inclusive' ? 'Inclusive' : 'Exclusive');
+  setPf('taxRate', taxContext?.enabled ? resolveTaxRate(taxContext.defaultRate) : 0);
   setPf('stockUnit', 'Pcs');
   setPf('weightUnit', 'KG');
   setPf('dimensionUnit', 'cm');
@@ -2852,6 +3196,7 @@ function resetProdForm() {
   renderProdImages();
   const customWrap = document.getElementById('pf-custom-rows');
   if (customWrap) customWrap.innerHTML = '';
+  applyCompanyTaxUi();
   showProdTab('basic');
 }
 
@@ -2970,9 +3315,9 @@ function collectProductForm() {
     landingCost: pfNum('landingCost'),
     currency: pfVal('currency') || 'PKR',
     currencyCode: pfVal('currency') || 'PKR',
-    taxRate: pfNum('taxRate'),
-    taxType: pfVal('taxType') || 'Exclusive',
-    taxTypeName: pfVal('taxType') || 'Exclusive',
+    taxRate: taxContext?.enabled ? pfNum('taxRate') : 0,
+    taxType: taxContext?.enabled ? (pfVal('taxType') || (taxContext.pricingModel === 'inclusive' ? 'Inclusive' : 'Exclusive')) : '',
+    taxTypeName: taxContext?.enabled ? (pfVal('taxType') || (taxContext.pricingModel === 'inclusive' ? 'Inclusive' : 'Exclusive')) : '',
     stockUnit: pfVal('stockUnit'),
     stockUnitName: pfVal('stockUnit'),
     currentStock: pfNum('currentStock'),
@@ -3297,6 +3642,7 @@ function initStockPanel() {
 
   const barcodeInp = document.getElementById('stock-barcode-scan');
   const searchInp = document.getElementById('stock-product-search');
+  const productList = document.getElementById('stock-product-list');
   const productSelect = document.getElementById('stock-product-select');
   const typeSelect = document.getElementById('stock-type-select');
   const bulkQtyInp = document.getElementById('stock-qty-input');
@@ -3310,16 +3656,21 @@ function initStockPanel() {
   const submitBtn = document.getElementById('btn-submit-stock');
 
   // 1. Search filter for product list
-  searchInp.addEventListener('input', () => {
+  searchInp?.addEventListener('input', () => {
     renderStockProductList(searchInp.value);
   });
 
-  // 2. Select product from list
-  productSelect.addEventListener('change', () => {
-    const val = productSelect.value;
-    const prod = localProducts.find(p => p.id === val);
-    stockSelectedProduct = prod || null;
-    onStockProductSelected(prod);
+  // 2. Clickable product list (replaces flaky <select size> listbox)
+  productList?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-product-id]');
+    if (!btn) return;
+    const id = String(btn.getAttribute('data-product-id') || '');
+    const prod = localProducts.find((p) => String(p.id) === id || String(p._id || '') === id);
+    if (!prod) {
+      showStockFormAlert('Product not found in local catalog', 'error');
+      return;
+    }
+    applyStockProductSelection(prod);
   });
 
   // 3. Stock Type format switch (Bulk vs Box)
@@ -3355,9 +3706,7 @@ function initStockPanel() {
           .some((v) => String(v || '').trim() === code)
       );
       if (matched) {
-        stockSelectedProduct = matched;
-        productSelect.value = matched.id;
-        onStockProductSelected(matched);
+        applyStockProductSelection(matched);
         showStockFormAlert('Product matched successfully!', 'success');
       } else {
         showStockFormAlert(`No local product found for barcode/SKU: ${code}`, 'error');
@@ -3466,6 +3815,33 @@ function initStockPanel() {
   });
 }
 
+function applyStockProductSelection(prod) {
+  if (!prod) return;
+  stockSelectedProduct = prod;
+
+  const id = String(prod.id || prod._id || '');
+  const productSelect = document.getElementById('stock-product-select');
+  if (productSelect) productSelect.value = id;
+
+  document.querySelectorAll('#stock-product-list .stock-product-item').forEach((el) => {
+    el.classList.toggle('active', String(el.getAttribute('data-product-id') || '') === id);
+  });
+
+  const banner = document.getElementById('stock-selected-banner');
+  if (banner) {
+    banner.style.display = 'block';
+    banner.textContent = `Selected: ${prod.name || 'Product'}${prod.sku ? ` · SKU ${prod.sku}` : ''}`;
+  }
+
+  onStockProductSelected(prod);
+}
+
+function resolveProductUnitCost(prod) {
+  const raw = prod?.costPrice ?? prod?.cost_price ?? prod?.landingCost ?? prod?.purchasePrice ?? prod?.purchase_price;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
+}
+
 function onStockProductSelected(prod) {
   if (!prod) return;
 
@@ -3477,10 +3853,10 @@ function onStockProductSelected(prod) {
     unitLabel.style.display = 'inline-block';
   }
 
-  // Pre-fill cost price
+  // Always pre-fill unit cost (0 if product has no cost saved)
   const costInp = document.getElementById('stock-cost-input');
-  if (costInp && prod.costPrice != null) {
-    costInp.value = prod.costPrice;
+  if (costInp) {
+    costInp.value = String(resolveProductUnitCost(prod));
   }
   recalculateStockFormTotal();
 }
@@ -3504,29 +3880,65 @@ function recalculateStockFormTotal() {
   const total = qty * cost;
   const totalValDisp = document.getElementById('stock-total-value');
   if (totalValDisp) {
-    totalValDisp.textContent = `Rs. ${Number(total).toFixed(2)}`;
+    totalValDisp.textContent = `${pkr(total)}`;
   }
 }
 
-function renderStockProductList(query = '') {
-  const select = document.getElementById('stock-product-select');
-  if (!select) return;
+function escapeHtmlAttr(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
 
+function renderStockProductList(query = '') {
+  const list = document.getElementById('stock-product-list');
+  const select = document.getElementById('stock-product-select');
+  if (!list) return;
+
+  const prevId = stockSelectedProduct
+    ? String(stockSelectedProduct.id || stockSelectedProduct._id || '')
+    : '';
   const q = String(query).toLowerCase().trim();
-  const filtered = localProducts.filter(p =>
-    !q || `${p.name} ${p.sku} ${p.barcode}`.toLowerCase().includes(q)
+  const filtered = (localProducts || []).filter((p) =>
+    !q || `${p.name || ''} ${p.sku || ''} ${p.barcode || ''}`.toLowerCase().includes(q)
   );
 
   if (!filtered.length) {
-    select.innerHTML = `<option value="">No matching products</option>`;
+    list.innerHTML = `<button type="button" class="stock-product-item" disabled>No matching products</button>`;
+    if (select) select.innerHTML = `<option value="">No matching products</option>`;
     return;
   }
 
-  select.innerHTML = filtered.map(p => {
+  const maxShow = 80;
+  const shown = filtered.slice(0, maxShow);
+  list.innerHTML = shown.map((p) => {
+    const id = String(p.id || p._id || '');
     const unit = p.stockUnitName || p.stockUnit || 'Pcs';
-    const stockStr = p.currentStock != null ? `${p.currentStock} ${unit}` : '0 Pcs';
-    return `<option value="${p.id}">${p.name} (SKU: ${p.sku || 'N/A'}, Stock: ${stockStr})</option>`;
-  }).join('');
+    const stockStr = p.currentStock != null ? `${p.currentStock} ${unit}` : `0 ${unit}`;
+    const active = prevId && prevId === id ? ' active' : '';
+    return `<button type="button" class="stock-product-item${active}" data-product-id="${escapeHtmlAttr(id)}" role="option">
+      ${escapeHtmlAttr(p.name || 'Unnamed')}
+      <span class="meta">SKU: ${escapeHtmlAttr(p.sku || 'N/A')} · Stock: ${escapeHtmlAttr(stockStr)} · Cost: ${escapeHtmlAttr(pkr(resolveProductUnitCost(p)))}</span>
+    </button>`;
+  }).join('') + (filtered.length > maxShow
+    ? `<button type="button" class="stock-product-item" disabled>…and ${filtered.length - maxShow} more — refine search</button>`
+    : '');
+
+  if (select) {
+    select.innerHTML = shown.map((p) => {
+      const id = String(p.id || p._id || '');
+      return `<option value="${escapeHtmlAttr(id)}">${escapeHtmlAttr(p.name || '')}</option>`;
+    }).join('');
+  }
+
+  // Auto-pick when only one match
+  if (filtered.length === 1) {
+    applyStockProductSelection(filtered[0]);
+  } else if (prevId && filtered.some((p) => String(p.id || p._id) === prevId)) {
+    if (select) select.value = prevId;
+  }
 }
 
 function getReasonLabel(reason) {
@@ -3553,25 +3965,24 @@ function showStockFormAlert(msg, type = 'error') {
 // Loads product lists, suppliers, and movements list
 async function loadStockPanel() {
   try {
-    // 1. Load latest products & suppliers if not loaded
-    if (!localProducts || !localProducts.length) {
-      if (typeof loadLocalProducts === 'function') {
-        await loadLocalProducts();
-      }
+    // Refresh products (listProducts also backfills cost from API cache when SQLite cost is 0)
+    if (typeof loadLocalProducts === 'function') {
+      await loadLocalProducts();
     }
 
-    // Fill product list select box
+    // Fill product list
     renderStockProductList(document.getElementById('stock-product-search')?.value || '');
 
     // Fill suppliers dropdown
     const supSelect = document.getElementById('stock-supplier-select');
     if (supSelect) {
-      supSelect.innerHTML = `<option value="">Select supplier...</option>` + localSuppliers.map(s =>
-        `<option value="${s.id || s._id}">${s.name}</option>`
+      const suppliers = Array.isArray(localSuppliers) ? localSuppliers : [];
+      supSelect.innerHTML = `<option value="">Select supplier...</option>` + suppliers.map(s =>
+        `<option value="${escapeHtmlAttr(s.id || s._id)}">${escapeHtmlAttr(s.name)}</option>`
       ).join('');
     }
 
-    // 2. Fetch stock movements from SQLite
+    // Fetch stock movements from SQLite
     const res = await api.pos.listStockMovements({ limit: 100 });
     if (res && res.success) {
       stockMovementsList = res.data || [];
@@ -3593,8 +4004,8 @@ function renderStockMovementsHistory() {
 
   body.innerHTML = stockMovementsList.map(m => {
     const dateStr = new Date(m.createdAt).toLocaleString();
-    const costStr = m.unitCost ? `Rs. ${Number(m.unitCost).toFixed(2)}` : 'Rs. 0.00';
-    const totalStr = m.totalCost ? `Rs. ${Number(m.totalCost).toFixed(2)}` : 'Rs. 0.00';
+    const costStr = m.unitCost != null ? pkr(m.unitCost) : pkr(0);
+    const totalStr = m.totalCost != null ? pkr(m.totalCost) : pkr(0);
     const typeBadge = m.type === 'stock_in'
       ? `<span class="badge-type in">Stock In</span>`
       : `<span class="badge-type out">Stock Out</span>`;

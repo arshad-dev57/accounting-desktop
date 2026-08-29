@@ -1332,6 +1332,51 @@
         padding: 2px 8px;
         border-radius: 9999px;
       }
+      .stock-product-list {
+        max-height: 160px;
+        overflow-y: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+      }
+      .stock-product-item {
+        display: block;
+        width: 100%;
+        text-align: left;
+        border: 0;
+        border-bottom: 1px solid #f1f5f9;
+        background: #fff;
+        padding: 10px 12px;
+        cursor: pointer;
+        font-size: 13px;
+        color: var(--text);
+        box-sizing: border-box;
+      }
+      .stock-product-item:last-child { border-bottom: 0; }
+      .stock-product-item:hover { background: #f8fafc; }
+      .stock-product-item.active {
+        background: rgba(1, 69, 130, 0.1);
+        color: var(--brand);
+        font-weight: 700;
+      }
+      .stock-product-item .meta {
+        display: block;
+        margin-top: 2px;
+        font-size: 11px;
+        font-weight: 500;
+        color: #64748b;
+      }
+      .stock-selected-banner {
+        display: none;
+        margin-top: 6px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: #f0fdf4;
+        border: 1px solid #dcfce7;
+        font-size: 12px;
+        color: #166534;
+        font-weight: 600;
+      }
       .badge-type {
         display: inline-block;
         padding: 2px 6px;
@@ -1457,9 +1502,9 @@
                   <!-- Credit info card -->
                   <div class="cust-credit-panel" id="cust-credit-info-card">
                     <div class="cust-credit-grid">
-                      <div>Limit: <b id="cc-limit">$0.00</b></div>
-                      <div>Owed: <b id="cc-owed">$0.00</b></div>
-                      <div>Available: <b id="cc-avail">$0.00</b></div>
+                      <div>Limit: <b id="cc-limit">PKR 0.00</b></div>
+                      <div>Owed: <b id="cc-owed">PKR 0.00</b></div>
+                      <div>Available: <b id="cc-avail">PKR 0.00</b></div>
                       <div>Points: <b id="cc-points">0</b></div>
                     </div>
                   </div>
@@ -1471,7 +1516,7 @@
                     <input type="text" class="inp-custom-price" id="custom-line-name" placeholder="Item name..." />
                     <input type="number" class="inp-custom-price" id="custom-line-price" placeholder="Price" min="0.01" step="0.01" />
                     <input type="number" class="inp-custom-qty" id="custom-line-qty" value="1" min="1" />
-                    <div class="custom-line-total" id="custom-line-total">$0.00</div>
+                    <div class="custom-line-total" id="custom-line-total">PKR 0.00</div>
                     <button class="btn-add-custom" id="btn-add-custom-line">Add</button>
                   </div>
                 </div>
@@ -1485,7 +1530,7 @@
                   </div>
                   <div class="totals-row">
                     <span>Subtotal</span>
-                    <span id="cart-subtotal">$0.00</span>
+                    <span id="cart-subtotal">PKR 0.00</span>
                   </div>
                   <div class="totals-row">
                     <span>Discount
@@ -1495,19 +1540,19 @@
                       </select>
                       <input type="number" id="cart-discount-input" style="width:40px;height:18px;text-align:center;border:1px solid #ddd;font-size:11px;" value="0" min="0" />
                     </span>
-                    <span id="cart-discount-value">-$0.00</span>
+                    <span id="cart-discount-value">-PKR 0.00</span>
                   </div>
-                  <div class="totals-row" id="tax-summary-row" style="display:none;">
-                    <span id="tax-regime-label">GST</span>
-                    <span id="cart-tax-value">$0.00</span>
-                  </div>
+                    <div class="totals-row" id="tax-summary-row" style="display:none;">
+                      <span id="tax-regime-label">Tax</span>
+                      <span id="cart-tax-value">PKR 0.00</span>
+                    </div>
                   <div class="totals-row grand-total">
                     <span>Total</span>
-                    <span class="val" id="cart-grand-total">$0.00</span>
+                    <span class="val" id="cart-grand-total">PKR 0.00</span>
                   </div>
 
                   <button class="btn-checkout" id="btn-checkout-trigger" disabled>
-                    Checkout — <span id="checkout-grand-total">$0.00</span>
+                    Checkout — <span id="checkout-grand-total">PKR 0.00</span>
                   </button>
                   <button class="btn-credit" id="btn-credit-sale-trigger" disabled>Credit sale</button>
                   <button class="btn-hold" id="btn-hold-sale-trigger" disabled>⏸️ Hold Sale</button>
@@ -1522,7 +1567,7 @@
                 <h2>Process Sales Return</h2>
               </div>
               <div style="display:flex;gap:12px;margin-bottom:16px;">
-                <input type="text" class="inp-search" id="return-search-invoice" data-pos-scan="1" placeholder="Search by Invoice Number..." style="max-width:320px;" autocomplete="off" />
+                <input type="text" class="inp-search" id="return-search-invoice" data-pos-scan="1" placeholder="Scan receipt barcode or type invoice..." style="max-width:320px;" autocomplete="off" />
                 <button class="btn-nav-action ghost" id="btn-scan-return" style="background-color:var(--brand);color:white;">📷 Scan</button>
                 <button class="btn-nav-action ghost" id="btn-search-return" style="background-color:var(--brand);color:white;">Search</button>
               </div>
@@ -1541,11 +1586,26 @@
           </div>
           <div class="view-panel" id="tab-reports">
             <div class="panel-content">
-              <div class="panel-header">
-                <h2>Shift Reports</h2>
+              <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                <div>
+                  <h2 style="margin:0;">Shift Reports</h2>
+                  <p id="reports-cashier-meta" style="margin:4px 0 0;font-size:12px;color:var(--muted);">Current cashier shift stats</p>
+                </div>
+                <button class="btn-nav-action ghost" id="btn-refresh-reports" type="button" style="font-size:12px;">↻ Refresh</button>
+              </div>
+              <div class="embed-kpi" id="reports-kpi-row" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));">
+                <!-- filled by JS -->
               </div>
               <div class="panel-grid" id="reports-cards-grid">
                 <!-- report cards -->
+              </div>
+              <div class="data-panel" id="reports-recent-panel" style="display:none;">
+                <h3>Recent sales this shift</h3>
+                <div id="reports-recent-sales"></div>
+              </div>
+              <div class="data-panel" id="reports-products-panel" style="display:none;">
+                <h3>Top products this shift</h3>
+                <div id="reports-top-products"></div>
               </div>
             </div>
           </div>
@@ -1558,8 +1618,8 @@
               </div>
               <div class="embed-kpi">
                 <div class="kpi"><span>Sales count</span><b id="sales-kpi-count">0</b></div>
-                <div class="kpi"><span>Total amount</span><b id="sales-kpi-total">$0.00</b></div>
-                <div class="kpi"><span>Credit sales</span><b id="sales-kpi-credit">$0.00</b></div>
+                <div class="kpi"><span>Total amount</span><b id="sales-kpi-total">PKR 0.00</b></div>
+                <div class="kpi"><span>Credit sales</span><b id="sales-kpi-credit">PKR 0.00</b></div>
                 <div class="kpi"><span>Cashiers</span><b id="sales-kpi-users">0</b></div>
               </div>
               <div class="data-panel">
@@ -1593,7 +1653,7 @@
                        <b>Date:</b> <span id="detail-date">—</span><br/>
                        <b>Cashier:</b> <span id="detail-cashier">—</span><br/>
                        <b>Customer:</b> <span id="detail-customer">—</span><br/>
-                       <b>Total:</b> <span id="detail-total">$0.00</span>
+                       <b>Total:</b> <span id="detail-total">PKR 0.00</span>
                      </div>
                      <div id="sale-detail-body"></div>
                      <div style="display:flex;gap:8px;margin-top:12px;">
@@ -1720,9 +1780,12 @@
                 <div class="form-group">
                   <label for="stock-product-search">Select Product *</label>
                   <input type="text" id="stock-product-search" placeholder="Type to filter product list..." autocomplete="off" style="margin-bottom:6px;" />
-                  <select id="stock-product-select" size="5" style="height:100px; padding:4px;">
-                    <option value="">-- Start typing above to search --</option>
-                  </select>
+                  <div id="stock-product-list" class="stock-product-list" role="listbox" aria-label="Products">
+                    <button type="button" class="stock-product-item" disabled>-- Start typing above to search --</button>
+                  </div>
+                  <div id="stock-selected-banner" class="stock-selected-banner"></div>
+                  <!-- kept for barcode path compatibility -->
+                  <select id="stock-product-select" hidden aria-hidden="true"></select>
                 </div>
 
                 <!-- Stock Type (Bulk / Box) -->
@@ -1762,14 +1825,14 @@
 
                 <!-- Unit Cost Input -->
                 <div class="form-group">
-                  <label for="stock-cost-input">Unit Cost (Rs/Piece) *</label>
+                  <label for="stock-cost-input">Unit Cost (PKR/Piece) *</label>
                   <input type="number" step="any" min="0" id="stock-cost-input" placeholder="0.00" />
                 </div>
 
                 <!-- Total Cost Display -->
                 <div class="form-group" style="background:#f8fafc; border: 1px dashed var(--line); border-radius:8px; padding:10px;">
                   <span style="font-size:12px; font-weight:600; color:#64748b;">Total Value / Cost:</span>
-                  <span id="stock-total-value" style="font-size:16px; font-weight:800; color:var(--brand); float:right;">Rs. 0.00</span>
+                  <span id="stock-total-value" style="font-size:16px; font-weight:800; color:var(--brand); float:right;">PKR 0.00</span>
                 </div>
 
                 <!-- Reason Selection -->
@@ -1900,7 +1963,7 @@
         
         <div style="margin-bottom:12px;display:flex;justify-content:space-between;font-size:14px;border-bottom:1px solid #f1f5f9;padding-bottom:10px;">
           <span>Order Grand Total</span>
-          <span style="font-weight:800;color:var(--brand);" id="checkout-modal-total">$0.00</span>
+          <span style="font-weight:800;color:var(--brand);" id="checkout-modal-total">PKR 0.00</span>
         </div>
 
         <div class="pay-quick-row">
@@ -1922,7 +1985,7 @@
 
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:14px;font-weight:700;">
           <span id="checkout-change-label">Change Due:</span>
-          <span style="font-size:18px;" id="checkout-modal-change">$0.00</span>
+          <span style="font-size:18px;" id="checkout-modal-change">PKR 0.00</span>
         </div>
 
         <!-- Checkout Numpad helper -->
@@ -2116,8 +2179,10 @@
               <div><label class="pf-label">Selling Price *</label><input class="pf-input" id="pf-sellingPrice" type="number" min="0" step="0.01" placeholder="0.00" /></div>
               <div><label class="pf-label">Landing Cost</label><input class="pf-input" id="pf-landingCost" type="number" min="0" step="0.01" placeholder="0.00" /></div>
               <div><label class="pf-label">Currency *</label><select class="pf-select" id="pf-currency"><option>PKR</option><option>USD</option><option>EUR</option><option>GBP</option><option>AUD</option></select></div>
-              <div><label class="pf-label">Tax Rate %</label><input class="pf-input" id="pf-taxRate" type="number" min="0" step="0.01" /></div>
-              <div><label class="pf-label">Tax Type</label><select class="pf-select" id="pf-taxType"><option>Exclusive</option><option>Inclusive</option></select></div>
+              <div id="pf-tax-fields" class="pf-span" style="display:contents;">
+                <div><label class="pf-label">Tax Rate %</label><input class="pf-input" id="pf-taxRate" type="number" min="0" step="0.01" /></div>
+                <div><label class="pf-label">Tax Type</label><select class="pf-select" id="pf-taxType"><option>Exclusive</option><option>Inclusive</option></select></div>
+              </div>
               <div><label class="pf-label">Stock Unit</label><select class="pf-select" id="pf-stockUnit"><option>Pcs</option><option>Kg</option><option>Box</option><option>Meter</option><option>Liter</option><option>Dozen</option><option>Pair</option><option>Set</option></select></div>
               <div><label class="pf-label">Current Stock</label><input class="pf-input" id="pf-currentStock" type="number" min="0" step="1" /><div class="pf-hint">Local POS stock on this PC</div></div>
               <div><label class="pf-label">Minimum Stock</label><input class="pf-input" id="pf-minimumStock" type="number" min="0" step="1" placeholder="5" /></div>

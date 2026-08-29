@@ -39,6 +39,7 @@ const ALLOWED_CHANNELS = new Set([
   'pos:processReturn',
   'pos:listLocalSales',
   'pos:listLocalReturns',
+  'pos:clearReturnsQueue',
   'pos:getShiftReport',
   'pos:getDailyReport',
   'pos:verifyManager',
@@ -89,6 +90,7 @@ const ALLOWED_CHANNELS = new Set([
   'customers:search',
   'products:list',
   'tax:getContext',
+  'tax:refreshContext',
 ]);
 
 function invoke(channel, payload) {
@@ -177,6 +179,11 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
       ipcRenderer.on('auth:expired', listener);
       return () => ipcRenderer.removeListener('auth:expired', listener);
     },
+    onCompanyInactive: (callback) => {
+      const listener = () => callback();
+      ipcRenderer.on('auth:company-inactive', listener);
+      return () => ipcRenderer.removeListener('auth:company-inactive', listener);
+    },
   },
   pos: {
     listTerminals: () => invoke('pos:listTerminals'),
@@ -209,6 +216,7 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
     processReturn: (payload) => invoke('pos:processReturn', payload),
     listLocalSales: () => invoke('pos:listLocalSales'),
     listLocalReturns: () => invoke('pos:listLocalReturns'),
+    clearReturnsQueue: () => invoke('pos:clearReturnsQueue'),
     getShiftReport: (shiftId) => invoke('pos:getShiftReport', shiftId),
     getDailyReport: (paramsString) => invoke('pos:getDailyReport', paramsString),
     verifyManager: (payload) => invoke('pos:verifyManager', payload),
@@ -269,6 +277,7 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
   },
   tax: {
     getContext: () => invoke('tax:getContext'),
+    refreshContext: () => invoke('tax:refreshContext'),
   },
   app: {
     getInfo: () => invoke('app:getInfo'),

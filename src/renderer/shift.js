@@ -25,24 +25,32 @@ function hideError() {
 
 function renderTerminals() {
   if (!terminals.length) {
-    listEl.innerHTML = '<p class="sub">No terminals found for this account.</p>';
+    listEl.innerHTML = '<p class="sub">No terminals at your assigned location yet. Sign out and sign in again — a counter will be created automatically. Or ask an admin to create a terminal for your warehouse in POS → Management → Terminals.</p>';
+    openBtn.disabled = true;
     return;
   }
+  openBtn.disabled = false;
+
+  // Single terminal for scoped users — auto-selected, no need to pick
+  const locked = terminals.length === 1;
   listEl.innerHTML = terminals
     .map(
       (t) => `
-      <button class="term ${t.id === selectedId ? 'active' : ''}" data-id="${t.id}" type="button">
+      <button class="term ${t.id === selectedId ? 'active' : ''}" data-id="${t.id}" type="button" ${locked ? 'disabled' : ''}>
         <b>${t.name || t.code || 'Terminal'}</b>
         <span>${t.code || ''} ${t.location?.name ? '· ' + t.location.name : ''}</span>
       </button>`
     )
     .join('');
-  listEl.querySelectorAll('.term').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      selectedId = btn.getAttribute('data-id');
-      renderTerminals();
+
+  if (!locked) {
+    listEl.querySelectorAll('.term').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        selectedId = btn.getAttribute('data-id');
+        renderTerminals();
+      });
     });
-  });
+  }
 }
 
 async function boot() {
@@ -66,8 +74,9 @@ async function boot() {
     if (syncEl) syncEl.textContent = 'Local catalog status unavailable';
   }
 
+  const isAdmin = !!(session?.isAdmin || ['admin', 'owner', 'superadmin', 'company_admin'].includes(String(user.role || '').toLowerCase()));
   const adminBtn = document.getElementById('admin');
-  if (adminBtn && (session?.isAdmin || ['admin', 'owner', 'superadmin', 'company_admin'].includes(String(user.role || '').toLowerCase()))) {
+  if (adminBtn && isAdmin) {
     adminBtn.classList.remove('hidden');
     adminBtn.addEventListener('click', () => api.pos.enterManagement());
   }
@@ -90,6 +99,19 @@ async function boot() {
   }
   terminals = Array.isArray(res.data) ? res.data : [];
   selectedId = terminals[0]?.id || '';
+
+  // Hint for scoped cashiers
+  if (!isAdmin && terminals.length === 1) {
+    const locName = terminals[0].location?.name || 'your assigned location';
+    if (terminalBox) {
+      const hint = document.createElement('p');
+      hint.className = 'sub';
+      hint.style.marginBottom = '8px';
+      hint.textContent = `Working at ${locName} · ${terminals[0].name || terminals[0].code || 'Terminal'}`;
+      terminalBox.insertBefore(hint, listEl);
+    }
+  }
+
   renderTerminals();
 }
 

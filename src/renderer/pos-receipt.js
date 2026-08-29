@@ -91,7 +91,20 @@
   function money(n) {
     var v = Number(n);
     if (!isFinite(v)) v = 0;
-    return '$' + v.toFixed(2);
+    return 'PKR ' + v.toFixed(2);
+  }
+
+  function asNumber(v, fallback) {
+    if (v == null || v === '') return fallback || 0;
+    if (typeof v === 'object') {
+      v = v.rate != null ? v.rate
+        : v.value != null ? v.value
+        : v.percentage != null ? v.percentage
+        : v.taxRate != null ? v.taxRate
+        : fallback || 0;
+    }
+    var n = Number(v);
+    return isFinite(n) ? n : (fallback || 0);
   }
 
   function esc(s) {
@@ -104,11 +117,13 @@
 
   function itemCount(sale) {
     var items = (sale && sale.items) || [];
-    return items.reduce(function (sum, i) { return sum + Number(i.quantity || 0); }, 0);
+    return items.reduce(function (sum, i) { return sum + asNumber(i.quantity, 0); }, 0);
   }
 
   function lineTotal(item) {
-    return Number(item.lineTotal) || (Number(item.quantity || 0) * Number(item.unitPrice || 0));
+    var explicit = asNumber(item.lineTotal, NaN);
+    if (isFinite(explicit) && explicit > 0) return explicit;
+    return asNumber(item.quantity, 0) * asNumber(item.unitPrice, 0);
   }
 
   function row(label, value, strong, large) {
@@ -163,33 +178,35 @@
 
     var itemsTable = '';
     items.forEach(function (it) {
-      var qty = Number(it.quantity || 0);
-      var price = money(it.unitPrice);
-      var total = money(lineTotal(it));
+      var qty = asNumber(it.quantity, 0);
+      var unit = asNumber(it.unitPrice, 0);
+      var amt = lineTotal(it);
+      var taxPct = asNumber(it.taxRate, 0);
+      var discPct = asNumber(it.discount, 0);
       var skuLine = '';
       if (tpl.showSku) {
         skuLine += '<div style="font-size:12px;font-weight:700;">' + (it.sku ? 'SKU ' + esc(it.sku) : 'SKU \u2014');
         if (it.barcodeNumber) skuLine += '  \u00b7  ' + esc(it.barcodeNumber);
         skuLine += '</div>';
       }
-      var sub = qty + ' \u00d7 ' + price;
-      if (it.discount) sub += '  Disc ' + it.discount + '%';
-      if (it.taxRate) sub += '  Tax ' + it.taxRate + '%';
+      var sub = qty + ' \u00d7 ' + money(unit);
+      if (discPct) sub += '  Disc ' + discPct + '%';
+      if (taxPct) sub += '  Tax ' + taxPct + '%';
       itemsTable += '<div style="margin:8px 0;"><div style="font-weight:700;text-transform:uppercase;">' + esc(it.productName || it.name || 'Item') + '</div>' +
         skuLine +
         '<table style="width:100%;border-collapse:collapse;font-size:12px;font-weight:700;"><tbody><tr>' +
         '<td style="padding-top:2px;text-align:left;">' + sub + '</td>' +
         '<td style="padding-top:2px;text-align:center;width:36px;">' + qty + '</td>' +
-        '<td style="padding-top:2px;text-align:right;width:88px;">' + money(total) + '</td>' +
+        '<td style="padding-top:2px;text-align:right;width:88px;">' + money(amt) + '</td>' +
         '</tr></tbody></table></div>';
     });
     var totals =
       row('No. of items', String(itemCount(s))) +
-      row('Subtotal', money(s.subtotal)) +
-      (Number(s.discountTotal) > 0 ? row('Discount', '-' + money(s.discountTotal)) : '') +
-      (Number(s.taxTotal) > 0 ? row('Tax', money(s.taxTotal)) : '') +
+      row('Subtotal', money(asNumber(s.subtotal, 0))) +
+      (asNumber(s.discountTotal, 0) > 0 ? row('Discount', '-' + money(asNumber(s.discountTotal, 0))) : '') +
+      (asNumber(s.taxTotal, 0) > 0 ? row('Tax', money(asNumber(s.taxTotal, 0))) : '') +
       dash +
-      row('TOTAL', money(s.grandTotal), true);
+      row('TOTAL', money(asNumber(s.grandTotal, 0)), true);
 
     var pay = '<div style="font-weight:700;margin-bottom:4px;">PAYMENT</div>';
     if (payments.length) {
@@ -210,7 +227,7 @@
       var bcSvg = code128BarcodeSvg(bcVal, paperWidth);
       lower += dash;
       lower += '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 0 4px;overflow:hidden;">' + bcSvg + '</div>';
-      lower += '<div style="text-align:center;font-size:11px;font-weight:700;">Barcode = receipt #</div>';
+      lower += '<div style="text-align:center;font-size:10px;font-weight:700;">Scan code = receipt #</div>';
     }
     if (tpl.receiptReturnPolicy) lower += '<div style="text-align:center;font-size:11px;font-weight:700;white-space:pre-wrap;">' + esc(tpl.receiptReturnPolicy) + '</div>';
     if (tpl.receiptNotes) lower += '<div style="text-align:center;font-size:11px;font-weight:700;margin-top:8px;white-space:pre-wrap;">' + esc(tpl.receiptNotes) + '</div>';
@@ -239,7 +256,7 @@
       '</div></div>';
   }
 
-  // ─── Barcode (Code128 → inline SVG, no QR — matches web but QR removed) ─────
+  // ─── Barcode (Code128 → inline SVG, scannable on phone / USB scanners) ─────
   var CODE128_PATTERNS = [
     '212222','222122','222221','121223','121322','131222','122213','122312','132212','221213',
     '221312','231212','112232','122132','122231','113222','123122','123221','223211','221132',
@@ -254,7 +271,12 @@
     '114131','311141','411131','211412','211214','211232','2331112'
   ];
 
-  /** Web-mirroring sanitizer: invoice number → safe Code128 value. */
+  /**
+   * Short, scanner-friendly value. Long invoice strings (POS-L-<timestamp>) used to
+   * scale bars so thin phones/websites could not read them — keep ≤12 chars and
+   * prefer digits-only so Code128C encodes denser + clearer.
+   * Return lookup MUST use saleMatchesReceiptScan() — do not expect exact invoice match.
+   */
   function receiptBarcodeValue(sale) {
     var raw =
       (sale && (
@@ -266,60 +288,147 @@
         sale.id ||
         sale._id
       )) || '';
-    var v = String(raw)
-      // local queue ids ("local-sale-1787...") → clean "LOCAL-1787..."
-      .replace(/^local-sale-/i, 'LOCAL-')
-      .replace(/\s+/g, '')
-      .replace(/[^A-Za-z0-9\-_./]/g, '')
-      .slice(0, 32);
-    return v || 'RECEIPT';
+    var s = String(raw).replace(/^local-sale-/i, '').replace(/\s+/g, '');
+    var digits = s.replace(/\D/g, '');
+    // Pure numeric payload scans most reliably (Code128C)
+    if (digits.length >= 8) return digits.slice(-12);
+    var cleaned = s.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    if (cleaned.length > 12) cleaned = cleaned.slice(-12);
+    return cleaned || 'RECEIPT';
   }
 
-  /** Code128B → standalone inline <svg> string (works in print windows, no deps). */
+  /** Digits only, strip leading zeros (Code128C may pad a leading 0). */
+  function receiptScanDigits(v) {
+    var d = String(v || '').replace(/\D/g, '');
+    d = d.replace(/^0+/, '');
+    return d;
+  }
+
+  /**
+   * True when a scanned receipt barcode / typed invoice matches this sale.
+   * Handles full invoice (POS-L-…), id, and the short numeric Code128 on the receipt.
+   */
+  function saleMatchesReceiptScan(sale, scanned) {
+    var raw = String(scanned || '').trim();
+    if (!raw || !sale) return false;
+    var n = function (v) { return String(v || '').trim().toLowerCase(); };
+    var fields = [
+      sale.invoiceNumber,
+      sale.orderNumber,
+      sale.orderNo,
+      sale.saleNumber,
+      sale.receiptNo,
+      sale.id,
+      sale._id,
+      receiptBarcodeValue(sale),
+    ];
+    for (var i = 0; i < fields.length; i++) {
+      if (fields[i] && n(fields[i]) === n(raw)) return true;
+    }
+    var scanDig = receiptScanDigits(raw);
+    if (scanDig.length < 6) return false;
+    for (var j = 0; j < fields.length; j++) {
+      var fd = receiptScanDigits(fields[j]);
+      if (!fd) continue;
+      if (fd === scanDig || fd.endsWith(scanDig) || scanDig.endsWith(fd)) return true;
+    }
+    return false;
+  }
+
+  function code128ModuleWidth(codes) {
+    var n = 0;
+    for (var i = 0; i < codes.length; i++) {
+      var pat = CODE128_PATTERNS[codes[i]];
+      if (!pat) return 0;
+      for (var d = 0; d < pat.length; d++) n += Number(pat[d]);
+    }
+    return n;
+  }
+
+  /** Encode as Code128C (pairs of digits) when possible, else Code128B. */
+  function encodeCode128(text) {
+    var t = String(text || '');
+    var useC = /^\d+$/.test(t) && t.length >= 2;
+    if (useC && t.length % 2 === 1) t = '0' + t; // Code128C needs even length
+
+    var codes = [];
+    var sum = 0;
+    if (useC) {
+      codes.push(105); // Start C
+      sum = 105;
+      var pos = 1;
+      for (var i = 0; i < t.length; i += 2) {
+        var pair = Number(t.slice(i, i + 2));
+        codes.push(pair);
+        sum += pair * pos;
+        pos += 1;
+      }
+    } else {
+      codes.push(104); // Start B
+      sum = 104;
+      for (var j = 0; j < t.length; j++) {
+        var v = t.charCodeAt(j) - 32;
+        if (v < 0 || v > 94) v = 0; // fallback to space
+        codes.push(v);
+        sum += v * (j + 1);
+      }
+    }
+    codes.push(sum % 103);
+    codes.push(106); // Stop
+    return { codes: codes, text: t, set: useC ? 'C' : 'B' };
+  }
+
+  /** Code128 → standalone inline <svg> (thick bars + quiet zone so phones can scan). */
   function code128BarcodeSvg(value, paperWidth) {
     try {
-      var text = String(value || 'RECEIPT');
-      if (!/^[\x20-\x7E]+$/.test(text)) text = 'RECEIPT';
-      var module = 2;                       // px per narrow module
-      var height = 84;
-      var margin = 14;
+      var text = String(value || 'RECEIPT').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      if (!text) text = 'RECEIPT';
 
-      // Encode: Start B (104) + data (charCode - 32) + checksum + stop (106)
-      var codes = [104];
-      var sum = 104;
-      for (var i = 0; i < text.length; i++) {
-        var v = text.charCodeAt(i) - 32;
-        codes.push(v);
-        sum += v * (i + 1);
+      var maxInner = Math.max(200, (Number(paperWidth) || 320) - 16);
+      var module = 3;          // px per narrow bar — keep thick for phone cameras
+      var quietMods = 10;      // quiet zone ≥ 10 modules (Code128 spec)
+      var height = 70;
+      var encoded = encodeCode128(text);
+      var modulesWide = code128ModuleWidth(encoded.codes) + quietMods * 2;
+
+      // Prefer shortening the payload over shrinking bar width (thin bars won't scan)
+      while (modulesWide * module > maxInner && text.length > 8) {
+        text = text.slice(-Math.max(8, text.length - 2));
+        encoded = encodeCode128(text);
+        modulesWide = code128ModuleWidth(encoded.codes) + quietMods * 2;
       }
-      codes.push(sum % 103);
-      codes.push(106); // stop
+      if (modulesWide * module > maxInner) module = 2;
 
-      // Build bar/space module run list
-      var x = 0;
+      var quiet = quietMods * module;
+      var x = quiet;
       var bars = '';
-      for (var c = 0; c < codes.length; c++) {
-        var pat = CODE128_PATTERNS[codes[c]];
+      for (var c = 0; c < encoded.codes.length; c++) {
+        var pat = CODE128_PATTERNS[encoded.codes[c]];
         if (!pat) return '';
         for (var d = 0; d < pat.length; d++) {
           var w = Number(pat[d]) * module;
-          if (d % 2 === 0) bars += '<rect x="' + x + '" y="0" width="' + w + '" height="' + height + '" fill="#000000"/>';
+          if (d % 2 === 0) {
+            bars += '<rect x="' + x + '" y="0" width="' + w + '" height="' + height + '" fill="#000"/>';
+          }
           x += w;
         }
       }
-      var total = x + margin * 2;
-      // Scale down if the paper is too narrow. NOTE: the scaling is done ONLY
-      // via the svg width/viewBox mapping — do NOT also scale the <g> transform,
-      // otherwise bars get double-scaled and render tiny + left-aligned.
-      var maxInner = Math.max(160, (Number(paperWidth) || 320) - 36);
-      var scale = total > maxInner ? maxInner / total : 1;
-      var drawW = Math.round(total * scale);
-      var drawH = Math.round((height + 18) * scale);
-      return '<svg xmlns="http://www.w3.org/2000/svg" width="' + drawW + '" height="' + drawH + '" viewBox="0 0 ' + total + ' ' + (height + 18) + '" style="max-width:100%;height:auto;display:inline-block;">' +
-        '<rect width="' + total + '" height="' + (height + 18) + '" fill="#ffffff"/>' +
-        '<g transform="translate(' + margin + ',0)">' + bars + '</g>' +
+      var totalW = x + quiet;
+      var totalH = height + 4;
+
+      // Do NOT CSS-shrink the SVG (max-width:100%) — that recreates unreadable thin bars.
+      return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="' + totalW + '" height="' + totalH + '"' +
+        ' viewBox="0 0 ' + totalW + ' ' + totalH + '"' +
+        ' shape-rendering="crispEdges"' +
+        ' style="display:block;margin:0 auto;background:#fff;">' +
+        '<rect width="100%" height="100%" fill="#ffffff"/>' +
+        bars +
         '</svg>' +
-        '<div style="text-align:center;font-size:12px;font-weight:700;letter-spacing:2px;margin-top:2px;">' + esc(text) + '</div>';
+        '<div style="text-align:center;font-size:11px;font-weight:800;letter-spacing:1.5px;margin-top:4px;font-family:monospace;">' +
+        esc(encoded.text) +
+        '</div>'
+      );
     } catch (err) {
       return '';
     }
@@ -524,6 +633,7 @@
     buildReceiptHtml: buildReceiptHtml,
     sampleReceiptSale: sampleReceiptSale,
     receiptBarcodeValue: receiptBarcodeValue,
+    saleMatchesReceiptScan: saleMatchesReceiptScan,
     code128BarcodeSvg: code128BarcodeSvg,
     money: money,
     printReceiptNode: printReceiptNode,

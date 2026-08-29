@@ -103,13 +103,17 @@ function mapLiveProduct(p) {
     categoryId: parentId || categoryId,
     subcategoryId: p.subcategoryId || p.subCategoryId || (parentId ? categoryId : null),
     name: p.name,
-    sku: p.sku || p.sku || '',
-    barcode: p.barcodeNumber || p.barcodeNumber || p.barcode || '',
-    price: Number(p.sellingPrice ?? p.sellingPrice ?? p.price ?? 0),
-    taxRate: Number(p.taxRate || p.taxRate || 0),
-    taxType: p.taxType || p.taxType || 'Exclusive',
-    currentStock: Number(p.currentStock ?? p.availableStock ?? p.currentStock ?? 0),
+    sku: p.sku || '',
+    barcode: p.barcodeNumber || p.barcode || '',
+    price: Number(p.sellingPrice ?? p.price ?? 0),
+    sellingPrice: Number(p.sellingPrice ?? p.price ?? 0),
+    costPrice: Number(p.costPrice ?? p.cost_price ?? p.landingCost ?? 0),
+    taxRate: Number(p.taxRate || 0),
+    taxType: p.taxType || 'Exclusive',
+    currentStock: Number(p.currentStock ?? p.availableStock ?? 0),
     mainImage: p.mainImage || (Array.isArray(p.images) && p.images[0]) || '',
+    stockUnitName: p.stockUnitName || p.stockUnit || 'Pcs',
+    stockUnit: p.stockUnit || p.stockUnitName || 'Pcs',
     isDeleted: p.isActive === false,
     isActive: p.isActive !== false,
     updatedAt: p.updatedAt,
@@ -145,6 +149,9 @@ async function seedFromLiveApis(accessToken, locationId) {
     masterSqlite.keepOnlyProductIds(products.map((p) => p.id));
   }
   if (custRows.length) localDb.saveCustomers(custRows);
+  if (prodRows.length) {
+    try { localDb.saveProducts(prodRows); } catch (_) { /* ignore */ }
+  }
   return { success: true, recovered: true, pages: 1, counts: masterSqlite.counts() };
 }
 
