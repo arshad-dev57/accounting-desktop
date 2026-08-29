@@ -1026,18 +1026,35 @@ function registerIpc() {
   ipcMain.handle('pos:byBarcode', async (_event, { code, locationId }) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    const needle = String(code || '').trim();
+    let needle = String(code || '').replace(/[\x00-\x1F\x7F]/g, '').trim();
     if (!needle) return { success: false, message: 'Barcode is required' };
 
+    let jsonId = '';
+    try {
+      const parsed = JSON.parse(needle);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        jsonId = String(parsed.sku || parsed.barcode || parsed.id || '').trim();
+      }
+    } catch {
+      /* plain barcode / QR */
+    }
+
+    const lookupKeys = [needle];
+    if (jsonId && jsonId !== needle) lookupKeys.push(jsonId);
+
     try { masterSqlite.reloadFromDisk(); } catch { /* ignore */ }
-    const local = masterSqlite.findByScanCode(needle);
-    if (local) return { success: true, data: local };
+    for (const key of lookupKeys) {
+      const local = masterSqlite.findByScanCode(key);
+      if (local) return { success: true, data: local };
+    }
 
     const cached = localDb.getProducts() || [];
-    const lower = needle.toLowerCase();
     const cachedHit = cached.find((p) =>
-      [p.barcode, p.barcodeNumber, p.sku, p.qrCode, p.qr_code]
-        .some((v) => String(v || '').trim().toLowerCase() === lower)
+      lookupKeys.some((key) => {
+        const lower = key.toLowerCase();
+        return [p.barcode, p.barcodeNumber, p.sku, p.qrCode, p.qr_code]
+          .some((v) => String(v || '').trim().toLowerCase() === lower);
+      })
     );
     if (cachedHit) return { success: true, data: cachedHit };
 
@@ -1081,10 +1098,48 @@ function registerIpc() {
 
     // 1) Upload queued sales
     if (salesQueue.length > 0) {
-      const res = await posApi.syncOfflineSales(token, { sales: salesQueue });
+      // Sanitize sales data before sending to backend
+      const sanitizedSales = salesQueue.map(sale => {
+        // Remove local shift ID as backend will handle shift assignment
+        const { shiftId, ...saleWithoutShiftId } = sale;
+        
+        return {
+          ...saleWithoutShiftId,
+          items: (sale.items || []).map(item => {
+            // Handle taxRate - if it's an object, extract the rate value
+            let taxRateValue = 0;
+            if (typeof item.taxRate === 'object' && item.taxRate !== null) {
+              taxRateValue = item.taxRate.rate || 0;
+            } else {
+              taxRateValue = Number(item.taxRate || 0);
+            }
+            
+            return {
+              ...item,
+              taxRate: taxRateValue
+            };
+          })
+        };
+      });
+      
+      const res = await posApi.syncOfflineSales(token, { sales: sanitizedSales });
       results.sales = res;
       if (res.success) {
         localDb.clearSalesQueue();
+        // Also clear synced sales from local SQLite database
+        try {
+          masterSqlite.reloadFromDiskSafe();
+          salesQueue.forEach(sale => {
+            try {
+              masterSqlite.deleteLocalSale(sale.id);
+            } catch (err) {
+              console.error(`Error deleting synced sale ${sale.id} from local DB:`, err.message);
+            }
+          });
+          console.log(`[sync] Cleaned ${salesQueue.length} synced sales from local SQLite.`);
+        } catch (err) {
+          console.error(`Error cleaning local SQLite:`, err.message);
+        }
         console.log(`[sync] ${salesQueue.length} sale(s) uploaded.`);
       } else {
         results.errors.push(`Sales sync failed: ${res.message}`);
@@ -1529,8 +1584,39 @@ function registerIpc() {
   ipcMain.handle('pos:voidSale', async (_event, { id, body }) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    // Bypassed/approved locally
-    return { success: true, message: 'Sale voided locally' };
+    
+    try {
+      // Delete from local SQLite database
+      masterSqlite.deleteLocalSale(id);
+      return { success: true, message: 'Sale deleted from local database' };
+    } catch (err) {
+      return { success: false, message: err.message || 'Error deleting sale from local database' };
+    }
+  });
+
+  ipcMain.handle('pos:deleteAllSales', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+
+    try {
+      // Delete all sales from local SQLite database
+      masterSqlite.reloadFromDiskSafe();
+      const allSales = masterSqlite.listAllLocalSales();
+      let deletedCount = 0;
+      
+      for (const sale of allSales) {
+        try {
+          masterSqlite.deleteLocalSale(sale.id);
+          deletedCount++;
+        } catch (err) {
+          console.error(`Error deleting sale ${sale.id}:`, err.message);
+        }
+      }
+      
+      return { success: true, message: `Deleted ${deletedCount} sales from local database` };
+    } catch (err) {
+      return { success: false, message: err.message || 'Error deleting all sales from local database' };
+    }
   });
 
   ipcMain.handle('pos:convertToInvoice', async (_event, { id, body }) => {

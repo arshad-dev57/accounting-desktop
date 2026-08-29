@@ -337,8 +337,6 @@ function setupTabs() {
         }
       });
 
-      if (targetTab === 'held') { try { loadHeldSales(); } catch (e) { console.warn('loadHeldSales not defined', e); } }
-      if (targetTab === 'shifts') { try { loadShiftHistory(); } catch (e) { console.warn('loadShiftHistory not defined', e); } }
       if (targetTab === 'reports') { try { loadShiftReports(); } catch (e) { console.warn('loadShiftReports not defined', e); } }
       if (targetTab === 'sales') { try { loadSalesRegister(); } catch (e) { console.warn('loadSalesRegister not defined', e); } }
       if (targetTab === 'categories') { try { loadLocalCatalog(); } catch (e) { console.warn('loadLocalCatalog not defined', e); } }
@@ -786,8 +784,65 @@ function isPosOverlayOpen() {
   });
 }
 
+function normalizeScanInput(code) {
+  if (typeof window.normalizeScanCode === 'function') return window.normalizeScanCode(code);
+  return String(code || '').replace(/[\x00-\x1F\x7F]/g, '').trim();
+}
+
+function routeScannedCode(code) {
+  const trimmed = normalizeScanInput(code);
+  if (!trimmed) return;
+
+  if (isReturnsTabActive()) {
+    const searchInp = document.getElementById('return-search-invoice');
+    if (searchInp) {
+      searchInp.value = trimmed;
+      document.getElementById('btn-search-return')?.click();
+    }
+    return;
+  }
+  if (isProductsTabActive()) {
+    const scanInp = document.getElementById('prod-barcode-scan');
+    const searchInp = document.getElementById('prod-search');
+    if (searchInp) {
+      searchInp.value = trimmed;
+      renderLocalProducts();
+    }
+    if (scanInp) {
+      scanInp.style.borderColor = '#22c55e';
+      scanInp.style.background = '#f0fdf4';
+      setTimeout(() => { scanInp.style.borderColor = ''; scanInp.style.background = '#fff'; }, 800);
+    }
+    return;
+  }
+  if (isStockTabActive()) {
+    const scanInp = document.getElementById('stock-barcode-scan');
+    if (scanInp) {
+      scanInp.value = trimmed;
+      const matched = localProducts.find((p) =>
+        [p.barcode, p.barcodeNumber, p.sku, p.qrCode, p.qr_code]
+          .some((v) => String(v || '').trim() === trimmed)
+      );
+      if (matched) {
+        stockSelectedProduct = matched;
+        const productSelect = document.getElementById('stock-product-select');
+        if (productSelect) productSelect.value = matched.id;
+        onStockProductSelected(matched);
+        showStockFormAlert('Product matched successfully!', 'success');
+      } else {
+        showStockFormAlert(`No local product found for barcode/SKU: ${trimmed}`, 'error');
+      }
+      scanInp.style.borderColor = '#22c55e';
+      scanInp.style.background = '#f0fdf4';
+      setTimeout(() => { scanInp.style.borderColor = ''; scanInp.style.background = '#fff'; }, 800);
+    }
+    return;
+  }
+  void applyScannedCode(trimmed);
+}
+
 async function applyScannedCode(code) {
-  const trimmed = String(code || '').trim();
+  const trimmed = normalizeScanInput(code);
   if (!trimmed) return;
   if (posSettings.enableBarcodeScanner === false) return;
   if (barcodeScanInp) barcodeScanInp.value = '';
@@ -816,135 +871,86 @@ async function applyScannedCode(code) {
 function attachHidBarcodeScanner() {
   let buffer = '';
   let lastAt = 0;
-  let fastCount = 0;
   let timer = null;
   const MIN_LEN = 3;
-  const IDLE_MS = 70;
-  const FAST_MS = 45;
+  // Fallback for wedge scanners that do not send Enter; must be long enough for full code
+  const IDLE_MS = 450;
 
-  const emit = (reason) => {
-    const wasFast = fastCount >= 2;
+  const clearBuffer = () => {
+    buffer = '';
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  const flushBuffer = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
     const code = buffer.trim();
     buffer = '';
-    fastCount = 0;
-    
-    // For returns tab, accept any non-empty code regardless of length or speed
-    if (isReturnsTabActive() && code.length > 0) {
-      console.log('[Barcode Scanner] Returns tab - accepting code:', code);
-      const searchInp = document.getElementById('return-search-invoice');
-      if (searchInp) {
-        searchInp.value = code;
-        console.log('[Barcode Scanner] Setting search input value and clicking search');
-        document.getElementById('btn-search-return')?.click();
-      } else {
-        console.log('[Barcode Scanner] Search input not found!');
-      }
-      return true;
-    }
-    
-    if (code.length < MIN_LEN) return false;
-    if (reason !== 'enter' && !wasFast) return false;
-    // Route to Products search when Products tab is active
-    if (isProductsTabActive()) {
-      const scanInp = document.getElementById('prod-barcode-scan');
-      const searchInp = document.getElementById('prod-search');
-      if (searchInp) {
-        searchInp.value = code;
-        renderLocalProducts();
-      }
-      if (scanInp) {
-        scanInp.style.borderColor = '#22c55e';
-        scanInp.style.background = '#f0fdf4';
-        setTimeout(() => { scanInp.style.borderColor = ''; scanInp.style.background = '#fff'; }, 800);
-      }
-      return true;
-    }
-    // Route to Stock In when Stock tab is active
-    if (isStockTabActive()) {
-      const scanInp = document.getElementById('stock-barcode-scan');
-      if (scanInp) {
-        scanInp.value = code;
-        const matched = localProducts.find(p => p.barcode === code || p.sku === code);
-        if (matched) {
-          stockSelectedProduct = matched;
-          const productSelect = document.getElementById('stock-product-select');
-          if (productSelect) productSelect.value = matched.id;
-          onStockProductSelected(matched);
-          showStockFormAlert('Product matched successfully!', 'success');
-        } else {
-          showStockFormAlert(`No local product found for barcode/SKU: ${code}`, 'error');
-        }
-        scanInp.style.borderColor = '#22c55e';
-        scanInp.style.background = '#f0fdf4';
-        setTimeout(() => { scanInp.style.borderColor = ''; scanInp.style.background = '#fff'; }, 800);
-      }
-      return true;
-    }
-    void applyScannedCode(code);
-    return true;
+    if (code.length < MIN_LEN) return;
+    routeScannedCode(code);
   };
 
   document.addEventListener('keydown', (e) => {
-    if (posSettings.enableBarcodeScanner === false) {
-      console.log('[Barcode Scanner] Scanner disabled in settings');
-      return;
-    }
-    // Disable global scanner on returns tab to avoid interfering with QR code scanning
-    if (isReturnsTabActive()) return;
-    if ((!isSellTabActive() && !isProductsTabActive() && !isStockTabActive()) || isPosOverlayOpen()) return;
+    if (posSettings.enableBarcodeScanner === false) return;
+    const onScanTab = isSellTabActive() || isProductsTabActive() || isStockTabActive() || isReturnsTabActive();
+    if (!onScanTab || isPosOverlayOpen()) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
 
     const target = e.target;
     const tag = String(target?.tagName || '').toLowerCase();
     const isScanField = target?.dataset?.posScan === '1' || target?.id === 'barcode-scan-box';
-    
+
     if (tag === 'textarea') return;
     if (tag === 'input' && !isScanField && !['text', 'search', 'number'].includes(String(target.type || '').toLowerCase())) {
       return;
     }
 
-    const now = Date.now();
-    if (e.key === 'Enter' || e.key === 'Tab') {
-      const wasFast = fastCount >= 2;
-      if (buffer.length >= MIN_LEN && (isScanField || wasFast)) {
+    const isEnter = e.key === 'Enter' || e.key === 'NumpadEnter';
+
+    // Dedicated scan inputs: use the field value on Enter (most reliable for USB scanners)
+    if (isScanField) {
+      if (isEnter || e.key === 'Tab') {
+        const typed = String(target.value || '').trim();
+        if (!typed) return;
         e.preventDefault();
         e.stopPropagation();
-        emit('enter');
-        return;
+        target.value = '';
+        clearBuffer();
+        routeScannedCode(typed);
       }
-      if (isScanField && barcodeScanInp?.value.trim()) {
+      return;
+    }
+
+    if (isEnter || e.key === 'Tab') {
+      if (buffer.trim().length >= MIN_LEN) {
         e.preventDefault();
         e.stopPropagation();
-        const typed = barcodeScanInp.value.trim();
-        barcodeScanInp.value = '';
-        buffer = '';
-        fastCount = 0;
-        void applyScannedCode(typed);
-        return;
+        flushBuffer();
+      } else {
+        clearBuffer();
       }
-      buffer = '';
-      fastCount = 0;
       return;
     }
 
     if (e.key.length !== 1) return;
 
-    if (lastAt && now - lastAt <= FAST_MS) fastCount += 1;
-    else fastCount = 0;
+    const now = Date.now();
+    // Slow manual typing in a search box is not a scanner wedge burst
+    if (tag === 'input' && lastAt && now - lastAt > 180) {
+      buffer = e.key;
+    } else {
+      buffer += e.key;
+    }
     lastAt = now;
-    buffer += e.key;
     if (timer) clearTimeout(timer);
-    timer = setTimeout(() => emit('idle'), IDLE_MS);
+    timer = setTimeout(flushBuffer, IDLE_MS);
   }, true);
 }
-
-barcodeScanInp?.addEventListener('keydown', (e) => {
-  if (e.key !== 'Enter') return;
-  e.preventDefault();
-  const code = barcodeScanInp.value.trim();
-  barcodeScanInp.value = '';
-  if (code) void applyScannedCode(code);
-});
 
 attachHidBarcodeScanner();
 setTimeout(() => barcodeScanInp?.focus(), 200);
@@ -2084,159 +2090,7 @@ document.getElementById('btn-search-return').addEventListener('click', async () 
   }
 });
 
-// ─── T3: HELD SALES TAB ───────────────────────────────────────────────────────
-async function loadHeldSales() {
-  const wrap = document.getElementById('held-sales-list-wrap');
-  wrap.innerHTML = '<div>Loading held sales...</div>';
-
-  const res = await api.pos.getHeldSales();
-  if (res?.success && Array.isArray(res.data)) {
-    if (res.data.length === 0) {
-      wrap.innerHTML = '<div style="color:var(--muted)">No held sales parked</div>';
-      return;
-    }
-
-    let html = `
-      <table class="returns-table">
-        <thead>
-          <tr>
-            <th>Customer</th>
-            <th>Date</th>
-            <th>Items</th>
-            <th>Amount</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-    `;
-
-    res.data.forEach(s => {
-      const dateStr = new Date(s.createdAt).toLocaleString();
-      const itemsStr = (s.items || []).map(i => i.productName).join(', ');
-      html += `
-        <tr>
-          <td><b>${s.customerName || 'Walk-in Customer'}</b></td>
-          <td>${dateStr}</td>
-          <td><span style="font-size:12px;color:var(--muted);" title="${itemsStr}">${s.items?.length || 0} items</span></td>
-          <td style="font-weight:700;color:var(--brand);">$${Number(s.totalAmount || s.grandTotal || 0).toFixed(2)}</td>
-          <td>
-            <button class="btn-qty btn-recall" data-id="${s.id}" style="width:70px;background-color:var(--brand);color:#fff;border:none;height:28px;">Recall</button>
-            <button class="btn-qty btn-del-held" data-id="${s.id}" style="width:70px;background-color:#ef4444;color:#fff;border:none;height:28px;margin-left:4px;">Delete</button>
-          </td>
-        </tr>
-      `;
-    });
-
-    html += '</tbody></table>';
-    wrap.innerHTML = html;
-
-    // Wire Recall / Delete
-    wrap.querySelectorAll('.btn-recall').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const id = btn.getAttribute('data-id');
-        const sale = res.data.find(s => s.id === id);
-        if (!sale) return;
-
-        // Recall into cart
-        cart = sale.items.map(i => ({
-          productId: i.productId || `custom-${Date.now()}-${i.productName}`,
-          productName: i.productName,
-          sku: i.sku || 'CUSTOM',
-          quantity: i.quantity,
-          unitPrice: i.unitPrice,
-          discount: i.discount || 0,
-          taxRate: i.taxRate || 0,
-          taxAmount: 0,
-          lineTotal: i.unitPrice * i.quantity,
-          currentStock: 9999,
-          isCustom: !i.productId || i.sku === 'CUSTOM'
-        }));
-
-        selectedCustomer = sale.customerId ? { id: sale.customerId, name: sale.customerName } : null;
-        customerSearchInp.value = sale.customerName || '';
-
-        // Go to Sell tab
-        document.querySelector('.tab-btn[data-tab="sell"]').click();
-        renderCartList();
-      });
-    });
-
-    wrap.querySelectorAll('.btn-del-held').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const id = btn.getAttribute('data-id');
-        if (!confirm('Are you sure you want to delete this held sale?')) return;
-        const delRes = await api.pos.deleteHeldSale(id);
-        if (delRes?.success) {
-          loadHeldSales();
-        } else {
-          alert(delRes?.message || 'Delete failed');
-        }
-      });
-    });
-
-  } else {
-    wrap.innerHTML = '<div>Could not load held sales</div>';
-  }
-}
-
-// ─── T4: SHIFTS HISTORY TAB ──────────────────────────────────────────────────
-async function loadShiftHistory() {
-  const wrap = document.getElementById('shifts-list-wrap');
-  wrap.innerHTML = '<div>Loading shifts history...</div>';
-
-  const res = await api.pos.getShiftHistory('limit=30');
-  if (res?.success && Array.isArray(res.data)) {
-    if (res.data.length === 0) {
-      wrap.innerHTML = '<div style="color:var(--muted)">No shifts found</div>';
-      return;
-    }
-
-    let html = `
-      <table class="shifts-table">
-        <thead>
-          <tr>
-            <th>Cashier</th>
-            <th>Terminal</th>
-            <th>Opened</th>
-            <th>Closed</th>
-            <th>Opening Cash</th>
-            <th>Actual Cash</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-    `;
-
-    res.data.forEach(s => {
-      const opened = new Date(s.openedAt).toLocaleString();
-      const closed = s.closedAt ? new Date(s.closedAt).toLocaleString() : '—';
-      const cashierName = s.cashier ? `${s.cashier.firstName} ${s.cashier.lastName}` : 'N/A';
-
-      html += `
-        <tr>
-          <td>${cashierName}</td>
-          <td>${s.terminal?.name || 'N/A'}</td>
-          <td>${opened}</td>
-          <td>${closed}</td>
-          <td>$${Number(s.openingCash || 0).toFixed(2)}</td>
-          <td>$${s.actualCash ? Number(s.actualCash).toFixed(2) : '—'}</td>
-          <td>
-            <span style="background-color: ${s.status === 'Open' ? '#10b981' : '#64748b'};color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;">
-              ${s.status}
-            </span>
-          </td>
-        </tr>
-      `;
-    });
-
-    html += '</tbody></table>';
-    wrap.innerHTML = html;
-  } else {
-    wrap.innerHTML = '<div>Could not load shifts history</div>';
-  }
-}
-
-// ─── T5: REPORTS TAB ──────────────────────────────────────────────────────────
+// ─── T3: REPORTS TAB ──────────────────────────────────────────────────────────
 async function loadShiftReports() {
   const wrap = document.getElementById('reports-cards-grid');
   wrap.innerHTML = '<div>Loading reports...</div>';
@@ -2405,6 +2259,28 @@ function closeSaleDetail() {
   const modal = document.getElementById('sale-detail-modal');
   if (modal) modal.style.display = 'none';
   salesRegisterOpenId = null;
+}
+
+async function deleteSale() {
+  if (!salesRegisterOpenId) {
+    alert('No sale selected for deletion.');
+    return;
+  }
+  
+  if (!confirm('Are you sure you want to delete this sale? This action cannot be undone.')) return;
+  
+  try {
+    const res = await api.pos.voidSale(salesRegisterOpenId, { reason: 'Deleted by user' });
+    if (res?.success) {
+      alert('Sale deleted successfully.');
+      closeSaleDetail();
+      loadSalesRegister();
+    } else {
+      alert(res?.message || 'Failed to delete sale');
+    }
+  } catch (err) {
+    alert('Error deleting sale: ' + err.message);
+  }
 }
 
 async function printSaleSlip() {
@@ -2849,7 +2725,7 @@ async function afterProductChange() {
   if (!scanInp) return;
 
   function applyProductBarcode(code) {
-    const trimmed = String(code || '').trim();
+    const trimmed = normalizeScanInput(code);
     if (!trimmed) return;
     // Push scanned value into the search field so renderLocalProducts() picks it up
     if (searchInp) {
@@ -3373,8 +3249,25 @@ srTo?.addEventListener('change', () => {
 });
 document.getElementById('btn-sales-print')?.addEventListener('click', () => printSalesReport());
 document.getElementById('btn-sales-pdf')?.addEventListener('click', () => exportSalesReportPdf());
+document.getElementById('btn-sales-delete-all')?.addEventListener('click', async () => {
+  if (!confirm('Are you sure you want to delete ALL sales? This action cannot be undone.')) return;
+  if (!confirm('This will permanently delete all POS sales from the system. Continue?')) return;
+  
+  try {
+    const res = await api.pos.deleteAllSales();
+    if (res?.success) {
+      alert('All sales have been deleted successfully.');
+      loadSalesRegister();
+    } else {
+      alert(res?.message || 'Failed to delete sales');
+    }
+  } catch (err) {
+    alert('Error deleting sales: ' + err.message);
+  }
+});
 document.getElementById('btn-detail-print')?.addEventListener('click', () => printSaleSlip());
 document.getElementById('btn-detail-pdf')?.addEventListener('click', () => exportSalePdf());
+document.getElementById('btn-detail-delete')?.addEventListener('click', async () => deleteSale());
 document.getElementById('sale-detail-close')?.addEventListener('click', closeSaleDetail);
 document.getElementById('sale-detail-modal')?.addEventListener('click', (e) => {
   if (e.target.id === 'sale-detail-modal') closeSaleDetail();
@@ -3452,12 +3345,15 @@ function initStockPanel() {
   barcodeInp.addEventListener('keydown', async (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      const code = barcodeInp.value.trim();
+      const code = normalizeScanInput(barcodeInp.value);
       if (!code) return;
       barcodeInp.value = '';
 
-      // Match barcode in localProducts
-      const matched = localProducts.find(p => p.barcode === code || p.sku === code);
+      // Match barcode / QR / SKU in localProducts
+      const matched = localProducts.find((p) =>
+        [p.barcode, p.barcodeNumber, p.sku, p.qrCode, p.qr_code]
+          .some((v) => String(v || '').trim() === code)
+      );
       if (matched) {
         stockSelectedProduct = matched;
         productSelect.value = matched.id;

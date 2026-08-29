@@ -18,15 +18,17 @@
   ];
 
   function normalizeScanCode(raw) {
-    const text = String(raw || '').trim();
+    // Strip control chars some USB scanners prefix/suffix (STX, ETX, CR, etc.)
+    let text = String(raw || '').replace(/[\x00-\x1F\x7F]/g, '').trim();
     if (!text) return '';
     try {
       const parsed = JSON.parse(text);
-      if (parsed && typeof parsed === 'object') {
-        return String(parsed.sku || parsed.barcode || parsed.id || text).trim();
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const fromJson = String(parsed.sku || parsed.barcode || parsed.id || '').trim();
+        if (fromJson) return fromJson;
       }
     } catch {
-      /* keep raw text */
+      /* plain barcode / QR text */
     }
     return text;
   }

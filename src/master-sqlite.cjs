@@ -811,6 +811,11 @@ function listAllLocalSales() {
   }));
 }
 
+function deleteLocalSale(id) {
+  run(`DELETE FROM local_sales WHERE id = ?`, [id]);
+  persist();
+}
+
 function addLocalReturn(ret) {
   const id = ret.id || `local-return-${Date.now()}`;
   run(
@@ -1319,6 +1324,7 @@ module.exports = {
   addLocalSale,
   listPendingSales,
   listAllLocalSales,
+  deleteLocalSale,
   addLocalReturn,
   listAllLocalReturns,
   listCatalog,

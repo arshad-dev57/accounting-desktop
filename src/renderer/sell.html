@@ -1388,12 +1388,6 @@
           <button class="tab-btn" data-tab="returns">
             <span>Returns</span>
           </button>
-          <button class="tab-btn" data-tab="held">
-            <span>Held</span>
-          </button>
-          <button class="tab-btn" data-tab="shifts">
-            <span>Shifts</span>
-          </button>
           <button class="tab-btn" data-tab="reports">
             <span>Reports</span>
           </button>
@@ -1545,25 +1539,6 @@
               </div>
             </div>
           </div>
-          <div class="view-panel" id="tab-held">
-            <div class="panel-content">
-              <div class="panel-header">
-                <h2>Held Sales</h2>
-              </div>
-              <div id="held-sales-list-wrap">
-              </div>
-            </div>
-          </div>
-
-          <div class="view-panel" id="tab-shifts">
-            <div class="panel-content">
-              <div class="panel-header">
-                <h2>Shift History</h2>
-              </div>
-              <div id="shifts-list-wrap">
-              </div>
-            </div>
-          </div>
           <div class="view-panel" id="tab-reports">
             <div class="panel-content">
               <div class="panel-header">
@@ -1598,7 +1573,8 @@
                    <input id="sales-date-from" type="date" style="padding:4px;font-size:12px;" />
                    <span>&ndash;</span>
                    <input id="sales-date-to" type="date" style="padding:4px;font-size:12px;" />
-                   <button class="btn-nav-action ghost" id="btn-sales-print" type="button" style="margin-left:auto;font-size:12px;">🖨 Print</button>
+                   <button class="btn-nav-action danger" id="btn-sales-delete-all" type="button" style="margin-left:auto;font-size:12px;">🗑 Delete All</button>
+                   <button class="btn-nav-action ghost" id="btn-sales-print" type="button" style="font-size:12px;">🖨 Print</button>
                    <button class="btn-nav-action ghost" id="btn-sales-pdf" type="button" style="font-size:12px;">📄 PDF</button>
                  </div>
                  <div id="sales-list-table"></div>
@@ -1623,6 +1599,7 @@
                      <div style="display:flex;gap:8px;margin-top:12px;">
                        <button class="btn-nav-action accent" id="btn-detail-print" type="button" style="font-size:12px;">🖨 Print</button>
                        <button class="btn-nav-action ghost" id="btn-detail-pdf" type="button" style="font-size:12px;">📄 PDF</button>
+                       <button class="btn-nav-action danger" id="btn-detail-delete" type="button" style="font-size:12px;">🗑 Delete</button>
                      </div>
             </div>
                   </div>
