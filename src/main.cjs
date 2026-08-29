@@ -1102,7 +1102,7 @@ function registerIpc() {
       const sanitizedSales = salesQueue.map(sale => {
         // Remove local shift ID as backend will handle shift assignment
         const { shiftId, ...saleWithoutShiftId } = sale;
-        
+
         return {
           ...saleWithoutShiftId,
           items: (sale.items || []).map(item => {
@@ -1113,7 +1113,7 @@ function registerIpc() {
             } else {
               taxRateValue = Number(item.taxRate || 0);
             }
-            
+
             return {
               ...item,
               taxRate: taxRateValue
@@ -1121,26 +1121,45 @@ function registerIpc() {
           })
         };
       });
-      
+
       const res = await posApi.syncOfflineSales(token, { sales: sanitizedSales });
       results.sales = res;
       if (res.success) {
-        localDb.clearSalesQueue();
+        // Only remove sales that were actually synced (success or skipped/duplicate).
+        // Failed ones stay in the queue so the next sync retries them.
+        const saleResults = Array.isArray(res.data) ? res.data : [];
+        const syncedIds = saleResults
+          .filter((r) => r.status === 'success' || r.status === 'skipped')
+          .map((r) => r.id);
+
+        if (syncedIds.length === salesQueue.length) {
+          localDb.clearSalesQueue();
+        } else if (syncedIds.length > 0) {
+          localDb.removeFromSalesQueue(syncedIds);
+        }
+
+        const failed = saleResults.filter((r) => r.status === 'failed');
+        if (failed.length > 0) {
+          results.errors.push(
+            `${failed.length} sale(s) failed to sync: ${failed.map((r) => r.reason || r.id).join('; ')}`
+          );
+        }
+
         // Also clear synced sales from local SQLite database
         try {
           masterSqlite.reloadFromDiskSafe();
-          salesQueue.forEach(sale => {
+          syncedIds.forEach(id => {
             try {
-              masterSqlite.deleteLocalSale(sale.id);
+              masterSqlite.deleteLocalSale(id);
             } catch (err) {
-              console.error(`Error deleting synced sale ${sale.id} from local DB:`, err.message);
+              console.error(`Error deleting synced sale ${id} from local DB:`, err.message);
             }
           });
-          console.log(`[sync] Cleaned ${salesQueue.length} synced sales from local SQLite.`);
+          console.log(`[sync] Cleaned ${syncedIds.length} synced sales from local SQLite.`);
         } catch (err) {
           console.error(`Error cleaning local SQLite:`, err.message);
         }
-        console.log(`[sync] ${salesQueue.length} sale(s) uploaded.`);
+        console.log(`[sync] ${syncedIds.length}/${salesQueue.length} sale(s) uploaded.`);
       } else {
         results.errors.push(`Sales sync failed: ${res.message}`);
       }

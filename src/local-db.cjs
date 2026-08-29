@@ -101,6 +101,14 @@ function clearSalesQueue() {
   return writeJson('queue_sales.json', []);
 }
 
+function removeFromSalesQueue(ids) {
+  const idSet = new Set(Array.isArray(ids) ? ids.map(String) : [String(ids)]);
+  const queue = getSalesQueue();
+  const remaining = queue.filter((s) => !idSet.has(String(s.id)));
+  writeJson('queue_sales.json', remaining);
+  return remaining.length;
+}
+
 // ─── RETURNS QUEUE (TO SYNC) ──────────────────────────────────────────────────
 function getReturnsQueue() {
   return readJson('queue_returns.json', []);
@@ -231,6 +239,7 @@ module.exports = {
   getSalesQueue,
   addSaleToQueue,
   clearSalesQueue,
+  removeFromSalesQueue,
   getReturnsQueue,
   addReturnToQueue,
   clearReturnsQueue,
