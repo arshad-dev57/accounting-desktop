@@ -66,9 +66,143 @@ function userData() {
   return app.getPath('userData');
 }
 
-function showLoginScreen() {
+function resolveCompanyId(user) {
+  return String(
+    user?.companyId ||
+      user?.company_id ||
+      user?.company?.id ||
+      user?.company?._id ||
+      ''
+  ).trim();
+}
+
+async function enrichUserProfile(user, token) {
+  if (!user || !token) return user;
+  if (resolveCompanyId(user)) return user;
+  try {
+    const me = await backendApi.getMe(token);
+    if (!me) return user;
+    return {
+      ...user,
+      ...me,
+      company: { ...(user.company || {}), ...(me.company || {}) },
+    };
+  } catch (err) {
+    console.warn('[scope] enrichUserProfile failed:', err.message);
+    return user;
+  }
+}
+
+let switchLocalDataChain = Promise.resolve();
+
+async function switchLocalDataForCompany(user) {
+  const runSwitch = async () => {
+    let companyId = resolveCompanyId(user);
+    if (!companyId) {
+      companyId = '_default';
+      console.warn('[scope] no companyId on user — using default local scope');
+    }
+    if (
+      masterSqlite.isOpenForCompany(companyId) &&
+      localDb.getActiveCompanyId() === companyId
+    ) {
+      activeShift = localDb.getActiveShift();
+      return true;
+    }
+    localDb.setCompanyScope(companyId);
+    await masterSqlite.switchCompany(userData(), companyId);
+    activeShift = localDb.getActiveShift();
+    try {
+      await appView?.webContents.executeJavaScript(
+        `try{sessionStorage.removeItem('pos_synced_catalog');}catch(e){}`
+      );
+    } catch {
+      /* renderer may not be ready */
+    }
+    try {
+      appView?.webContents.send('pos:company-scope-changed', { companyId });
+    } catch {
+      /* renderer may not be ready */
+    }
+    console.log('[scope] local data switched to company', companyId);
+    return true;
+  };
+
+  switchLocalDataChain = switchLocalDataChain.then(runSwitch, runSwitch);
+  return switchLocalDataChain;
+}
+
+async function ensureCatalogOpen(user) {
+  const companyId = resolveCompanyId(user) || '_default';
+  if (masterSqlite.isOpenForCompany(companyId) && localDb.getActiveCompanyId() === companyId) {
+    return true;
+  }
+  await switchLocalDataForCompany(user || {});
+  return masterSqlite.isOpen();
+}
+
+function showLoginScreen(opts = {}) {
   pendingLogin = null;
-  appView?.webContents.loadFile(path.join(__dirname, 'renderer', 'login.html'));
+  const message = typeof opts === 'string' ? opts : opts?.message;
+  const reason = typeof opts === 'object' ? opts?.reason || opts?.code : undefined;
+  const query = {};
+  if (message) query.msg = String(message);
+  if (reason) query.reason = String(reason);
+  const loadOpts = Object.keys(query).length ? { query } : undefined;
+  appView?.webContents.loadFile(path.join(__dirname, 'renderer', 'login.html'), loadOpts);
+}
+
+function isNetworkAccessError(message) {
+  return /fetch|ECONNREFUSED|ENOTFOUND|network|timed out|Cannot reach/i.test(String(message || ''));
+}
+
+async function validateSessionAccess(token) {
+  if (!token) {
+    return { ok: false, code: 'NO_SESSION', message: 'Please sign in.' };
+  }
+  const res = await posApi.fetchSessionStatus(token);
+  if (res.success) {
+    const payload = res.data || {};
+    if (payload.ok === false) {
+      return {
+        ok: false,
+        code: payload.code || 'SUBSCRIPTION_EXPIRED',
+        message: payload.message || 'Your subscription has expired. Please subscribe to continue.',
+        data: payload,
+      };
+    }
+    return { ok: true, code: 'OK', data: payload };
+  }
+  if (!res.status && isNetworkAccessError(res.message)) {
+    return { ok: true, code: 'OFFLINE', offline: true };
+  }
+  if (res.code === 'COMPANY_INACTIVE') {
+    return { ok: false, code: res.code, message: res.message };
+  }
+  if (res.status === 401) {
+    return {
+      ok: false,
+      code: res.code || 'USER_INACTIVE',
+      message: res.message || 'Your account has been deactivated. Please contact support.',
+    };
+  }
+  if (res.status === 403 && res.code) {
+    return { ok: false, code: res.code, message: res.message };
+  }
+  return {
+    ok: false,
+    code: 'SESSION_INVALID',
+    message: res.message || 'Session expired. Please sign in again.',
+  };
+}
+
+async function forceLogoutWithReason(code, message) {
+  authStore.clearSession(userData());
+  pendingLogin = null;
+  activeShift = null;
+  try { localDb.saveActiveShift(null); } catch { /* ignore */ }
+  showLoginScreen({ message, reason: code });
+  appView?.webContents.send('auth:access-denied', { code, message });
 }
 
 function showOtpScreen(email) {
@@ -83,6 +217,28 @@ function showShiftScreen() {
 
 function showSellScreen() {
   appView?.webContents.loadFile(path.join(__dirname, 'renderer', 'sell.html'));
+}
+
+function showRestaurantPosScreen(tab = 'counter') {
+  appView?.webContents.loadFile(path.join(__dirname, 'renderer', 'restaurant-pos.html'), {
+    query: { tab: String(tab || 'counter') },
+  });
+}
+
+function resolvePosMode(user) {
+  return String(user?.posMode || user?.company?.posMode || 'retail').toLowerCase();
+}
+
+function isKitchenRole(user) {
+  return String(user?.role || '').toLowerCase() === 'kitchen';
+}
+
+function enterPosForUser(user) {
+  if (resolvePosMode(user) === 'restaurant' && isKitchenRole(user)) {
+    showRestaurantPosScreen('kitchen');
+    return;
+  }
+  showSellScreen();
 }
 
 function showSalesScreen() {
@@ -129,9 +285,23 @@ function showPosScreen() {
   showShiftScreen();
 }
 
-function loadAuthOrPos() {
-  if (authStore.getValidSession(userData())) showShiftScreen();
-  else showLoginScreen();
+async function loadAuthOrPos() {
+  const session = authStore.getValidSession(userData());
+  if (!session?.accessToken) {
+    showLoginScreen();
+    return;
+  }
+  const check = await validateSessionAccess(session.accessToken);
+  if (!check.ok) {
+    await forceLogoutWithReason(check.code, check.message);
+    return;
+  }
+  const user = await enrichUserProfile(session.user, session.accessToken);
+  if (user && user !== session.user) {
+    authStore.writeSession(userData(), { ...session, user });
+  }
+  await switchLocalDataForCompany(user || session.user);
+  showShiftScreen();
 }
 
 function isAdminUser(user) {
@@ -167,8 +337,20 @@ function filterLocationsForUser(user, list) {
   return rows.filter((l) => set.has(String(l.id || l._id || '')));
 }
 
+function getUserAssignedTerminalId(user) {
+  const id = user?.assignedTerminalId || user?.assigned_terminal_id;
+  return id ? String(id).trim() : '';
+}
+
 function filterTerminalsForUser(user, list) {
   const rows = Array.isArray(list) ? list : [];
+  const assignedTerminalId = getUserAssignedTerminalId(user);
+
+  if (assignedTerminalId && !isAdminUser(user)) {
+    const match = rows.filter((t) => String(t.id) === assignedTerminalId);
+    return match.length ? match : [];
+  }
+
   const allowed = getUserLocationIds(user);
   if (allowed === null) return rows; // admin — all
   if (!allowed.length) return [];
@@ -177,6 +359,75 @@ function filterTerminalsForUser(user, list) {
     const locId = String(t.locationId || t.location?.id || '');
     return locId && set.has(locId);
   });
+}
+
+function normalizeServerShift(serverShift, user, terminals) {
+  if (!serverShift) return null;
+  const rows = Array.isArray(terminals) ? terminals : [];
+  const terminal =
+    serverShift.terminal ||
+    rows.find((t) => String(t.id) === String(serverShift.terminalId)) ||
+    null;
+  const cashier = serverShift.cashier || {};
+  const uid = currentUserId(user);
+  return {
+    id: serverShift.id,
+    terminalId: serverShift.terminalId,
+    locationId: terminal?.locationId || terminal?.location?.id || null,
+    userId: serverShift.cashierId || cashier.id || uid,
+    cashierId: serverShift.cashierId || cashier.id || uid,
+    status: serverShift.status,
+    openingCash: Number(serverShift.openingCash || 0),
+    openedAt: serverShift.openedAt,
+    suspendedAt: serverShift.suspendedAt || null,
+    terminal: terminal
+      ? {
+          ...terminal,
+          location: terminal.location || serverShift.terminal?.location || null,
+        }
+      : serverShift.terminal || null,
+    cashier: {
+      id: cashier.id || serverShift.cashierId || uid,
+      name:
+        [cashier.firstName, cashier.lastName].filter(Boolean).join(' ') ||
+        [user?.firstName, user?.lastName].filter(Boolean).join(' ') ||
+        user?.email ||
+        '',
+      role: user?.role,
+    },
+    fromServer: true,
+  };
+}
+
+function shiftAllowedForUser(shift, user, terminals) {
+  if (!shift) return false;
+  if (isAdminUser(user)) return true;
+  const uid = currentUserId(user);
+  const shiftUser = String(shift.cashier?.id || shift.userId || shift.cashierId || '').trim();
+  // Cashier owns this shift — always allow resume on re-login (same PC or not)
+  if (shiftUser && uid && shiftUser === uid) return true;
+  if (shiftUser && uid && shiftUser !== uid) return false;
+  const assignedTerminalId = getUserAssignedTerminalId(user);
+  if (assignedTerminalId && String(shift.terminalId) !== assignedTerminalId) return false;
+  const allowed = filterTerminalsForUser(user, terminals);
+  return allowed.some((t) => String(t.id) === String(shift.terminalId));
+}
+
+async function hydrateShiftFromServer(token, user) {
+  if (!token) return null;
+  try {
+    const res = await posApi.getCurrentShift(token);
+    if (!res.success || !res.data) return null;
+    const terminals = filterTerminalsForUser(user, localDb.getTerminals());
+    const normalized = normalizeServerShift(res.data, user, terminals);
+    if (!shiftAllowedForUser(normalized, user, terminals)) return null;
+    activeShift = normalized;
+    localDb.saveActiveShift(normalized);
+    return normalized;
+  } catch (err) {
+    console.warn('[shift] server hydrate failed:', err.message);
+    return null;
+  }
 }
 
 function currentUserId(sessionOrUser) {
@@ -245,6 +496,7 @@ function stampScopedPayload(auth, payload = {}) {
 
   return {
     ...payload,
+    companyId: resolveCompanyId(user) || payload.companyId || undefined,
     shiftId: activeShift?.id || payload.shiftId,
     terminalId: activeShift?.terminalId || payload.terminalId || terminal?.id,
     locationId: locationId || undefined,
@@ -274,7 +526,10 @@ function resetActiveShiftForUser(user) {
     const allowed = getUserLocationIds(user);
     const locOk = allowed === null || !locId || allowed.includes(locId);
     const userOk = !shiftUser || !uid || shiftUser === uid;
-    if (!locOk || !userOk || saved.status === 'Closed') {
+    const assignedTerminalId = getUserAssignedTerminalId(user);
+    const terminalOk =
+      !assignedTerminalId || String(saved.terminalId || '') === assignedTerminalId;
+    if (!locOk || !userOk || !terminalOk || saved.status === 'Closed') {
       console.log('[scope] clearing active shift for new user/location scope');
       localDb.saveActiveShift(null);
       activeShift = null;
@@ -394,6 +649,8 @@ async function completeLoginAndOpenPos(rawBody) {
     return { success: false, message: 'Login succeeded but user profile could not be loaded' };
   }
 
+  user = await enrichUserProfile(user, token);
+
   // Ensure location scope fields are present (getMe / OTP should include them)
   if (!Array.isArray(user.locationIds) && Array.isArray(user.locations)) {
     user.locationIds = user.locations.map((l) => l.id || l._id).filter(Boolean);
@@ -409,6 +666,7 @@ async function completeLoginAndOpenPos(rawBody) {
   });
   await applyAuthCookies(token, refreshToken);
   pendingLogin = null;
+  await switchLocalDataForCompany(user);
   resetActiveShiftForUser(user);
 
   // Seed local location/terminal caches scoped to this user
@@ -464,6 +722,19 @@ async function completeLoginAndOpenPos(rawBody) {
   }
 
   console.log('[desktop] session ready, opening shift screen', user.email || user.id);
+  const access = await validateSessionAccess(token);
+  if (!access.ok) {
+    authStore.clearSession(userData());
+    return { success: false, code: access.code, message: access.message };
+  }
+
+  const existingShift = await hydrateShiftFromServer(token, user);
+  if (existingShift?.status === 'Open') {
+    console.log('[desktop] resuming open shift for', user.email || user.id);
+    enterPosForUser(user);
+    return { success: true, resumed: true };
+  }
+
   showShiftScreen();
   return { success: true };
 }
@@ -1058,7 +1329,12 @@ function registerIpc() {
     const result = await backendApi.verifyLoginOtp(email, otp);
     if (!result.success) return result;
     const opened = await completeLoginAndOpenPos(result.data);
-    if (!opened.success) return opened;
+    if (!opened.success) {
+      if (opened.code) {
+        showLoginScreen({ message: opened.message, reason: opened.code });
+      }
+      return opened;
+    }
     return result;
   });
 
@@ -1169,34 +1445,63 @@ function registerIpc() {
   ipcMain.handle('pos:getCurrentShift', async () => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    activeShift = localDb.getActiveShift();
-    if (!activeShift) return { success: true, data: null };
+    const user = auth.session.user;
+    const terminals = filterTerminalsForUser(user, localDb.getTerminals());
 
-    // Attach terminal + location for sell screen (scoped)
-    const terminals = filterTerminalsForUser(auth.session.user, localDb.getTerminals());
-    const terminal =
-      terminals.find((t) => String(t.id) === String(activeShift.terminalId)) ||
-      null;
+    function packShift(shift) {
+      if (!shift) return null;
+      const terminal =
+        terminals.find((t) => String(t.id) === String(shift.terminalId)) ||
+        shift.terminal ||
+        null;
+      return {
+        ...shift,
+        terminal: terminal || shift.terminal || null,
+        cashier: shift.cashier || {
+          id: user?.id,
+          name: [user?.firstName, user?.lastName].filter(Boolean).join(' ') || user?.email,
+        },
+      };
+    }
 
-    // Non-admin: if active shift terminal is outside scope, force close it
-    if (!isAdminUser(auth.session.user) && activeShift.terminalId && !terminal) {
-      console.warn('[scope] active shift terminal outside user access — clearing');
+    const localShift = localDb.getActiveShift();
+
+    // Suspended locally — show resume screen; do not pull stale Open from server
+    if (localShift?.status === 'Suspended') {
+      if (!shiftAllowedForUser(localShift, user, terminals)) {
+        localDb.saveActiveShift(null);
+        activeShift = null;
+        return { success: true, data: null };
+      }
+      activeShift = localShift;
+      return { success: true, data: packShift(localShift) };
+    }
+
+    if (!localShift || localShift.status === 'Closed') {
+      const serverShift = await hydrateShiftFromServer(auth.session.accessToken, user);
+      if (serverShift?.status === 'Suspended') {
+        activeShift = serverShift;
+        localDb.saveActiveShift(serverShift);
+        return { success: true, data: packShift(serverShift) };
+      }
+      if (serverShift?.status === 'Open') {
+        activeShift = serverShift;
+        localDb.saveActiveShift(serverShift);
+        return { success: true, data: packShift(serverShift) };
+      }
+      activeShift = null;
+      return { success: true, data: null };
+    }
+
+    activeShift = localShift;
+    if (!shiftAllowedForUser(localShift, user, terminals)) {
+      console.warn('[scope] active shift outside user access — clearing');
       activeShift = null;
       localDb.saveActiveShift(null);
       return { success: true, data: null };
     }
 
-    return {
-      success: true,
-      data: {
-        ...activeShift,
-        terminal: terminal || activeShift.terminal || null,
-        cashier: activeShift.cashier || {
-          id: auth.session.user?.id,
-          name: [auth.session.user?.firstName, auth.session.user?.lastName].filter(Boolean).join(' ') || auth.session.user?.email,
-        },
-      },
-    };
+    return { success: true, data: packShift(localShift) };
   });
 
   ipcMain.handle('pos:getActiveShift', () => activeShift);
@@ -1217,8 +1522,15 @@ function registerIpc() {
         success: false,
         message: isAdminUser(auth.session.user)
           ? 'Terminal not found'
-          : 'You can only open a shift on a terminal at your assigned location',
+          : getUserAssignedTerminalId(auth.session.user)
+            ? 'You can only use your assigned terminal'
+            : 'You can only open a shift on a terminal at your assigned location',
       };
+    }
+
+    const assignedTerminalId = getUserAssignedTerminalId(auth.session.user);
+    if (assignedTerminalId && !isAdminUser(auth.session.user) && terminalId !== assignedTerminalId) {
+      return { success: false, message: 'You can only open a shift on your assigned terminal' };
     }
 
     const locations = filterLocationsForUser(auth.session.user, localDb.getLocations());
@@ -1227,6 +1539,50 @@ function registerIpc() {
       terminal.location ||
       null;
 
+    const openingCash = Number(payload?.openingCash);
+    const notes = payload?.notes || '';
+    if (!Number.isFinite(openingCash) || openingCash <= 0) {
+      return {
+        success: false,
+        message: 'Opening cash is required. Enter the cash in the drawer before starting.',
+      };
+    }
+
+    if (auth.session.accessToken) {
+      const apiRes = await posApi.openShift(auth.session.accessToken, {
+        terminalId,
+        openingCash,
+        notes,
+      });
+      if (apiRes?.success && apiRes.data) {
+        const newShift = normalizeServerShift(apiRes.data, auth.session.user, allowedTerminals);
+        activeShift = newShift;
+        localDb.saveActiveShift(newShift);
+        return { success: true, data: newShift };
+      }
+      if (apiRes?.status && !isNetworkAccessError(apiRes.message)) {
+        const msg = String(apiRes.message || '');
+        if (/already have an open|already in use|suspended shift/i.test(msg)) {
+          const existing = await hydrateShiftFromServer(auth.session.accessToken, auth.session.user);
+          if (existing && ['Open', 'Suspended'].includes(existing.status)) {
+            if (existing.status === 'Suspended' && auth.session.accessToken && existing.id) {
+              const resumeRes = await posApi.resumeShift(auth.session.accessToken, existing.id);
+              if (resumeRes?.success && resumeRes.data) {
+                const resumed = normalizeServerShift(resumeRes.data, auth.session.user, allowedTerminals);
+                activeShift = { ...resumed, status: 'Open' };
+                localDb.saveActiveShift(activeShift);
+                return { success: true, data: activeShift, resumed: true };
+              }
+            }
+            activeShift = existing.status === 'Open' ? existing : { ...existing, status: 'Open' };
+            localDb.saveActiveShift(activeShift);
+            return { success: true, data: activeShift, resumed: true };
+          }
+        }
+        return { success: false, message: apiRes.message || 'Could not open shift' };
+      }
+    }
+
     const shiftId = `local-shift-${Date.now()}`;
     const newShift = {
       id: shiftId,
@@ -1234,8 +1590,8 @@ function registerIpc() {
       locationId: location?.id || terminal.locationId || null,
       userId: auth.session.user?.id,
       status: 'Open',
-      openingCash: Number(payload?.openingCash || 0),
-      notes: payload?.notes || '',
+      openingCash,
+      notes,
       openedAt: new Date().toISOString(),
       cashFlows: [],
       terminal: {
@@ -1251,13 +1607,28 @@ function registerIpc() {
     };
     activeShift = newShift;
     localDb.saveActiveShift(newShift);
-    localDb.addShiftActionToQueue({ action: 'open', shiftId, payload });
+    localDb.addShiftActionToQueue({ action: 'open', shiftId, payload: { terminalId, openingCash, notes } });
     return { success: true, data: newShift };
   });
 
   ipcMain.handle('pos:resumeShift', async (_event, shiftId) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
+
+    if (auth.session.accessToken && shiftId && !String(shiftId).startsWith('local-shift-')) {
+      const apiRes = await posApi.resumeShift(auth.session.accessToken, shiftId);
+      if (apiRes?.success && apiRes.data) {
+        const terminals = filterTerminalsForUser(auth.session.user, localDb.getTerminals());
+        const normalized = normalizeServerShift(apiRes.data, auth.session.user, terminals);
+        activeShift = { ...normalized, status: 'Open' };
+        localDb.saveActiveShift(activeShift);
+        return { success: true, data: activeShift };
+      }
+      if (apiRes?.status && !isNetworkAccessError(apiRes.message)) {
+        return { success: false, message: apiRes.message || 'Could not resume shift' };
+      }
+    }
+
     activeShift = localDb.getActiveShift();
     if (activeShift && activeShift.id === shiftId) {
       activeShift.status = 'Open';
@@ -1271,18 +1642,33 @@ function registerIpc() {
   ipcMain.handle('pos:closeShift', async (_event, payload) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
+    if (!activeShift?.id) {
+      activeShift = localDb.getActiveShift();
+    }
     if (!activeShift?.id) return { success: false, message: 'No active shift' };
+
+    const actualCash = Number(payload?.actualCash || 0);
+    const notes = payload?.notes || '';
+    const shiftId = activeShift.id;
+
+    if (auth.session.accessToken && !String(shiftId).startsWith('local-shift-')) {
+      const apiRes = await posApi.closeShift(auth.session.accessToken, shiftId, { actualCash, notes });
+      if (apiRes?.status && !isNetworkAccessError(apiRes.message)) {
+        return { success: false, message: apiRes.message || 'Could not close shift on server' };
+      }
+    }
+
     const closedShift = {
       ...activeShift,
       status: 'Closed',
-      actualCash: Number(payload?.actualCash || 0),
-      notes: payload?.notes || '',
+      actualCash,
+      notes,
       closedAt: new Date().toISOString(),
     };
     activeShift = null;
     localDb.saveActiveShift(null);
     localDb.addShiftToHistory(closedShift);
-    localDb.addShiftActionToQueue({ action: 'close', shiftId: closedShift.id, payload });
+    localDb.addShiftActionToQueue({ action: 'close', shiftId: closedShift.id, payload: { actualCash, notes } });
     return { success: true, data: closedShift };
   });
 
@@ -1329,9 +1715,57 @@ function registerIpc() {
   });
 
   ipcMain.handle('pos:enterSell', () => {
-    if (!activeShift) return { success: false, message: 'Open a shift first' };
-    showSellScreen();
+    if (!activeShift) activeShift = localDb.getActiveShift();
+    if (!activeShift || activeShift.status !== 'Open') {
+      return { success: false, message: 'Open a shift first' };
+    }
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    enterPosForUser(auth.session.user);
     return { success: true };
+  });
+
+  ipcMain.handle('pos:enterRestaurantPos', (_event, tab) => {
+    if (!activeShift) activeShift = localDb.getActiveShift();
+    if (!activeShift || activeShift.status !== 'Open') {
+      return { success: false, message: 'Open a shift first' };
+    }
+    showRestaurantPosScreen(tab || 'counter');
+    return { success: true };
+  });
+
+  ipcMain.handle('pos:restaurantKitchenQueue', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    return posApi.getKitchenOrders(auth.session.accessToken);
+  });
+
+  ipcMain.handle('pos:restaurantReadyQueue', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    return posApi.getReadyOrders(auth.session.accessToken);
+  });
+
+  ipcMain.handle('pos:restaurantMarkPreparing', async (_event, orderId) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    return posApi.markRestaurantPreparing(auth.session.accessToken, orderId);
+  });
+
+  ipcMain.handle('pos:restaurantMarkReady', async (_event, orderId) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    return posApi.markRestaurantReady(auth.session.accessToken, orderId);
+  });
+
+  ipcMain.handle('pos:restaurantMarkPaid', async (_event, payload) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    const orderId = payload?.orderId;
+    if (!orderId) return { success: false, message: 'orderId required' };
+    return posApi.markRestaurantPaid(auth.session.accessToken, orderId, {
+      posSaleId: payload?.posSaleId || null,
+    });
   });
 
   ipcMain.handle('pos:getShiftHistory', async (_event, paramsString) => {
@@ -1348,16 +1782,24 @@ function registerIpc() {
   ipcMain.handle('pos:suspendShift', async (_event, shiftId) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    activeShift = localDb.getActiveShift();
-    if (activeShift && activeShift.id === shiftId) {
-      activeShift.status = 'Suspended';
-      localDb.saveActiveShift(activeShift);
-      localDb.addShiftActionToQueue({ action: 'suspend', shiftId });
-      const suspended = activeShift;
-      activeShift = null;
-      return { success: true, data: suspended };
+    if (!activeShift?.id) activeShift = localDb.getActiveShift();
+    if (!activeShift || activeShift.id !== shiftId) {
+      return { success: false, message: 'Shift not found locally or cannot suspend' };
     }
-    return { success: false, message: 'Shift not found locally or cannot suspend' };
+
+    if (auth.session.accessToken && !String(shiftId).startsWith('local-shift-')) {
+      const apiRes = await posApi.suspendShift(auth.session.accessToken, shiftId);
+      if (apiRes?.status && !isNetworkAccessError(apiRes.message)) {
+        return { success: false, message: apiRes.message || 'Could not suspend shift on server' };
+      }
+    }
+
+    activeShift.status = 'Suspended';
+    localDb.saveActiveShift(activeShift);
+    localDb.addShiftActionToQueue({ action: 'suspend', shiftId });
+    const suspended = { ...activeShift };
+    activeShift = null;
+    return { success: true, data: suspended };
   });
 
   ipcMain.handle('pos:recordCashFlow', async (_event, payload) => {
@@ -1605,8 +2047,22 @@ function registerIpc() {
         }
       }
 
-      results.cacheRefreshed = true;
-      console.log('[sync] Local caches refreshed from server.');
+      results.cacheRefreshed = !!(
+        (prodRes.success && Array.isArray(prodRes.data)) ||
+        (catRes.success && Array.isArray(catRes.data)) ||
+        (custRes.success && Array.isArray(custRes.data))
+      );
+      if (results.cacheRefreshed) {
+        console.log('[sync] Local caches refreshed from server.');
+      } else {
+        const why = [prodRes, catRes, custRes]
+          .map((r) => r?.message)
+          .filter(Boolean)
+          .slice(0, 2)
+          .join('; ') || 'API unreachable';
+        console.warn('[sync] Cache refresh skipped —', why);
+        results.errors.push(`Cache refresh failed: ${why}`);
+      }
     } catch (err) {
       results.errors.push(`Cache refresh failed: ${err.message}`);
       console.error('[sync] Cache refresh error:', err);
@@ -1915,19 +2371,12 @@ function registerIpc() {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
     try {
+      await ensureCatalogOpen(auth.session.user);
       masterSqlite.reloadFromDisk();
       return { success: true, data: masterSqlite.getCategoryTree() };
     } catch (err) {
-      // Local catalog not open / read failed — try to open it once, then retry.
-      console.warn('[pos:getCategories] local read failed, reopening:', err.message);
-      try {
-        const { app } = require('electron');
-        await masterSqlite.open(app.getPath('userData'));
-        return { success: true, data: masterSqlite.getCategoryTree() };
-      } catch (err2) {
-        console.error('[pos:getCategories] reopen failed', err2.message);
-        return { success: false, message: err2.message || 'Local catalog unavailable' };
-      }
+      console.warn('[pos:getCategories] local read failed:', err.message);
+      return { success: false, message: err.message || 'Local catalog unavailable' };
     }
   });
 
@@ -2064,6 +2513,34 @@ function registerIpc() {
     const auth = requireAdmin();
     if (!auth.ok) return auth.result;
     return posApi.deleteTerminal(auth.session.accessToken, id);
+  });
+
+  ipcMain.handle('pos:refreshScopeCache', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      const data = await refreshScopedCatalogCaches(auth.session.accessToken, auth.session.user);
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, message: err.message || 'Could not refresh scope cache' };
+    }
+  });
+
+  ipcMain.handle('pos:listUsers', async () => {
+    const auth = requireAdmin();
+    if (!auth.ok) return auth.result;
+    return posApi.listCompanyUsers(auth.session.accessToken);
+  });
+
+  ipcMain.handle('pos:assignUserTerminal', async (_event, payload) => {
+    const auth = requireAdmin();
+    if (!auth.ok) return auth.result;
+    const userId = String(payload?.userId || '').trim();
+    if (!userId) return { success: false, message: 'User id is required' };
+    const terminalId = payload?.terminalId ? String(payload.terminalId).trim() : null;
+    return posApi.updateCompanyUser(auth.session.accessToken, userId, {
+      assignedTerminalId: terminalId,
+    });
   });
 
   ipcMain.handle('pos:reopenShift', async (_event, id) => {
@@ -2205,11 +2682,10 @@ function registerIpc() {
     return { success: true };
   });
 
-  handle('catalog:list', () => {
+  handle('catalog:list', async () => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    // Refresh memory from disk so a stale/empty in-memory catalog can never
-    // hide on-disk categories from the Categories page.
+    await ensureCatalogOpen(auth.session.user);
     masterSqlite.reloadFromDiskSafe();
     return { success: true, data: masterSqlite.listCatalog() };
   });
@@ -2217,6 +2693,7 @@ function registerIpc() {
   handle('catalog:listSuppliers', async () => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
+    await ensureCatalogOpen(auth.session.user);
     masterSqlite.reloadFromDiskSafe();
     const rows = masterSqlite.listSuppliers();
     return { success: true, data: rows };
@@ -2532,6 +3009,25 @@ function registerIpc() {
     }
     return false;
   });
+
+  ipcMain.handle('codes:qrSvg', async (_event, { text, size } = {}) => {
+    try {
+      const QRCode = require('qrcode');
+      const value = String(text || '').trim();
+      if (!value) return { success: false, message: 'Empty QR value' };
+      const px = Math.max(96, Math.min(320, Number(size) || 160));
+      const svg = await QRCode.toString(value, {
+        type: 'svg',
+        width: px,
+        margin: 2,
+        errorCorrectionLevel: 'M',
+        color: { dark: '#000000', light: '#ffffff' },
+      });
+      return { success: true, svg };
+    } catch (err) {
+      return { success: false, message: err.message || 'QR render failed' };
+    }
+  });
 }
 
 function watchSessionExpiry() {
@@ -2544,18 +3040,17 @@ function watchSessionExpiry() {
     if (sessionData && authStore.isExpired(sessionData)) {
       authStore.clearSession(userData());
       appView?.webContents.send('auth:expired');
+      showLoginScreen();
       return;
     }
 
-    // Company active status ping (every ~2 min = every 4th tick)
+    // User / company / subscription status (every ~2 min = every 4th tick)
     pingCounter += 1;
     if (sessionData?.accessToken && pingCounter % 4 === 0) {
       try {
-        const statusRes = await posApi.checkUserStatus(sessionData.accessToken);
-        if (statusRes?.code === 'COMPANY_INACTIVE') {
-          authStore.clearSession(userData());
-          appView?.webContents.send('auth:company-inactive');
-          showLoginScreen();
+        const check = await validateSessionAccess(sessionData.accessToken);
+        if (!check.ok) {
+          await forceLogoutWithReason(check.code, check.message);
         }
       } catch (_) { /* network error — ignore, will retry next cycle */ }
     }
@@ -2563,14 +3058,26 @@ function watchSessionExpiry() {
 }
 
 app.whenReady().then(async () => {
-  // Initialise local JSON database in the OS user-data folder
   localDb.initialize(app.getPath('userData'));
-  try {
-    await masterSqlite.open(app.getPath('userData'));
-  } catch (err) {
-    console.error('[sqlite] failed to open catalog', err.message);
+  const bootSession = authStore.getValidSession(app.getPath('userData'));
+  let bootUser = bootSession?.user || null;
+  if (bootSession?.accessToken) {
+    bootUser = await enrichUserProfile(bootUser, bootSession.accessToken);
+    if (bootUser && bootUser !== bootSession.user) {
+      authStore.writeSession(app.getPath('userData'), { ...bootSession, user: bootUser });
+    }
+  }
+  if (bootUser) {
+    await switchLocalDataForCompany(bootUser);
+  } else {
+    try {
+      await masterSqlite.open(app.getPath('userData'), { companyId: '_default' });
+    } catch (err) {
+      console.error('[sqlite] failed to open default catalog', err.message);
+    }
   }
   rendererOrigin = config.originOf(config.resolveAppUrl(app.isPackaged));
+  console.log('[desktop] API URL:', config.resolveApiUrl());
   applyRendererSecurity();
   try {
     registerIpc();

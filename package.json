@@ -6,17 +6,19 @@
   "private": true,
   "main": "src/main.cjs",
   "scripts": {
-"dev": "electron .",
+    "dev": "electron .",
     "dev:wait": "env -u ELECTRON_RUN_AS_NODE wait-on http://127.0.0.1:3000 && env -u ELECTRON_RUN_AS_NODE electron .",
     "start": "env -u ELECTRON_RUN_AS_NODE electron .",
     "build": "electron-builder",
     "build:win": "electron-builder --win nsis",
     "build:mac": "electron-builder --mac dmg zip",
-    "build:linux": "electron-builder --linux AppImage deb"
+    "build:linux": "electron-builder --linux AppImage deb",
+    "copy-installer:web": "mkdir -p ../accounting-web-app/public/downloads && cp \"dist-electron/Bisonstechs POS-\"*\"-mac-arm64.dmg\" ../accounting-web-app/public/downloads/Bisonstechs-POS-1.0.0-mac-arm64.dmg"
   },
   "dependencies": {
     "dotenv": "^16.6.1",
     "electron-updater": "^6.6.2",
+    "qrcode": "^1.5.4",
     "sql.js": "^1.12.0"
   },
   "devDependencies": {

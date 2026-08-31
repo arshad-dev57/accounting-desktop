@@ -1393,6 +1393,45 @@
         background-color: #fee2e2;
         color: #b91c1c;
       }
+      .restaurant-ready-grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      }
+      .ready-order-card {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 14px;
+      }
+      .ready-order-card .ticket-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .ready-order-card .badge-ready {
+        font-size: 11px;
+        font-weight: 700;
+        padding: 3px 8px;
+        border-radius: 999px;
+        background: #dcfce7;
+        color: #166534;
+      }
+      .ready-order-card .lines { font-size: 13px; color: #334155; margin: 8px 0; }
+      .ready-order-card .pay-row { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+      .ready-order-card input { width: 100%; height: 38px; margin-top: 4px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; }
+      .ready-order-card .btn-pay-ready {
+        width: 100%;
+        height: 40px;
+        margin-top: 8px;
+        border: 0;
+        border-radius: 8px;
+        background: #059669;
+        color: #fff;
+        font-weight: 700;
+        cursor: pointer;
+      }
     </style>
   </head>
   <body>
@@ -1413,8 +1452,8 @@
           <span id="cashier-meta">Cashier: ...</span>
           <div class="time-badge" id="live-clock">00:00:00</div>
                               <div class="top-actions">
+             <button class="btn-nav-action ghost hidden" id="btn-kitchen-display">Kitchen</button>
              <button class="btn-nav-action ghost" id="btn-sync-offline">Sync</button>
-             <button class="btn-nav-action ghost" id="btn-admin" style="display:none;">Admin</button>
              <button class="btn-nav-action ghost" id="btn-cash-flow">Cash In/Out</button>
              <button class="btn-nav-action accent" id="btn-suspend-shift">Suspend</button>
              <button class="btn-nav-action danger" id="btn-trigger-close-shift">Close Shift</button>
@@ -1429,6 +1468,9 @@
         <div class="sidebar">
           <button class="tab-btn active" data-tab="sell">
             <span>Sell</span>
+          </button>
+          <button class="tab-btn hidden" data-tab="ready-orders" id="tab-btn-ready-orders">
+            <span>Ready orders</span>
           </button>
           <button class="tab-btn" data-tab="returns">
             <span>Returns</span>
@@ -1558,6 +1600,19 @@
                   <button class="btn-hold" id="btn-hold-sale-trigger" disabled>⏸️ Hold Sale</button>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div class="view-panel" id="tab-ready-orders">
+            <div class="panel-content">
+              <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                <div>
+                  <h2 style="margin:0;">Ready orders</h2>
+                  <p style="margin:4px 0 0;font-size:12px;color:var(--muted);">Kitchen-ready tickets — take payment on this terminal (saved locally, then Sync).</p>
+                </div>
+                <button class="btn-nav-action ghost" id="btn-refresh-ready-orders" type="button">↻ Refresh</button>
+              </div>
+              <div id="ready-orders-list" class="restaurant-ready-grid"></div>
             </div>
           </div>
 
@@ -2146,14 +2201,15 @@
                 <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">
                   <div>
                     <label class="pf-label">Barcode</label>
-                    <div class="pf-hint">Scan an existing barcode, or auto-generate from SKU.</div>
+                    <div class="pf-hint">Scan an existing barcode, or auto-generate from SKU. Preview is scannable CODE128.</div>
                   </div>
                   <div style="display:flex;gap:8px;">
                     <button type="button" class="btn-nav-action accent" id="pf-barcode-scan">Scan</button>
                     <button type="button" class="btn-nav-action ghost" id="pf-barcode-auto">Auto generate</button>
                   </div>
                 </div>
-                <input class="pf-input" id="pf-barcode" placeholder="Scan or auto-generate a barcode" style="margin-top:8px;" />
+                <input class="pf-input" id="pf-barcode" autocomplete="off" placeholder="Scan or auto-generate a barcode" style="margin-top:8px;" />
+                <div id="pf-barcode-preview" style="margin-top:12px;padding:12px;border:1px dashed #cbd5e1;border-radius:10px;background:#fff;min-height:88px;display:flex;align-items:center;justify-content:center;"></div>
               </div>
               <div class="pf-span" style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#f8fafc;">
                 <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">
@@ -2166,7 +2222,8 @@
                     <button type="button" class="btn-nav-action ghost" id="pf-qr-from-sku">Auto generate</button>
                   </div>
                 </div>
-                <input class="pf-input" id="pf-qrCode" placeholder="Scan or auto-generate a QR number" style="margin-top:8px;" />
+                <input class="pf-input" id="pf-qrCode" autocomplete="off" placeholder="Scan or auto-generate a QR number" style="margin-top:8px;" />
+                <div id="pf-qr-preview" style="margin-top:12px;padding:12px;border:1px dashed #cbd5e1;border-radius:10px;background:#fff;min-height:140px;display:flex;align-items:center;justify-content:center;"></div>
               </div>
               <div><label class="pf-label">Product Type</label><select class="pf-select" id="pf-productType"><option value="Physical">Physical</option><option value="Service">Service</option><option value="Digital">Digital</option><option value="Raw Material">Raw Material</option></select></div>
               <div class="pf-check"><input type="checkbox" id="pf-isActive" checked /><label for="pf-isActive">Active</label></div>
@@ -2329,6 +2386,7 @@
     <script src="./location.js"></script>
     <script src="./scan-code.js"></script>
     <script src="./pos-receipt.js"></script>
+    <script src="./product-codes.js"></script>
     <script src="./sell.js"></script>
   </body>
 </html>

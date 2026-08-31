@@ -4,11 +4,24 @@ const emailEl = document.getElementById('email');
 const passwordEl = document.getElementById('password');
 const submitBtn = document.getElementById('submit');
 const errorEl = document.getElementById('error');
+const blockedBanner = document.getElementById('blocked-banner');
 
 function showError(message) {
   errorEl.textContent = message || 'Login failed';
   errorEl.style.display = 'block';
 }
+
+(function showBlockedReason() {
+  const params = new URLSearchParams(window.location.search);
+  const msg = params.get('msg');
+  if (!msg) return;
+  if (blockedBanner) {
+    blockedBanner.textContent = msg;
+    blockedBanner.style.display = 'block';
+  } else {
+    showError(msg);
+  }
+})();
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();

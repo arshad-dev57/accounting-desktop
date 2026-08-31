@@ -6,14 +6,109 @@
 const fs = require('fs');
 const path = require('path');
 
+let basePath = '';
 let dbPath = '';
+let activeCompanyId = '';
+
+const DATA_FILES = [
+  'cache_products.json',
+  'cache_categories.json',
+  'cache_customers.json',
+  'cache_tax_context.json',
+  'cache_locations.json',
+  'cache_terminals.json',
+  'queue_sales.json',
+  'queue_returns.json',
+  'queue_shifts.json',
+  'queue_held.json',
+  'active_shift.json',
+  'history_shifts.json',
+  'receipt_settings.json',
+];
+
+function sanitizeCompanyId(companyId) {
+  return String(companyId || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function companyDir(companyId) {
+  return path.join(basePath, 'companies', sanitizeCompanyId(companyId));
+}
 
 function initialize(userDataPath) {
+  basePath = userDataPath;
   dbPath = userDataPath;
-  // Ensure the directory exists
+  activeCompanyId = '';
+  if (!fs.existsSync(basePath)) {
+    fs.mkdirSync(basePath, { recursive: true });
+  }
+}
+
+function getActiveCompanyId() {
+  return activeCompanyId;
+}
+
+function migrateLegacyFlatFiles(companyId) {
+  if (!basePath || !companyId) return;
+  const marker = path.join(basePath, 'legacy_local_migrated.json');
+  if (fs.existsSync(marker)) return;
+
+  const hasLegacy = DATA_FILES.some((f) => fs.existsSync(path.join(basePath, f)));
+  if (!hasLegacy) return;
+
+  const target = companyDir(companyId);
+  if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
+
+  // Claim migration atomically so parallel login/boot calls do not race rename().
+  try {
+    fs.writeFileSync(
+      marker,
+      JSON.stringify({ status: 'migrating', companyId: String(companyId) }, null, 2),
+      { flag: 'wx' }
+    );
+  } catch {
+    return;
+  }
+
+  for (const filename of DATA_FILES) {
+    const src = path.join(basePath, filename);
+    const dst = path.join(target, filename);
+    if (!fs.existsSync(src) || fs.existsSync(dst)) continue;
+    try {
+      fs.copyFileSync(src, dst);
+      try {
+        fs.unlinkSync(src);
+      } catch {
+        /* keep src if delete fails — dst copy succeeded */
+      }
+    } catch (err) {
+      console.warn('[Local DB] legacy migrate skip', filename, err.message);
+    }
+  }
+
+  try {
+    fs.writeFileSync(
+      marker,
+      JSON.stringify({ companyId: String(companyId), migratedAt: new Date().toISOString() }, null, 2)
+    );
+    console.log('[Local DB] migrated legacy flat files to company', companyId);
+  } catch (err) {
+    console.warn('[Local DB] legacy marker finalize failed', err.message);
+  }
+}
+
+function setCompanyScope(companyId) {
+  const next = String(companyId || '').trim();
+  if (!next) return false;
+  if (activeCompanyId === next && dbPath === companyDir(next)) return true;
+
+  activeCompanyId = next;
+  dbPath = companyDir(next);
   if (!fs.existsSync(dbPath)) {
     fs.mkdirSync(dbPath, { recursive: true });
   }
+  migrateLegacyFlatFiles(next);
+  console.log('[Local DB] company scope →', next);
+  return true;
 }
 
 // ─── HELPER FOR FILE I/O ──────────────────────────────────────────────────────
@@ -273,6 +368,8 @@ function saveReceiptSettings(settings) {
 
 module.exports = {
   initialize,
+  setCompanyScope,
+  getActiveCompanyId,
   getProducts,
   saveProducts,
   getCategories,

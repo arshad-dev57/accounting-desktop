@@ -2,19 +2,24 @@
 const masterSqlite = require('./master-sqlite.cjs');
 const posApi = require('./pos-api.cjs');
 const localDb = require('./local-db.cjs');
+const config = require('./config.cjs');
 
 async function checkOnline(accessToken) {
   const res = await posApi.checkConnectivity(accessToken);
   return { online: res.online === true, ...res };
 }
 
-function offlineResult() { 
+function offlineResult(conn = {}) {
+  const apiUrl = conn.apiUrl || config.resolveApiUrl();
   return {
     success: false,
     online: false,
     retryable: true,
     code: 'OFFLINE',
-    message: 'No internet connection. Sync skipped. Please reconnect and try again.',
+    apiUrl,
+    message:
+      conn.message ||
+      `Cannot reach API at ${apiUrl}. Sync skipped.`,
   };
 }
 
@@ -158,7 +163,7 @@ async function seedFromLiveApis(accessToken, locationId) {
 async function syncMasterData(accessToken, locationId, opts = {}) {
   if (opts.push !== false) {
     const conn = await checkOnline(accessToken);
-    if (!conn.online) return offlineResult();
+    if (!conn.online) return offlineResult(conn);
     const pushed = await pushPendingCatalog(accessToken);
     if (!pushed.success) return pushed;
   }
@@ -232,7 +237,7 @@ async function syncMasterData(accessToken, locationId, opts = {}) {
 async function refreshCatalog(accessToken, locationId) {
   const conn = await checkOnline(accessToken);
   if (!conn.online) {
-    return offlineResult();
+    return offlineResult(conn);
   }
 
   let push = { success: true };
@@ -276,7 +281,7 @@ async function refreshCatalog(accessToken, locationId) {
 
 async function syncBidirectional(accessToken, opts = {}) {
   const conn = await checkOnline(accessToken);
-  if (!conn.online) return offlineResult();
+  if (!conn.online) return offlineResult(conn);
 
   const pending = masterSqlite.listPendingSync();
   const total = pending.categories.length + pending.subcategories.length + pending.products.length;

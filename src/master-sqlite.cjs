@@ -7,6 +7,7 @@ const config = require('./config.cjs');
 let SQL = null;
 let db = null;
 let dbFile = '';
+let activeCompanyId = '';
 
 function persist() {
   if (!db || !dbFile) return;
@@ -33,10 +34,12 @@ function reloadFromDiskSafe() {
 }
 
 function run(sql, params = []) {
+  if (!db) throw new Error('Local catalog database is not open');
   db.run(sql, params);
 }
 
 function all(sql, params = []) {
+  if (!db) throw new Error('Local catalog database is not open');
   const stmt = db.prepare(sql);
   if (params.length) stmt.bind(params);
   const rows = [];
@@ -164,14 +167,81 @@ function migrate() {
   `);
 }
 
-async function open(userDataPath) {
-  if (db) return;
-  const initSqlJs = require('sql.js');
-  const wasmDir = path.join(path.dirname(require.resolve('sql.js/package.json')), 'dist');
-  SQL = await initSqlJs({
-    locateFile: (file) => path.join(wasmDir, file),
-  });
-  dbFile = path.join(userDataPath, 'pos-master.sqlite');
+function sanitizeCompanyId(companyId) {
+  return String(companyId || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function companyDataDir(userDataPath, companyId) {
+  if (!companyId) return userDataPath;
+  const dir = path.join(userDataPath, 'companies', sanitizeCompanyId(companyId));
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function migrateLegacySqlite(userDataPath, companyId, targetDbFile) {
+  if (!companyId || fs.existsSync(targetDbFile)) return;
+  const marker = path.join(userDataPath, 'legacy_local_migrated.json');
+  const legacyFile = path.join(userDataPath, 'pos-master.sqlite');
+  if (!fs.existsSync(legacyFile)) return;
+  if (fs.existsSync(marker)) {
+    try {
+      const info = JSON.parse(fs.readFileSync(marker, 'utf8'));
+      if (String(info.companyId) !== String(companyId)) return;
+    } catch {
+      return;
+    }
+  }
+  fs.copyFileSync(legacyFile, targetDbFile);
+  console.log('[sqlite] copied legacy catalog into company scope', companyId);
+}
+
+async function close() {
+  if (!db) return;
+  try {
+    persist();
+  } catch {
+    /* ignore */
+  }
+  try {
+    db.close();
+  } catch {
+    /* ignore */
+  }
+  db = null;
+  activeCompanyId = '';
+}
+
+function getActiveCompanyId() {
+  return activeCompanyId;
+}
+
+function isOpenForCompany(companyId) {
+  if (!db) return false;
+  const next = sanitizeCompanyId(companyId || '_default');
+  return activeCompanyId === next;
+}
+
+async function open(userDataPath, options = {}) {
+  const companyId = options?.companyId ? String(options.companyId).trim() : '_default';
+  const dataDir = companyDataDir(userDataPath, companyId);
+  const nextDbFile = path.join(dataDir, 'pos-master.sqlite');
+  const nextScope = sanitizeCompanyId(companyId);
+
+  if (db && dbFile === nextDbFile && activeCompanyId === nextScope) return;
+
+  await close();
+
+  if (!SQL) {
+    const initSqlJs = require('sql.js');
+    const wasmDir = path.join(path.dirname(require.resolve('sql.js/package.json')), 'dist');
+    SQL = await initSqlJs({
+      locateFile: (file) => path.join(wasmDir, file),
+    });
+  }
+
+  dbFile = nextDbFile;
+  migrateLegacySqlite(userDataPath, companyId, dbFile);
+
   if (fs.existsSync(dbFile)) {
     db = new SQL.Database(fs.readFileSync(dbFile));
   } else {
@@ -201,6 +271,15 @@ async function open(userDataPath) {
   run(`UPDATE subcategories SET sync_status = 'SYNCED' WHERE sync_status IS NULL`);
   run(`UPDATE products SET sync_status = 'SYNCED' WHERE sync_status IS NULL`);
   persist();
+  activeCompanyId = nextScope;
+}
+
+function isOpen() {
+  return Boolean(db);
+}
+
+async function switchCompany(userDataPath, companyId) {
+  await open(userDataPath, { companyId });
 }
 
 function addColumnIfMissing(table, column, type) {
@@ -1341,6 +1420,11 @@ function pendingCounts() {
 
 module.exports = {
   open,
+  close,
+  switchCompany,
+  isOpen,
+  isOpenForCompany,
+  getActiveCompanyId,
   getCursor,
   resetCursor,
   clearCatalog,

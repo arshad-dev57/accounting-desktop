@@ -1,11 +1,12 @@
 const api = window.bisonDesktop;
-const TABS = ['Terminals', 'Shifts', 'Sales', 'Returns', 'Receipt', 'Printer', 'Scanner', 'Payments', 'Tax', 'Audit Log'];
+const TABS = ['Terminals', 'Users', 'Shifts', 'Sales', 'Returns', 'Receipt', 'Printer', 'Scanner', 'Payments', 'Tax', 'Audit Log'];
 const SETTINGS_KEY = 'pos_settings_v1';
 
 let page = 1;
 let currentTab = 'Terminals';
 let locations = [];
 let terminals = [];
+let companyUsers = [];
 
 function isAdminRole(role) {
   const r = String(role || '').toLowerCase().trim();
@@ -39,6 +40,45 @@ function badge(status) {
   const s = String(status || '');
   const cls = /open|active|completed/i.test(s) ? 'ok-badge' : /suspend/i.test(s) ? 'warn-badge' : 'off-badge';
   return `<span class="badge ${cls}">${s || '—'}</span>`;
+}
+
+function userDisplayName(u) {
+  const name = [u.firstName, u.lastName].filter(Boolean).join(' ').trim();
+  return name || u.email || 'User';
+}
+
+function userLocationIds(u) {
+  return (u.locations || []).map((l) => String(l.id || l.locationId || '')).filter(Boolean);
+}
+
+function usersEligibleForLocation(users, locationId) {
+  const active = (users || []).filter((u) => u.isActive !== false);
+  if (!locationId) return active;
+  const loc = String(locationId);
+  return active.filter((u) => {
+    const locIds = userLocationIds(u);
+    if (!locIds.length) return true;
+    return locIds.includes(loc);
+  });
+}
+
+function assignedUserForTerminal(users, terminalId) {
+  return (users || []).find((u) => String(u.assignedTerminalId || '') === String(terminalId));
+}
+
+function renderTerminalUserOptions(users, locationId, selectedUserId) {
+  const eligible = usersEligibleForLocation(users, locationId);
+  return [
+    '<option value="">— No user —</option>',
+    ...eligible.map((u) => {
+      const assignedElsewhere = u.assignedTerminalId && String(u.assignedTerminalId) !== String(selectedUserId || '');
+      const suffix = assignedElsewhere && u.assignedTerminal
+        ? ` (on ${u.assignedTerminal.name || u.assignedTerminal.code})`
+        : '';
+      const sel = selectedUserId && String(u.id) === String(selectedUserId) ? ' selected' : '';
+      return `<option value="${u.id}"${sel}>${userDisplayName(u)}${suffix}</option>`;
+    }),
+  ].join('');
 }
 
 function loadSettings() {
@@ -91,6 +131,7 @@ function setTab(name) {
   document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
   const id = {
     Terminals: 'panel-terminals',
+    Users: 'panel-users',
     Shifts: 'panel-shifts',
     Sales: 'panel-sales',
     Returns: 'panel-returns',
@@ -108,6 +149,7 @@ function setTab(name) {
 async function loadTab() {
   showError('');
   if (currentTab === 'Terminals') return loadTerminals();
+  if (currentTab === 'Users') return loadUsers();
   if (currentTab === 'Shifts') return loadShifts();
   if (currentTab === 'Sales') return loadSales();
   if (currentTab === 'Returns') return loadReturns();
@@ -122,21 +164,105 @@ async function loadLocations() {
   locations = asList(res);
 }
 
+async function loadUsers() {
+  const wrap = document.getElementById('panel-users');
+  wrap.innerHTML = '<p class="muted">Loading users…</p>';
+  await api.pos.refreshScopeCache();
+  const [usersRes, termRes] = await Promise.all([
+    api.pos.listUsers(),
+    api.pos.listTerminals(),
+  ]);
+  if (!usersRes?.success) {
+    wrap.innerHTML = `<p class="error">${usersRes?.message || 'Failed to load users'}</p>`;
+    return;
+  }
+  terminals = asList(termRes);
+  const users = asList(usersRes);
+  wrap.innerHTML = `
+    <div class="row">
+      <h2>User terminal assignment (${users.length})</h2>
+    </div>
+    <p class="muted" style="margin-bottom:12px">
+      Assign each cashier a POS terminal. On login they will only see that terminal, and an open shift will resume automatically.
+    </p>
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Role</th>
+            <th>Locations</th>
+            <th>Assigned terminal</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${users.map((u) => {
+            const locNames = (u.locations || []).map((l) => l.name).filter(Boolean).join(', ') || '—';
+            const opts = [
+              `<option value="">— No terminal —</option>`,
+              ...terminals.map((t) => {
+                const label = `${t.name || t.code}${t.location?.name ? ` · ${t.location.name}` : ''}`;
+                const sel = String(u.assignedTerminalId || '') === String(t.id) ? ' selected' : '';
+                return `<option value="${t.id}"${sel}>${label}</option>`;
+              }),
+            ].join('');
+            return `<tr data-user="${u.id}">
+              <td>
+                <strong>${u.firstName || ''} ${u.lastName || ''}</strong>
+                <div class="muted">${u.email || ''}</div>
+              </td>
+              <td>${u.role || 'user'}</td>
+              <td class="muted">${locNames}</td>
+              <td><select class="user-terminal-select" data-user="${u.id}">${opts}</select></td>
+              <td><button class="btn btn-brand user-terminal-save" data-user="${u.id}" type="button">Save</button></td>
+            </tr>`;
+          }).join('') || '<tr><td colspan="5" class="muted">No users found</td></tr>'}
+        </tbody>
+      </table>
+    </div>`;
+
+  wrap.querySelectorAll('.user-terminal-save').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const userId = btn.dataset.user;
+      const select = wrap.querySelector(`.user-terminal-select[data-user="${userId}"]`);
+      const terminalId = select?.value || '';
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      const res = await api.pos.assignUserTerminal({ userId, terminalId: terminalId || null });
+      btn.disabled = false;
+      btn.textContent = 'Save';
+      if (!res?.success) {
+        alert(res?.message || 'Could not save terminal assignment');
+        return;
+      }
+      btn.textContent = 'Saved';
+      setTimeout(() => { btn.textContent = 'Save'; }, 1200);
+    });
+  });
+}
+
 async function loadTerminals() {
   const wrap = document.getElementById('panel-terminals');
   wrap.innerHTML = '<p class="muted">Loading terminals…</p>';
-  const [termRes] = await Promise.all([api.pos.listTerminals(), locations.length ? null : loadLocations()]);
+  const [termRes, usersRes] = await Promise.all([
+    api.pos.listTerminals(),
+    api.pos.listUsers(),
+    locations.length ? null : loadLocations(),
+  ]);
   if (!termRes?.success) {
     wrap.innerHTML = `<p class="error">${termRes?.message || 'Failed to load terminals'}</p>`;
     return;
   }
   terminals = asList(termRes);
+  companyUsers = usersRes?.success ? asList(usersRes) : [];
   wrap.innerHTML = `
     <div class="row">
       <h2>Terminals (${terminals.length})</h2>
       <button class="btn btn-brand" id="btn-new-terminal" type="button">+ New Terminal</button>
     </div>
     <div class="card hidden" id="create-terminal">
+      <p class="muted" style="margin:0 0 12px">Optionally assign a cashier to this terminal when creating it.</p>
       <div class="form-grid">
         <input id="t-name" placeholder="Terminal name (e.g. Main Counter)" />
         <input id="t-code" placeholder="Code (e.g. TERM-01)" />
@@ -144,26 +270,45 @@ async function loadTerminals() {
           <option value="">Select location…</option>
           ${locations.map((l) => `<option value="${l.id}">${l.name} (${l.code || l.type || ''})</option>`).join('')}
         </select>
+        <select id="t-user">
+          <option value="">— No user —</option>
+        </select>
         <button class="btn btn-brand" id="t-save" type="button">Create</button>
         <button class="btn btn-gray" id="t-cancel" type="button">Cancel</button>
       </div>
     </div>
     <table>
-      <thead><tr><th>Name</th><th>Code</th><th>Location</th><th>Status</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Name</th><th>Code</th><th>Location</th><th>Assigned user</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>
-        ${terminals.map((t) => `
+        ${terminals.map((t) => {
+          const assigned = assignedUserForTerminal(companyUsers, t.id);
+          return `
           <tr>
             <td><b>${t.name || ''}</b></td>
             <td>${t.code || ''}</td>
             <td>${t.location?.name || '—'}</td>
+            <td>${assigned
+              ? `<strong>${userDisplayName(assigned)}</strong><div class="muted">${assigned.email || ''}</div>`
+              : '<span class="muted">—</span>'}</td>
             <td>${badge(t.isActive === false ? 'Inactive' : 'Active')}</td>
             <td>
               <button class="btn ${t.isActive === false ? 'btn-green' : 'btn-red'}" data-toggle="${t.id}">${t.isActive === false ? 'Enable' : 'Disable'}</button>
               <button class="btn btn-red" data-del="${t.id}">Delete</button>
             </td>
-          </tr>`).join('') || `<tr><td colspan="5" class="muted">No terminals found</td></tr>`}
+          </tr>`;
+        }).join('') || `<tr><td colspan="6" class="muted">No terminals found</td></tr>`}
       </tbody>
     </table>`;
+
+  const locSelect = wrap.querySelector('#t-location');
+  const userSelect = wrap.querySelector('#t-user');
+  const refreshUserSelect = () => {
+    const prev = userSelect.value;
+    userSelect.innerHTML = renderTerminalUserOptions(companyUsers, locSelect.value, prev);
+    if (prev && ![...userSelect.options].some((o) => o.value === prev)) userSelect.value = '';
+  };
+  locSelect.addEventListener('change', refreshUserSelect);
+  refreshUserSelect();
 
   wrap.querySelector('#btn-new-terminal').onclick = () => wrap.querySelector('#create-terminal').classList.toggle('hidden');
   wrap.querySelector('#t-cancel').onclick = () => wrap.querySelector('#create-terminal').classList.add('hidden');
@@ -171,9 +316,31 @@ async function loadTerminals() {
     const name = wrap.querySelector('#t-name').value.trim();
     const code = wrap.querySelector('#t-code').value.trim().toUpperCase();
     const locationId = wrap.querySelector('#t-location').value;
+    const userId = wrap.querySelector('#t-user').value;
     if (!name || !code || !locationId) return showError('Name, code and location are required');
+    const saveBtn = wrap.querySelector('#t-save');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Creating…';
     const res = await api.pos.createTerminal({ name, code, locationId });
-    if (!res?.success) return showError(res?.message || 'Create failed');
+    if (!res?.success) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Create';
+      return showError(res?.message || 'Create failed');
+    }
+    const terminalId = res.data?.id;
+    if (userId && terminalId) {
+      const assignRes = await api.pos.assignUserTerminal({ userId, terminalId });
+      if (!assignRes?.success) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Create';
+        showError(`Terminal created but user assignment failed: ${assignRes?.message || 'Unknown error'}`);
+        loadTerminals();
+        return;
+      }
+    }
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Create';
+    showError('');
     loadTerminals();
   };
   wrap.querySelectorAll('[data-toggle]').forEach((b) => {
