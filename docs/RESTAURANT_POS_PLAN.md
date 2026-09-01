@@ -30,11 +30,7 @@ app      POS tab    POS tab  desktop POS
 | Cashier / receipt | **Desktop POS** → Restaurant → Counter tab | Local sale + cloud sync |
 | Retail checkout | **Desktop POS** → `sell.js` | Unchanged |
 
-**No WiFi / LAN server.** Devices never talk to each other directly.
 
----
-
-## Company flag
 
 ```prisma
 Company.posMode  // retail | restaurant
