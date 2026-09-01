@@ -1,7 +1,5 @@
 
 'use strict';
-
-// DEBUG: track boot progress in a global readable by main process
 window.__bootSteps = ['sell.js loaded'];
 window.addEventListener('error', (event) => {
   window.__bootSteps.push('ERROR: ' + event.message + ' @ ' + event.filename + ':' + event.lineno);
@@ -17,6 +15,30 @@ function isAdminRole(role) {
   const r = String(role || '').toLowerCase().trim();
   return r === 'admin' || r === 'owner' || r === 'superadmin' || r === 'company_admin';
 }
+
+function isManagerRole(role) {
+  const r = String(role || '').toLowerCase().trim();
+  return isAdminRole(r) || r === 'manager';
+}
+
+function isKitchenRole(role) {
+  return String(role || '').toLowerCase().trim() === 'kitchen';
+}
+
+function resolvePosMode(user) {
+  return String(user?.posMode || user?.company?.posMode || 'retail').toLowerCase();
+}
+
+function restaurantMoney(n) {
+  return `$${Number(n || 0).toFixed(2)}`;
+}
+
+function restaurantFmtTime(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+let restaurantReadyPoll = null;
 
 function showToast(message, type = 'info') {
   console.log('[POS]', message);
@@ -114,8 +136,6 @@ async function onLocationChanged(id) {
 
   const locationId = window.bisonLocation ? bisonLocation.effectiveId(id) : String(id || '');
 
-  // Pull stock/catalog for the selected warehouse — local SQLite was often
-  // overwritten by the last user's location-scoped sync.
   try {
     if (typeof showToast === 'function') {
       showToast(locationId ? 'Loading catalog for this location…' : 'Loading full catalog…', 'info');
@@ -155,7 +175,6 @@ let locationList = [];
 let companyProfile = null;
 let taxContext = null;
 
-// Sell tab state
 let categories = [];
 let activeParent = null;
 let subcategories = [];
@@ -351,11 +370,6 @@ async function boot() {
   // Set top information
   cashierMetaEl.textContent = `Cashier: ${[currentCashier.firstName, currentCashier.lastName].filter(Boolean).join(' ') || currentCashier.email || 'Cashier'}`;
 
-  const session = await api.auth.getSession();
-  const adminBtn = document.getElementById('btn-admin');
-  if (adminBtn && (session?.isAdmin || isAdminRole(session?.user?.role))) {
-    adminBtn.style.display = '';
-  }
   terminalBadgeEl.textContent = `${currentTerminal.name || 'Terminal'}`;
 
   setInterval(() => {
@@ -369,6 +383,7 @@ async function boot() {
   }, 1000);
 
   setupTabs();
+  await setupRestaurantUi();
 
   const stashed = readStashedCatalog();
   if (stashed && stashed.length) {
@@ -378,6 +393,171 @@ async function boot() {
   await loadCategories();
 
   updateOfflineCount();
+}
+
+async function setupRestaurantUi() {
+  let session;
+  try {
+    session = await api.auth.getSession();
+  } catch {
+    return;
+  }
+  const user = session?.user || {};
+  if (resolvePosMode(user) !== 'restaurant') return;
+
+  if (isKitchenRole(user.role)) {
+    await api.pos.enterRestaurantPos('kitchen');
+    return;
+  }
+
+  document.getElementById('tab-btn-ready-orders')?.classList.remove('hidden');
+
+  const kitchenBtn = document.getElementById('btn-kitchen-display');
+  if (kitchenBtn && isManagerRole(user.role)) {
+    kitchenBtn.classList.remove('hidden');
+    kitchenBtn.addEventListener('click', () => api.pos.enterRestaurantPos('kitchen'));
+  }
+
+  document.getElementById('btn-refresh-ready-orders')?.addEventListener('click', () => {
+    refreshRestaurantReadyOrders().catch((err) => showToast(err.message, 'error'));
+  });
+
+  document.getElementById('ready-orders-list')?.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action="pay-ready"]');
+    if (!btn || btn.disabled) return;
+    await payRestaurantReadyOrder(btn);
+  });
+
+  if (restaurantReadyPoll) clearInterval(restaurantReadyPoll);
+  restaurantReadyPoll = setInterval(() => {
+    const panel = document.getElementById('tab-ready-orders');
+    if (panel?.classList.contains('active')) {
+      refreshRestaurantReadyOrders().catch(() => {});
+    }
+  }, 5000);
+}
+
+function renderRestaurantReadyOrders(orders) {
+  const root = document.getElementById('ready-orders-list');
+  if (!root) return;
+  if (!orders.length) {
+    root.innerHTML =
+      '<div style="padding:32px;text-align:center;color:var(--muted);">No orders ready for payment yet.</div>';
+    return;
+  }
+  root.innerHTML = orders
+    .map(
+      (o) => `
+    <div class="ready-order-card" data-id="${o.id}">
+      <div class="ticket-head">
+        <div>
+          <b>Ticket #${o.ticketNumber || '—'} · ${o.tableLabel || 'Table'}</b>
+          <div style="font-size:12px;color:var(--muted);">Ready ${restaurantFmtTime(o.readyAt)}</div>
+        </div>
+        <span class="badge-ready">READY</span>
+      </div>
+      <div class="lines">${(o.lines || [])
+        .map((l) => `<div>${l.quantity}× ${l.productName} — ${restaurantMoney(l.lineTotal)}</div>`)
+        .join('')}</div>
+      <div><strong>Total: ${restaurantMoney(o.grandTotal)}</strong></div>
+      <div class="pay-row">
+        <label style="font-size:12px;font-weight:600;">Cash received</label>
+        <input type="number" min="0" step="0.01" value="${Number(o.grandTotal || 0).toFixed(2)}" data-cash="${o.id}" />
+        <button type="button" class="btn-pay-ready" data-action="pay-ready" data-id="${o.id}">Take payment</button>
+      </div>
+    </div>`
+    )
+    .join('');
+}
+
+async function refreshRestaurantReadyOrders() {
+  const res = await api.pos.restaurantReadyQueue();
+  if (res?.success) renderRestaurantReadyOrders(res.data || []);
+}
+
+async function payRestaurantReadyOrder(btn) {
+  const orderId = btn.dataset.id;
+  const card = btn.closest('.ready-order-card');
+  const cashInp = card?.querySelector(`input[data-cash="${orderId}"]`);
+  const paid = parseFloat(cashInp?.value || '0') || 0;
+
+  const readyRes = await api.pos.restaurantReadyQueue();
+  const order = (readyRes?.data || []).find((o) => o.id === orderId);
+  if (!order) {
+    showToast('Order no longer ready', 'error');
+    return;
+  }
+  if (paid < Number(order.grandTotal || 0)) {
+    showToast(`Need at least ${restaurantMoney(order.grandTotal)}`, 'error');
+    return;
+  }
+  if (!activeShift?.terminalId) {
+    showToast('Open shift first', 'error');
+    return;
+  }
+
+  btn.disabled = true;
+  try {
+    const saleId = `POS-R-${Date.now()}`;
+    const payload = {
+      id: saleId,
+      terminalId: activeShift.terminalId,
+      shiftId: activeShift.id,
+      locationId: activeShift.locationId || currentLocationId() || undefined,
+      invoiceNumber: saleId,
+      customerName: order.tableLabel ? `Table ${order.tableLabel}` : 'Restaurant guest',
+      restaurantOrderId: order.id,
+      items: (order.lines || []).map((l) => ({
+        productId: l.productId,
+        productName: l.productName,
+        sku: l.sku || '',
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+        discount: 0,
+        taxRate: 0,
+      })),
+      payments: [{ paymentMethod: 'Cash', amount: Number(order.grandTotal), reference: '' }],
+      discountTotal: 0,
+      taxTotal: Number(order.taxTotal || 0),
+      notes: `Restaurant ticket #${order.ticketNumber || ''}`,
+    };
+
+    const localRes = await api.pos.completeSale(payload);
+    if (!localRes?.success) {
+      showToast(localRes?.message || 'Could not save sale locally', 'error');
+      return;
+    }
+
+    const markRes = await api.pos.restaurantMarkPaid({ orderId, posSaleId: saleId });
+    if (!markRes?.success) {
+      console.warn('Order paid locally but API mark failed:', markRes?.message);
+    }
+
+    const saleData = localRes.data || payload;
+    const grandTotal = Number(order.grandTotal || 0);
+    const subtotal = (order.lines || []).reduce(
+      (sum, l) => sum + Number(l.lineTotal || (Number(l.quantity) || 0) * (Number(l.unitPrice) || 0)),
+      0
+    );
+
+    openSaleReceipt(saleData, {
+      subtotal,
+      grandTotal,
+      taxTotal: Number(order.taxTotal || 0),
+      discountTotal: 0,
+      paidAmount: paid,
+      changeAmount: Math.max(0, paid - grandTotal),
+      payments: payload.payments,
+      notes: `Restaurant ticket #${order.ticketNumber || ''}${order.tableLabel ? ` · Table ${order.tableLabel}` : ''}`.trim(),
+      receiptTitle: 'RESTAURANT RECEIPT',
+    });
+
+    showToast('Payment saved. Receipt ready — sync when online.', 'success');
+    await refreshRestaurantReadyOrders();
+    updateOfflineCount();
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function applyCompanyTaxUi() {
@@ -438,6 +618,7 @@ function setupTabs() {
       if (targetTab === 'settings') { try { loadMachineInfo(); } catch (e) { console.warn('loadMachineInfo not defined', e); } }
       if (targetTab === 'stock') { try { loadStockPanel(); } catch (e) { console.warn('loadStockPanel not defined', e); } }
       if (targetTab === 'returns') { try { loadReturnHistory(); } catch (e) { console.warn('loadReturnHistory not defined', e); } }
+      if (targetTab === 'ready-orders') { try { refreshRestaurantReadyOrders(); } catch (e) { console.warn('refreshRestaurantReadyOrders not defined', e); } }
       if (targetTab === 'sell') {
         setTimeout(() => barcodeScanInp?.focus(), 50);
       }
@@ -496,7 +677,7 @@ async function updateOfflineCount() {
       });
 
       if (catalog?.offline || catalog?.code === 'OFFLINE') {
-        showToast(catalog?.message || 'No internet connection. Sync skipped.', 'error');
+        showToast(catalog?.message || 'Cannot reach the API server. Sync skipped.', 'error');
         if (overlay) overlay.classList.remove('show');
         await updateOfflineCount();
         return;
@@ -1731,8 +1912,6 @@ async function submitCompleteSale() {
   submittingSale = false;
 
   if (res?.success && res.data) {
-    // Cloud returns { sale: {...} } but the offline queue returns the saved
-    // sale object directly — accept both shapes so invoiceNumber/id survive.
     const saleData = res.data.sale || res.data;
     const snapItems = (Array.isArray(saleData?.items) && saleData.items.length ? saleData.items : cart).map((i) => ({
       ...i,
@@ -1743,35 +1922,6 @@ async function submitCompleteSale() {
       taxRate: resolveTaxRate(i.taxRate),
       lineTotal: Number(i.lineTotal) || ((Number(i.quantity) || 0) * (Number(i.unitPrice) || 0)),
     }));
-    lastSale = {
-      ...saleData,
-      items: snapItems,
-      payments: saleData?.payments || payload.payments,
-      subtotal: totals.subtotal,
-      discountTotal: totals.discountTotal,
-      taxTotal: totals.taxTotal,
-      grandTotal: totals.grandTotal,
-      totalAmount: totals.grandTotal,
-      paidAmount: paidTotal,
-      changeAmount: paidTotal - totals.grandTotal,
-      cashierName: cashierMetaEl.textContent.replace('Cashier: ', ''),
-      terminalName: terminalBadgeEl.textContent
-    };
-
-    // Update local stock quantities
-    cart.forEach(async (cartItem) => {
-      const product = products.find(p => p.id === cartItem.productId);
-      if (product) {
-        product.currentStock = Math.max(0, (product.currentStock || 0) - cartItem.quantity);
-        // Save to local database
-        try {
-          await window.bisonDesktop.catalog.saveProduct(product);
-        } catch (err) {
-          console.error('[POS] Failed to update local stock:', err);
-        }
-      }
-    });
-    renderProducts();
 
     checkoutModalOverlay.style.display = 'none';
 
@@ -1785,15 +1935,92 @@ async function submitCompleteSale() {
     custCreditInfoCard.style.display = 'none';
     renderCartList();
 
-    // Render Receipt Modal
-    renderReceipt();
-    modalReceipt.style.display = 'flex';
+    // Update local stock quantities
+    snapItems.forEach(async (cartItem) => {
+      const product = products.find((p) => p.id === cartItem.productId);
+      if (product) {
+        product.currentStock = Math.max(0, (product.currentStock || 0) - cartItem.quantity);
+        try {
+          await window.bisonDesktop.catalog.saveProduct(product);
+        } catch (err) {
+          console.error('[POS] Failed to update local stock:', err);
+        }
+      }
+    });
+    renderProducts();
+
+    openSaleReceipt(saleData, {
+      items: snapItems,
+      payments: saleData?.payments || payload.payments,
+      subtotal: totals.subtotal,
+      discountTotal: totals.discountTotal,
+      taxTotal: totals.taxTotal,
+      grandTotal: totals.grandTotal,
+      paidAmount: paidTotal,
+      changeAmount: paidTotal - totals.grandTotal,
+    });
   } else {
     alert(res?.message || 'Completed sale API error');
   }
 }
 
 // ─── RECEIPT LAYOUT RENDERING ─────────────────────────────────────────────────
+function buildLastSaleFromRecord(saleData, extras = {}) {
+  const sourceItems = extras.items || saleData?.items || [];
+  const items = sourceItems.map((i) => ({
+    ...i,
+    productName: i.productName || i.name,
+    quantity: Number(i.quantity) || 0,
+    unitPrice: Number(i.unitPrice) || 0,
+    discount: Number(i.discount) || 0,
+    taxRate: Number(i.taxRate) || 0,
+    lineTotal:
+      Number(i.lineTotal) || (Number(i.quantity) || 0) * (Number(i.unitPrice) || 0),
+  }));
+  const subtotal =
+    extras.subtotal ??
+    items.reduce((sum, i) => sum + (Number(i.lineTotal) || 0), 0);
+  const grandTotal =
+    extras.grandTotal ?? Number(saleData.grandTotal ?? saleData.totalAmount ?? subtotal);
+  const payments = extras.payments || saleData?.payments || [];
+  const paidAmount =
+    extras.paidAmount ??
+    payments.reduce((acc, p) => acc + Number(p.amount || 0), 0);
+
+  return {
+    ...saleData,
+    items,
+    payments,
+    subtotal,
+    discountTotal: extras.discountTotal ?? (Number(saleData.discountTotal) || 0),
+    taxTotal: extras.taxTotal ?? (Number(saleData.taxTotal) || 0),
+    grandTotal,
+    totalAmount: grandTotal,
+    paidAmount,
+    changeAmount: extras.changeAmount ?? Math.max(0, paidAmount - grandTotal),
+    cashierName:
+      extras.cashierName ||
+      (cashierMetaEl?.textContent || '').replace('Cashier: ', '') ||
+      'Staff',
+    terminalName: extras.terminalName || terminalBadgeEl?.textContent || '',
+    createdAt: saleData.createdAt || new Date().toISOString(),
+    notes: extras.notes ?? saleData.notes,
+    receiptTitle: extras.receiptTitle,
+    customerName: extras.customerName ?? saleData.customerName,
+  };
+}
+
+function openSaleReceipt(saleData, extras = {}) {
+  lastSale = buildLastSaleFromRecord(saleData, extras);
+  renderReceipt();
+  modalReceipt.style.display = 'flex';
+  if (posSettings.autoPrintOnSale) {
+    setTimeout(() => {
+      document.getElementById('btn-receipt-print')?.click();
+    }, 350);
+  }
+}
+
 function renderReceipt() {
   const box = document.getElementById('receipt-paper-box');
   if (!lastSale) return;
@@ -2980,6 +3207,32 @@ function setPf(id, value) {
   if (!el) return;
   if (el.type === 'checkbox') el.checked = !!value;
   else el.value = value == null ? '' : String(value);
+  if (id === 'barcode' || id === 'qrCode') {
+    void refreshProductCodePreviews();
+  }
+}
+
+let _prodCodePreviewTimer = null;
+async function refreshProductCodePreviews() {
+  const codes = window.PosProductCodes;
+  const bcEl = document.getElementById('pf-barcode-preview');
+  const qrEl = document.getElementById('pf-qr-preview');
+  if (!codes) {
+    if (bcEl) bcEl.innerHTML = pfVal('barcode') ? `<b>${pfVal('barcode')}</b>` : '';
+    if (qrEl) qrEl.innerHTML = pfVal('qrCode') ? `<b>${pfVal('qrCode')}</b>` : '';
+    return;
+  }
+  if (bcEl) bcEl.innerHTML = codes.productBarcodeSvg(pfVal('barcode'), 340);
+  if (!qrEl) return;
+  refreshProductCodePreviews._tok = (refreshProductCodePreviews._tok || 0) + 1;
+  const token = refreshProductCodePreviews._tok;
+  // Debounce QR IPC while typing
+  clearTimeout(_prodCodePreviewTimer);
+  await new Promise((r) => {
+    _prodCodePreviewTimer = setTimeout(r, 180);
+  });
+  if (token !== refreshProductCodePreviews._tok) return;
+  qrEl.innerHTML = await codes.productQrSvg(pfVal('qrCode'), 148);
 }
 function firstVal(row, keys, fallback = '') {
   for (const key of keys) {
@@ -3198,6 +3451,7 @@ function resetProdForm() {
   if (customWrap) customWrap.innerHTML = '';
   applyCompanyTaxUi();
   showProdTab('basic');
+  void refreshProductCodePreviews();
 }
 
 function openProdForm(row) {
@@ -3213,6 +3467,7 @@ function openProdForm(row) {
   fillProductSuppliers(firstVal(row, ['supplierId', 'supplier']));
   if (!row) {
     document.getElementById('prod-overlay').style.display = 'flex';
+    void refreshProductCodePreviews();
     return;
   }
   setPf('name', row.name || '');
@@ -3288,6 +3543,7 @@ function openProdForm(row) {
   const custom = Array.isArray(row.customFields) ? row.customFields : [];
   custom.forEach((item) => addCustomRow(item.name || item.key || '', item.value || ''));
   document.getElementById('prod-overlay').style.display = 'flex';
+  void refreshProductCodePreviews();
 }
 
 function closeProdForm() {
@@ -3479,32 +3735,63 @@ function initProductPanel() {
   }
 
   document.getElementById('pf-barcode-scan')?.addEventListener('click', () => {
+    const apply = (raw) => {
+      const code = window.PosProductCodes
+        ? window.PosProductCodes.normalizeProductCode(raw)
+        : normalizeScanInput(raw);
+      setPf('barcode', code);
+    };
     if (typeof window.openCodeScanner === 'function') {
       window.openCodeScanner({
         title: 'Scan barcode',
-        onScan: (code) => setPf('barcode', code),
+        onScan: apply,
       });
       return;
     }
     const code = prompt('Scan or enter barcode:');
-    if (code) setPf('barcode', code);
+    if (code) apply(code);
   });
   document.getElementById('pf-barcode-auto')?.addEventListener('click', () => {
     setPf('barcode', ensurePfSku());
   });
   document.getElementById('pf-qr-scan')?.addEventListener('click', () => {
+    const apply = (raw) => {
+      const code = window.PosProductCodes
+        ? window.PosProductCodes.normalizeProductCode(raw)
+        : normalizeScanInput(raw);
+      setPf('qrCode', code);
+    };
     if (typeof window.openCodeScanner === 'function') {
       window.openCodeScanner({
         title: 'Scan QR / barcode',
-        onScan: (code) => setPf('qrCode', code),
+        onScan: apply,
       });
       return;
     }
-    // QR code input via prompt not supported in Electron
     showToast('Use barcode scanner or enter QR code manually in the field', 'info');
   });
   document.getElementById('pf-qr-from-sku')?.addEventListener('click', () => {
     setPf('qrCode', ensurePfSku());
+  });
+  document.getElementById('pf-barcode')?.addEventListener('input', () => {
+    void refreshProductCodePreviews();
+  });
+  document.getElementById('pf-barcode')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const code = normalizeScanInput(e.target.value);
+      setPf('barcode', code);
+    }
+  });
+  document.getElementById('pf-qrCode')?.addEventListener('input', () => {
+    void refreshProductCodePreviews();
+  });
+  document.getElementById('pf-qrCode')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const code = normalizeScanInput(e.target.value);
+      setPf('qrCode', code);
+    }
   });
   document.getElementById('pf-image-add-url')?.addEventListener('click', () => {
     addProdImage(pfVal('imageUrl'));
@@ -3573,7 +3860,6 @@ function initProductPanel() {
 
 initProductPanel();
 
-document.getElementById('btn-admin')?.addEventListener('click', () => api?.pos?.enterManagement());
 document.getElementById('logout')?.addEventListener('click', () => api?.auth?.logout());
 if (api?.auth?.onExpired) api.auth.onExpired(() => api.auth.logout());
 // ─── Sales register: search + date range + print/pdf ───────────────────────

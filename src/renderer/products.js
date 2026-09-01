@@ -294,29 +294,58 @@ function codePreviewHtml(value, emptyText) {
   return `<b>${escapeAttr(value)}</b><span>Ready for POS / sales scanning</span>`;
 }
 
-function refreshCodePreviews() {
+let _productsCodePreviewTok = 0;
+async function refreshCodePreviews() {
   const barcode = document.getElementById('f-barcode')?.value.trim() || '';
   const qr = document.getElementById('f-qr-code')?.value.trim() || '';
   const sku = document.getElementById('f-sku')?.value.trim() || '';
+  const codes = window.PosProductCodes;
   const barcodePreview = document.getElementById('barcode-live-preview');
   const qrPreview = document.getElementById('qr-live-preview');
-  if (barcodePreview) {
-    barcodePreview.innerHTML = codePreviewHtml(barcode, 'Scan a barcode or auto-generate from SKU');
-  }
-  if (qrPreview) {
-    qrPreview.innerHTML = codePreviewHtml(qr, 'Scan a QR or auto-generate from SKU');
-  }
   const barcodeDisplay = document.getElementById('barcode-display');
-  if (barcodeDisplay) {
-    barcodeDisplay.innerHTML = barcode || sku
-      ? `<div style="font-family: monospace; font-size: 24px; font-weight: 700; color: #1a1a1a; letter-spacing: 2px;">${escapeAttr(barcode || sku)}</div><div style="margin-top: 8px; font-size: 12px; color: #6b7280;">CODE128</div>`
-      : '<div style="color: #9ca3af; font-size: 14px;">No barcode assigned</div>';
-  }
   const qrDisplay = document.getElementById('qr-display');
-  if (qrDisplay) {
-    qrDisplay.innerHTML = qr
-      ? `<div style="font-family: monospace; font-size: 20px; font-weight: 700; color: #1a1a1a; letter-spacing: 1px;">${escapeAttr(qr)}</div><div style="margin-top: 8px; font-size: 12px; color: #6b7280;">QR Code</div>`
-      : '<div style="color: #9ca3af; font-size: 14px;">No QR code assigned</div>';
+
+  const bcValue = barcode || '';
+  if (codes) {
+    const bcSvg = codes.productBarcodeSvg(bcValue || sku, 300);
+    if (barcodePreview) {
+      barcodePreview.innerHTML = bcValue
+        ? bcSvg
+        : `<span>Scan a barcode or auto-generate from SKU</span>`;
+    }
+    if (barcodeDisplay) {
+      barcodeDisplay.innerHTML = (bcValue || sku)
+        ? codes.productBarcodeSvg(bcValue || sku, 280)
+        : '<div style="color: #9ca3af; font-size: 14px;">No barcode assigned</div>';
+    }
+  } else {
+    if (barcodePreview) {
+      barcodePreview.innerHTML = codePreviewHtml(barcode, 'Scan a barcode or auto-generate from SKU');
+    }
+    if (barcodeDisplay) {
+      barcodeDisplay.innerHTML = barcode || sku
+        ? `<div style="font-family: monospace; font-size: 24px; font-weight: 700; color: #1a1a1a; letter-spacing: 2px;">${escapeAttr(barcode || sku)}</div><div style="margin-top: 8px; font-size: 12px; color: #6b7280;">CODE128</div>`
+        : '<div style="color: #9ca3af; font-size: 14px;">No barcode assigned</div>';
+    }
+  }
+
+  const tok = ++_productsCodePreviewTok;
+  if (codes) {
+    if (qrPreview && !qr) qrPreview.innerHTML = '<span>Scan a QR or auto-generate from SKU</span>';
+    if (qrDisplay && !qr) qrDisplay.innerHTML = '<div style="color: #9ca3af; font-size: 14px;">No QR code assigned</div>';
+    if (qr) {
+      const qrHtml = await codes.productQrSvg(qr, 140);
+      if (tok !== _productsCodePreviewTok) return;
+      if (qrPreview) qrPreview.innerHTML = qrHtml;
+      if (qrDisplay) qrDisplay.innerHTML = qrHtml;
+    }
+  } else {
+    if (qrPreview) qrPreview.innerHTML = codePreviewHtml(qr, 'Scan a QR or auto-generate from SKU');
+    if (qrDisplay) {
+      qrDisplay.innerHTML = qr
+        ? `<div style="font-family: monospace; font-size: 20px; font-weight: 700; color: #1a1a1a; letter-spacing: 1px;">${escapeAttr(qr)}</div><div style="margin-top: 8px; font-size: 12px; color: #6b7280;">QR Code</div>`
+        : '<div style="color: #9ca3af; font-size: 14px;">No QR code assigned</div>';
+    }
   }
 }
 
@@ -911,25 +940,33 @@ function renderForm() {
       if (!barcodeValue) { alert('No barcode to print. Please scan or enter a barcode first.'); return; }
       const win = window.open('', '_blank');
       if (!win) return;
-      win.document.write(`<html><head><title>Barcode - ${productName}</title><style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:sans-serif;padding:20px;}.barcode{font-family:monospace;font-size:48px;font-weight:700;letter-spacing:4px;margin:20px 0;}.name{font-size:18px;color:#555;}@page{size:auto;margin:0;}</style></head><body><div class="barcode">${barcodeValue}</div><div class="name">${productName}</div></body></html>`);
+      const body = window.PosProductCodes
+        ? window.PosProductCodes.productBarcodeSvg(barcodeValue, 420)
+        : `<div style="font-family:monospace;font-size:36px;font-weight:700;letter-spacing:3px;">${escapeAttr(barcodeValue)}</div>`;
+      win.document.write(`<html><head><title>Barcode - ${escapeAttr(productName)}</title><style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:sans-serif;padding:20px;}.name{font-size:18px;color:#555;margin-top:12px;}@page{margin:8mm;}</style></head><body>${body}<div class="name">${escapeAttr(productName)}</div></body></html>`);
       win.document.close();
-      win.print();
+      setTimeout(() => win.print(), 200);
     });
   }
 
   const printQrBtn = document.getElementById('btn-print-qr');
   if (printQrBtn) {
-    printQrBtn.addEventListener('click', () => {
+    printQrBtn.addEventListener('click', async () => {
       const qrValue = document.getElementById('f-qr-code')?.value.trim() || editing?.qrCode || editing?.qr_code || '';
       const productName = editing?.name || document.getElementById('f-name').value || 'Product';
       if (!qrValue) { alert('No QR code to print.'); return; }
       const win = window.open('', '_blank');
       if (!win) return;
-      win.document.write(`<html><head><title>QR - ${productName}</title><style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:sans-serif;padding:20px;}.qr{font-family:monospace;font-size:32px;font-weight:700;letter-spacing:2px;margin:20px 0;word-break:break-all;max-width:400px;text-align:center;}.name{font-size:18px;color:#555;}@page{size:auto;margin:0;}</style></head><body><div class="qr">${qrValue}</div><div class="name">${productName}</div></body></html>`);
+      const body = window.PosProductCodes
+        ? await window.PosProductCodes.productQrSvg(qrValue, 200)
+        : `<div style="font-family:monospace;font-size:28px;font-weight:700;word-break:break-all;text-align:center;">${escapeAttr(qrValue)}</div>`;
+      win.document.write(`<html><head><title>QR - ${escapeAttr(productName)}</title><style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:sans-serif;padding:20px;}.name{font-size:18px;color:#555;margin-top:12px;}@page{margin:8mm;}</style></head><body>${body}<div class="name">${escapeAttr(productName)}</div></body></html>`);
       win.document.close();
-      win.print();
+      setTimeout(() => win.print(), 300);
     });
   }
+
+  void refreshCodePreviews();
 }
 
 function openForm(product) {

@@ -40,7 +40,7 @@
         <div class="brand">
           <img src="../../assets/icon.png" alt="Bisonstechs" />
           <h1>Open Shift</h1>
-          <p class="sub">Select a terminal, then enter opening cash</p>
+          <p class="sub">Select a terminal, then enter opening cash in the drawer (required)</p>
         </div>
         <div class="user" id="user"></div>
         <p class="sub" id="sync-status">Syncing products…</p>
@@ -52,8 +52,8 @@
         </div>
         <div id="terminal-box">
           <div class="list" id="terminals"></div>
-          <label for="cash">Opening cash</label>
-          <input id="cash" type="number" min="0" step="0.01" value="0" />
+          <label for="cash">Opening cash <span style="color:#dc2626">*</span></label>
+          <input id="cash" type="number" min="0.01" step="0.01" placeholder="Enter cash in drawer" required />
           <div class="error hidden" id="error"></div>
           <div class="actions">
             <button class="primary" id="open" type="button">Start selling</button>

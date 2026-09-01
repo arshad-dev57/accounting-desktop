@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';"
+    />
+    <title>Kitchen Display — Bisonstechs</title>
+    <link rel="stylesheet" href="./shared.css" />
+    <style>
+      body { background: #f3f6f9; min-height: 100%; }
+      .hidden { display: none !important; }
+      .top { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; background: #fff; border-bottom: 1px solid var(--line); }
+      .top h1 { margin: 0; font-size: 18px; }
+      .top .meta { font-size: 12px; color: var(--muted); }
+      .card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+      .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); padding: 16px 18px 24px; }
+      .ticket-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+      .ticket-head b { font-size: 16px; }
+      .badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; background: #e8eef4; }
+      .badge.sent { background: #fef3c7; color: #92400e; }
+      .lines { font-size: 13px; color: #334155; margin: 8px 0; }
+      .lines div { padding: 2px 0; }
+      .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+      .actions button { flex: 1; min-width: 120px; height: 40px; border: 0; border-radius: 10px; font-weight: 700; cursor: pointer; }
+      .btn-brand { background: var(--brand); color: #fff; }
+      .btn-soft { background: #e8eef4; color: var(--navy); }
+      .empty { text-align: center; color: var(--muted); padding: 48px 16px; grid-column: 1 / -1; }
+      .toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
+      .toolbar button { height: 38px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line); background: #fff; font-weight: 600; cursor: pointer; }
+      .note { font-size: 12px; color: var(--muted); margin: 10px 18px 0; }
+    </style>
+  </head>
+  <body>
+    <div class="top">
+      <div>
+        <h1>Kitchen Display</h1>
+        <div class="meta" id="user-meta"></div>
+      </div>
+      <div class="toolbar">
+        <button type="button" id="btn-refresh">Refresh</button>
+        <button type="button" id="btn-pos" class="hidden">Cashier POS</button>
+        <button type="button" id="btn-mgmt" class="hidden">Management</button>
+        <button type="button" id="btn-logout">Logout</button>
+      </div>
+    </div>
+
+    <p class="note">
+      Waiters send orders from the <strong>Bisonstechs Order Picker</strong> app.
+      Cashier payment runs on the normal POS terminal (<strong>Ready orders</strong> tab).
+    </p>
+
+    <div id="kitchen-list" class="grid"></div>
+
+    <script src="./restaurant-pos.js"></script>
+  </body>
+</html>

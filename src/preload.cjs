@@ -16,6 +16,7 @@ const ALLOWED_CHANNELS = new Set([
   'auth:logout',
   'app:getInfo',
   'app:openExternal',
+  'codes:qrSvg',
   'print:showDialog',
   'pos:listTerminals',
   'pos:getCurrentShift',
@@ -27,6 +28,12 @@ const ALLOWED_CHANNELS = new Set([
   'pos:completeSale',
   'pos:enterShift',
   'pos:enterSell',
+  'pos:enterRestaurantPos',
+  'pos:restaurantKitchenQueue',
+  'pos:restaurantReadyQueue',
+  'pos:restaurantMarkPreparing',
+  'pos:restaurantMarkReady',
+  'pos:restaurantMarkPaid',
   'pos:getShiftHistory',
   'pos:suspendShift',
   'pos:recordCashFlow',
@@ -52,6 +59,9 @@ const ALLOWED_CHANNELS = new Set([
   'pos:createTerminal',
   'pos:updateTerminal',
   'pos:deleteTerminal',
+  'pos:refreshScopeCache',
+  'pos:listUsers',
+  'pos:assignUserTerminal',
   'pos:reopenShift',
   'pos:listSales',
   'pos:getSale',
@@ -184,6 +194,11 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
       ipcRenderer.on('auth:company-inactive', listener);
       return () => ipcRenderer.removeListener('auth:company-inactive', listener);
     },
+    onAccessDenied: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('auth:access-denied', listener);
+      return () => ipcRenderer.removeListener('auth:access-denied', listener);
+    },
   },
   pos: {
     listTerminals: () => invoke('pos:listTerminals'),
@@ -203,6 +218,12 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
     completeSale: (payload) => invoke('pos:completeSale', payload),
     enterShift: () => invoke('pos:enterShift'),
     enterSell: () => invoke('pos:enterSell'),
+    enterRestaurantPos: (tab) => invoke('pos:enterRestaurantPos', tab),
+    restaurantKitchenQueue: () => invoke('pos:restaurantKitchenQueue'),
+    restaurantReadyQueue: () => invoke('pos:restaurantReadyQueue'),
+    restaurantMarkPreparing: (orderId) => invoke('pos:restaurantMarkPreparing', orderId),
+    restaurantMarkReady: (orderId) => invoke('pos:restaurantMarkReady', orderId),
+    restaurantMarkPaid: (payload) => invoke('pos:restaurantMarkPaid', payload),
     // Expanded layout methods
     getShiftHistory: (paramsString) => invoke('pos:getShiftHistory', paramsString),
     suspendShift: (shiftId) => invoke('pos:suspendShift', shiftId),
@@ -230,6 +251,9 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
     createTerminal: (body) => invoke('pos:createTerminal', body),
     updateTerminal: (id, body) => invoke('pos:updateTerminal', { id, body }),
     deleteTerminal: (id) => invoke('pos:deleteTerminal', id),
+    refreshScopeCache: () => invoke('pos:refreshScopeCache'),
+    listUsers: () => invoke('pos:listUsers'),
+    assignUserTerminal: (payload) => invoke('pos:assignUserTerminal', payload),
     reopenShift: (id) => invoke('pos:reopenShift', id),
     listSales: (paramsString) => invoke('pos:listSales', paramsString),
     getSale: (id) => invoke('pos:getSale', id),
@@ -282,6 +306,9 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
   app: {
     getInfo: () => invoke('app:getInfo'),
     openExternal: (url) => invoke('app:openExternal', url),
+  },
+  codes: {
+    qrSvg: (text, size) => invoke('codes:qrSvg', { text, size }),
   },
   print: {
     showDialog: (options) => invoke('print:showDialog', options),

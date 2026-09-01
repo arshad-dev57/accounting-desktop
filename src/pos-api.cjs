@@ -114,6 +114,18 @@ function checkUserStatus(token) {
   return request(token, 'GET', '/api/users/me');
 }
 
+function fetchSessionStatus(token) {
+  return request(token, 'GET', '/api/users/session-status');
+}
+
+function listCompanyUsers(token) {
+  return request(token, 'GET', '/api/admin/users');
+}
+
+function updateCompanyUser(token, userId, body) {
+  return request(token, 'PUT', `/api/admin/users/${userId}`, body);
+}
+
 function processReturn(token, payload) {
   return request(token, 'POST', '/api/pos/returns', payload);
 }
@@ -319,32 +331,80 @@ function publishMasterData(token, records, opts = {}) {
 }
 
 /**
- * Lightweight connectivity probe. The endpoint is unauthenticated on the
- * backend, so a reachable response (even an error object) proves the network is
- * up. Used to satisfy the "check internet before starting sync" requirement.
+ * Lightweight connectivity probe. Any HTTP response from the configured API
+ * host means we are "online" for sync purposes (even 4xx/5xx).
+ * Localhost ECONNREFUSED is NOT "no internet" — surface the real API URL.
  */
 async function checkConnectivity(token) {
   const base = config.resolveApiUrl();
-  try {
+  const probes = [`${base}/`, `${base}/api/health/prisma`];
+  let lastErr = 'unreachable';
+
+  for (const url of probes) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(`${base}/api/health/prisma`, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-        Authorization: token ? `Bearer ${token}` : '',
-      },
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    return { success: true, status: res.status, online: true };
-  } catch (err) {
-    return { success: false, online: false, message: err.message || 'Offline' };
+    const timer = setTimeout(() => controller.abort(), 12000);
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          Authorization: token ? `Bearer ${token}` : '',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      return { success: true, status: res.status, online: true, apiUrl: base };
+    } catch (err) {
+      clearTimeout(timer);
+      const code = err?.cause?.code || err?.code || '';
+      if (err?.name === 'AbortError') lastErr = 'timed out after 12s';
+      else if (code === 'ECONNREFUSED') lastErr = 'connection refused — server not running';
+      else if (code === 'ENOTFOUND') lastErr = 'DNS lookup failed';
+      else if (code === 'ENETUNREACH' || code === 'EHOSTUNREACH') lastErr = 'network unreachable';
+      else lastErr = code || err.message || 'Offline';
+    }
   }
+
+  const isLocal = /127\.0\.0\.1|localhost/i.test(base);
+  const hint = isLocal
+    ? 'Start the local backend on this port, or set ELECTRON_API_URL to your cloud API in .env.'
+    : 'Check ELECTRON_API_URL and that the API is reachable.';
+
+  return {
+    success: false,
+    online: false,
+    apiUrl: base,
+    message: `Cannot reach API at ${base} (${lastErr}). ${hint}`,
+  };
 }
 
 function getProfile(token) {
   return request(token, 'GET', '/api/profile');
+}
+
+// ─── Restaurant orders (Flow #2) ─────────────────────────────────────────────
+function getKitchenOrders(token) {
+  return request(token, 'GET', '/api/pos/restaurant/orders/kitchen');
+}
+
+function getReadyOrders(token) {
+  return request(token, 'GET', '/api/pos/restaurant/orders/ready');
+}
+
+function markRestaurantPreparing(token, orderId) {
+  return request(token, 'POST', `/api/pos/restaurant/orders/${orderId}/preparing`);
+}
+
+function markRestaurantReady(token, orderId) {
+  return request(token, 'POST', `/api/pos/restaurant/orders/${orderId}/ready`);
+}
+
+function markRestaurantPaid(token, orderId, body = {}) {
+  return request(token, 'POST', `/api/pos/restaurant/orders/${orderId}/paid`, body);
+}
+
+function createRestaurantOrder(token, body) {
+  return request(token, 'POST', '/api/pos/restaurant/orders', body);
 }
 
 module.exports = {
@@ -392,8 +452,17 @@ module.exports = {
   // Bulk-fetch helpers
   fetchAllProducts,
   fetchAllCategories,
+  getKitchenOrders,
+  getReadyOrders,
+  markRestaurantPreparing,
+  markRestaurantReady,
+  markRestaurantPaid,
+  createRestaurantOrder,
   fetchAllSuppliers,
   fetchAllCustomers,
   fetchTaxContext,
   checkUserStatus,
+  fetchSessionStatus,
+  listCompanyUsers,
+  updateCompanyUser,
 };

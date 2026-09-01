@@ -13,6 +13,7 @@ const terminalBox = document.getElementById('terminal-box');
 let terminals = [];
 let selectedId = '';
 let suspended = null;
+let sessionUser = null;
 
 function showError(message) {
   errorEl.textContent = message || 'Something went wrong';
@@ -23,16 +24,29 @@ function hideError() {
   errorEl.classList.add('hidden');
 }
 
+function parseOpeningCash(raw) {
+  const text = String(raw ?? '').trim();
+  if (!text) return { ok: false, message: 'Opening cash is required. Enter the cash in the drawer before starting.' };
+  const amount = Number(text);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { ok: false, message: 'Opening cash must be greater than zero.' };
+  }
+  return { ok: true, amount };
+}
+
 function renderTerminals() {
   if (!terminals.length) {
-    listEl.innerHTML = '<p class="sub">No terminals at your assigned location yet. Sign out and sign in again — a counter will be created automatically. Or ask an admin to create a terminal for your warehouse in POS → Management → Terminals.</p>';
+    const assignedOnly = !!(sessionUser?.assignedTerminalId);
+    listEl.innerHTML = assignedOnly
+      ? '<p class="sub">Your assigned terminal is not available. Ask an admin to assign a terminal in POS → Management → Users, then sign in again.</p>'
+      : '<p class="sub">No terminals at your assigned location yet. Sign out and sign in again — a counter will be created automatically. Or ask an admin to create a terminal for your warehouse in POS → Management → Terminals.</p>';
     openBtn.disabled = true;
     return;
   }
   openBtn.disabled = false;
 
-  // Single terminal for scoped users — auto-selected, no need to pick
-  const locked = terminals.length === 1;
+  // Assigned or single terminal — auto-selected
+  const locked = terminals.length === 1 || !!sessionUser?.assignedTerminalId;
   listEl.innerHTML = terminals
     .map(
       (t) => `
@@ -55,7 +69,8 @@ function renderTerminals() {
 
 async function boot() {
   const session = await api.auth.getSession();
-  const user = session?.user || {};
+  sessionUser = session?.user || {};
+  const user = sessionUser;
   userEl.textContent = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email || '';
   const syncEl = document.getElementById('sync-status');
   // Show local catalog status immediately — no live sync on startup (use manual Sync button)
@@ -90,6 +105,8 @@ async function boot() {
   if (shift?.status === 'Suspended') {
     suspended = shift;
     resumeBox.classList.remove('hidden');
+    if (terminalBox) terminalBox.classList.add('hidden');
+    return;
   }
 
   const res = await api.pos.listTerminals();
@@ -101,18 +118,22 @@ async function boot() {
   selectedId = terminals[0]?.id || '';
 
   // Hint for scoped cashiers
-  if (!isAdmin && terminals.length === 1) {
-    const locName = terminals[0].location?.name || 'your assigned location';
+  if (!isAdmin && (terminals.length === 1 || sessionUser?.assignedTerminalId)) {
+    const t = terminals[0];
+    const locName = t.location?.name || 'your assigned location';
     if (terminalBox) {
       const hint = document.createElement('p');
       hint.className = 'sub';
       hint.style.marginBottom = '8px';
-      hint.textContent = `Working at ${locName} · ${terminals[0].name || terminals[0].code || 'Terminal'}`;
+      hint.textContent = sessionUser?.assignedTerminalId
+        ? `Your terminal · ${t.name || t.code || 'Terminal'}${t.location?.name ? ` · ${t.location.name}` : ''}`
+        : `Working at ${locName} · ${t.name || t.code || 'Terminal'}`;
       terminalBox.insertBefore(hint, listEl);
     }
   }
 
   renderTerminals();
+  if (cashEl) cashEl.focus();
 }
 
 
@@ -123,11 +144,17 @@ openBtn.addEventListener('click', async () => {
     showError('Select a terminal');
     return;
   }
+  const cashCheck = parseOpeningCash(cashEl.value);
+  if (!cashCheck.ok) {
+    showError(cashCheck.message);
+    cashEl.focus();
+    return;
+  }
   openBtn.disabled = true;
   try {
     const res = await api.pos.openShift({
       terminalId: selectedId,
-      openingCash: Number(cashEl.value || 0),
+      openingCash: cashCheck.amount,
     });
     if (!res?.success) {
       showError(res?.message || 'Could not open shift');
@@ -155,6 +182,7 @@ resumeBtn.addEventListener('click', async () => {
     showError(err.message);
   } finally {
     resumeBtn.disabled = false;
+    if (terminalBox) terminalBox.classList.remove('hidden');
   }
 });
 

@@ -4,47 +4,39 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'self';"
+      content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline' 'self'; script-src 'self';"
     />
     <title>Verify OTP — Bisonstechs POS</title>
-    <style>
-      html, body { margin: 0; height: 100%; font-family: Inter, system-ui, sans-serif; background: #f3f6fa; }
-      .wrap { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 32px 16px; }
-      .card { width: 100%; max-width: 420px; background: #fff; border-radius: 16px; box-shadow: 0 12px 40px rgba(1, 69, 130, 0.12); padding: 32px 28px; text-align: center; }
-      .brand img { width: 64px; height: 64px; object-fit: contain; }
-      h1 { margin: 12px 0 6px; font-size: 22px; color: #0b2744; }
-      p.sub { margin: 0 0 8px; color: #64748b; font-size: 13px; }
-      #email { color: #014582; font-weight: 700; font-size: 13px; word-break: break-all; }
-      .otp { display: flex; justify-content: center; gap: 8px; margin: 22px 0 8px; }
-      .otp input { width: 44px; height: 52px; text-align: center; font-size: 20px; font-weight: 700; border: 1px solid #d6dee8; border-radius: 10px; }
-      .otp input:focus { outline: 2px solid #014582; border-color: #014582; }
-      button.submit { width: 100%; margin-top: 16px; height: 46px; border: 0; border-radius: 10px; background: #014582; color: #fff; font-weight: 700; font-size: 15px; cursor: pointer; }
-      button.submit:disabled { opacity: 0.6; cursor: default; }
-      button.link { margin-top: 12px; background: none; border: 0; color: #014582; font-weight: 600; cursor: pointer; }
-      .error { margin-top: 12px; padding: 10px 12px; background: #fef2f2; color: #b91c1c; border-radius: 8px; font-size: 13px; display: none; }
-      .ok { margin-top: 12px; padding: 10px 12px; background: #ecfdf5; color: #047857; border-radius: 8px; font-size: 13px; display: none; }
-    </style>
+    <link rel="stylesheet" href="./shared.css" />
   </head>
   <body>
-    <div class="wrap">
-      <div class="card">
-        <img class="brand" src="../../assets/icon.png" alt="Bisonstechs" />
-        <h1>Verify your identity</h1>
-        <p class="sub">A 6-digit code was sent to</p>
-        <div id="email"></div>
-        <div class="otp" id="otp">
-          <input maxlength="1" inputmode="numeric" />
-          <input maxlength="1" inputmode="numeric" />
-          <input maxlength="1" inputmode="numeric" />
-          <input maxlength="1" inputmode="numeric" />
-          <input maxlength="1" inputmode="numeric" />
-          <input maxlength="1" inputmode="numeric" />
+    <div class="auth-wrap">
+      <div class="auth-card">
+        <div class="auth-brand">
+          <img src="../../assets/icon.png" alt="Bisonstechs" width="52" height="52" />
+          <h1>Verify your identity</h1>
+          <p class="sub">Enter the 6-digit code sent to your email</p>
         </div>
-        <div class="error" id="error"></div>
-        <div class="ok" id="ok"></div>
-        <button class="submit" id="submit" type="button">Verify OTP</button>
-        <button class="link" id="resend" type="button">Resend OTP</button>
-        <button class="link" id="back" type="button">Back to login</button>
+
+        <p class="auth-email" id="email"></p>
+
+        <div class="otp-row" id="otp">
+          <input maxlength="1" inputmode="numeric" autocomplete="one-time-code" aria-label="Digit 1" />
+          <input maxlength="1" inputmode="numeric" aria-label="Digit 2" />
+          <input maxlength="1" inputmode="numeric" aria-label="Digit 3" />
+          <input maxlength="1" inputmode="numeric" aria-label="Digit 4" />
+          <input maxlength="1" inputmode="numeric" aria-label="Digit 5" />
+          <input maxlength="1" inputmode="numeric" aria-label="Digit 6" />
+        </div>
+
+        <div class="error auth-msg error" id="error"></div>
+        <div class="ok auth-msg ok" id="ok"></div>
+
+        <button class="btn-primary" id="submit" type="button">Verify OTP</button>
+        <button class="btn-link" id="resend" type="button">Resend OTP</button>
+        <button class="btn-link" id="back" type="button">Back to login</button>
+
+        <p class="auth-hint">Didn&apos;t receive the code? Check spam or tap Resend OTP.</p>
       </div>
     </div>
     <script src="./otp.js"></script>
