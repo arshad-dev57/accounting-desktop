@@ -11,7 +11,7 @@ Documents/
   accounting-flutter-app/
 ```
 
-This project does **not** live inside the web app. Login and OTP are native screens here; after OTP it opens the existing POS UI from the running web app / hosted URL.
+This project does **not** live inside the web app. Login is a native screen here; after sign-in it opens the existing POS UI from the running web app / hosted URL.
 
 ## Run
 
@@ -31,7 +31,7 @@ npm install
 npm run dev
 ```
 
-Flow: **Login → OTP → POS**.
+Flow: **Login → POS** (direct password login, no OTP).
 
 `.env`:
 
@@ -44,12 +44,16 @@ ELECTRON_API_URL=http://127.0.0.1:5000
 
 ```bash
 cd /Users/glplanet/Documents/accounting-desktop-app
-npm run build:mac
-npm run build:win
+npm run build:mac          # local macOS (DMG + zip)
+npm run build:mac:arm64    # Apple Silicon artifact (CI)
+npm run build:mac:x64      # Intel Mac artifact (CI)
+npm run build:win          # Windows x64 NSIS — run on Windows (or use GitHub Actions)
 npm run build:linux
 ```
 
 Installers go to `dist-electron/`.
+
+**CI / releases:** see [docs/RELEASE.md](docs/RELEASE.md). Windows installers are built on `windows-latest`; do not rely on cross-building NSIS on Apple Silicon Macs.
 
 ## Cursor
 

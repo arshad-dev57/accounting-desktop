@@ -1120,10 +1120,6 @@ function deleteProduct(id) {
   return { success: true };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// BIDIRECTIONAL SYNC (Local -> Cloud -> Local) - client-side support
-// ═══════════════════════════════════════════════════════════════════════════
-
 const SYNC_PENDING = 'PENDING';
 const SYNC_SYNCED = 'SYNCED';
 const SYNC_FAILED = 'FAILED';
@@ -1177,7 +1173,6 @@ function renameCategoryId(oldId, newId) {
   }
 }
 
-/** Renames a subcategory's primary key to its cloud id and fixes references. */
 function renameSubcategoryId(oldId, newId) {
   if (!oldId || !newId || oldId === newId) return;
   const tmp = `__tmp_${oldId}_${newId}`;
@@ -1192,7 +1187,6 @@ function renameSubcategoryId(oldId, newId) {
   if (moved) {
     const target = get('SELECT id FROM subcategories WHERE id = ?', [newId]);
     if (target) {
-      // Cloud row already exists locally — keep it, drop the tmp copy.
       run('DELETE FROM subcategories WHERE id = ?', [tmp]);
     } else {
       run('UPDATE subcategories SET id = ? WHERE id = ?', [newId, tmp]);
@@ -1200,11 +1194,10 @@ function renameSubcategoryId(oldId, newId) {
   }
 }
 
-/** Renames a product's primary key to its cloud id. */
 function renameProductId(oldId, newId) {
   if (!oldId || !newId || oldId === newId) return;
   const tmp = `__tmp_${oldId}_${newId}`;
-  run('DELETE FROM products WHERE id = ?', [tmp]); // stale tmp from an interrupted rename
+  run('DELETE FROM products WHERE id = ?', [tmp]); 
   try {
     run('INSERT INTO products (id, category_id, subcategory_id, name, sku, barcode, price, tax_rate, tax_type, current_stock, image, description, cost_price, payload, is_active, is_deleted, updated_at, sync_id, sync_status, last_synced_at) SELECT ?, category_id, subcategory_id, name, sku, barcode, price, tax_rate, tax_type, current_stock, image, description, cost_price, payload, is_active, is_deleted, updated_at, sync_id, sync_status, last_synced_at FROM products WHERE id = ?', [tmp, oldId]);
     run('DELETE FROM products WHERE id = ?', [oldId]);
@@ -1213,7 +1206,6 @@ function renameProductId(oldId, newId) {
   if (moved) {
     const target = get('SELECT id FROM products WHERE id = ?', [newId]);
     if (target) {
-      // Cloud row already exists locally — keep it, drop the tmp copy.
       run('DELETE FROM products WHERE id = ?', [tmp]);
     } else {
       run('UPDATE products SET id = ? WHERE id = ?', [newId, tmp]);
@@ -1289,11 +1281,6 @@ function listPendingSync() {
        AND (pr.is_deleted = 0 OR pr.is_deleted IS NULL)`
   ).map((row) => {
     const extra = parseJson(row.payload, {});
-    // The product form stores the selected leaf (often a SUBCATEGORY id) in
-    // category_id with subcategory_id left empty. Resolve the real links:
-    //  - if category_id references a subcategory row, use it as the sub and
-    //    take its parent category as the category;
-    //  - otherwise use the classic category_id / subcategory_id joins.
     const subcategorySyncId = row.subcategory_sync_id || row.sub_via_cat_sync_id || '';
     const categorySyncId = row.category_sync_id || row.parent_via_sub_sync_id || '';
     const subcategoryName = row.subcategory_name || row.sub_via_cat_name || '';
@@ -1421,6 +1408,7 @@ function pendingCounts() {
 module.exports = {
   open,
   close,
+  persist,
   switchCompany,
   isOpen,
   isOpenForCompany,

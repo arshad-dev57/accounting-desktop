@@ -31,11 +31,13 @@ async function postJson(pathname, body) {
 }
 
 function login(email, password) {
-  return postJson('/api/users/login', { email, password });
-}
-
-function verifyLoginOtp(email, otp) {
-  return postJson('/api/users/verify-login-otp', { email, otp });
+  // Desktop POS: password-only login (no OTP). Mobile keeps OTP by default.
+  return postJson('/api/users/login', {
+    email,
+    password,
+    directLogin: true,
+    client: 'desktop',
+  });
 }
 
 function cloneJson(value) {
@@ -57,24 +59,80 @@ function pickAuth(body) {
   };
 }
 
-async function getMe(accessToken) {
+async function authGet(accessToken, pathname, companyId) {
   const base = config.resolveApiUrl();
-  const url = `${base}/api/users/me`;
+  const url = `${base}${pathname.startsWith('/') ? pathname : `/${pathname}`}`;
   try {
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
+    const headers = {
+      Accept: 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    };
+    if (companyId) headers['X-Company-Id'] = String(companyId);
+    const res = await fetch(url, { method: 'GET', headers });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || data.success === false) return null;
-    return cloneJson(data.user || data.data || null);
+    if (!res.ok || data.success === false) {
+      return { success: false, status: res.status, message: data.message || `Request failed (${res.status})`, data: null };
+    }
+    return { success: true, data };
   } catch (err) {
-    console.warn('[desktop] getMe failed', err.message);
-    return null;
+    return { success: false, message: err.message || 'Cannot reach the API', data: null };
   }
 }
 
-module.exports = { login, verifyLoginOtp, getMe, pickAuth, cloneJson };
+async function getMe(accessToken, companyId) {
+  const result = await authGet(accessToken, '/api/users/me', companyId);
+  if (!result.success) return null;
+  const data = result.data;
+  return cloneJson(data.user || data.data || null);
+}
+
+async function listMyCompanies(accessToken) {
+  const result = await authGet(accessToken, '/api/companies/mine');
+  if (!result.success) {
+    return { success: false, message: result.message || 'Failed to load companies', companies: [] };
+  }
+  const payload = result.data?.data || result.data || {};
+  const companies = Array.isArray(payload.companies) ? payload.companies : [];
+  const preferred = String(payload.preferredCompanyId || '').trim();
+  const active = String(payload.activeCompanyId || '').trim();
+  return {
+    success: true,
+    companies,
+    // Prefer DB-persisted primary (ERP switch) over request-scoped active
+    activeCompanyId: preferred || active,
+    preferredCompanyId: preferred || active,
+  };
+}
+
+async function setPrimaryCompany(accessToken, companyId) {
+  const base = config.resolveApiUrl();
+  const url = `${base}/api/companies/active`;
+  try {
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+        'X-Company-Id': String(companyId || ''),
+      },
+      body: JSON.stringify({ companyId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.success === false) {
+      return { success: false, message: data.message || `Request failed (${res.status})` };
+    }
+    return { success: true, data: data.data };
+  } catch (err) {
+    return { success: false, message: err.message || 'Cannot reach the API' };
+  }
+}
+
+module.exports = {
+  login,
+  getMe,
+  listMyCompanies,
+  setPrimaryCompany,
+  pickAuth,
+  cloneJson,
+};

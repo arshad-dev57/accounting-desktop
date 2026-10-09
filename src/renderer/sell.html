@@ -7,6 +7,7 @@
       content="default-src 'none'; img-src 'self' data: blob: http: https:; media-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self';"
     />
     <title>POS Dashboard — Bisonstechs</title>
+    <script src="./sell-mode-init.js"></script>
     <link rel="stylesheet" href="./shared.css" />
     <style>
       /* Layout & Nav styling */
@@ -38,6 +39,16 @@
         display: flex;
         align-items: center;
         gap: 10px;
+      }
+      .top-brand .company-logo {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        object-fit: contain;
+        background: rgba(255, 255, 255, 0.15);
+      }
+      .top-brand .company-logo.hidden {
+        display: none;
       }
       .top-brand b {
         font-size: 16px;
@@ -835,8 +846,100 @@
       .settings-stack {
         display: grid;
         gap: 16px;
-        max-width: 760px;
+        max-width: 1080px;
       }
+      .receipt-settings-grid {
+        display: grid;
+        grid-template-columns: 1.15fr 0.85fr;
+        gap: 16px;
+        align-items: start;
+      }
+      @media (max-width: 960px) {
+        .receipt-settings-grid { grid-template-columns: 1fr; }
+      }
+      .receipt-field { margin-bottom: 10px; }
+      .receipt-field label {
+        display: block;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+      .receipt-field input,
+      .receipt-field textarea,
+      .receipt-field select {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 13px;
+        background: #fff;
+        box-sizing: border-box;
+      }
+      .receipt-field textarea { min-height: 64px; resize: vertical; }
+      .receipt-toggle {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 0;
+        border-bottom: 1px solid #eef2f7;
+        font-size: 13px;
+      }
+      .receipt-toggle:last-child { border-bottom: 0; }
+      .receipt-feature {
+        border: 1px solid #c7d7ea;
+        background: #f4f8fc;
+        border-radius: 10px;
+        padding: 12px 14px;
+        margin-bottom: 14px;
+      }
+      .receipt-feature p {
+        margin: 8px 0 0;
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+      .receipt-preview-wrap {
+        background: #e8eef5;
+        border-radius: 12px;
+        padding: 10px;
+        max-height: 640px;
+        overflow: auto;
+      }
+      .checkout-tender {
+        display: none;
+        margin: 4px 0 14px;
+        border: 1px solid #c7d7ea;
+        background: #f4f8fc;
+        border-radius: 10px;
+        padding: 12px 14px;
+      }
+      .checkout-tender.open { display: block; }
+      .checkout-tender-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 8px;
+      }
+      .checkout-tender-grid div {
+        background: #fff;
+        border-radius: 8px;
+        padding: 8px 10px;
+      }
+      .checkout-tender-grid span {
+        display: block;
+        font-size: 11px;
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .checkout-tender-grid b {
+        display: block;
+        margin-top: 2px;
+        font-size: 15px;
+        font-weight: 800;
+      }
+      .checkout-tender-grid .remain b { color: #047857; }
+      .checkout-tender-grid .remain.owed b { color: #dc2626; }
       .settings-card {
         background: #fff;
         padding: 20px;
@@ -901,6 +1004,30 @@
         font-size: 11px;
         color: var(--muted);
         word-break: break-all;
+      }
+      .backup-guide {
+        background: #f0f7ff;
+        border: 1px solid #cfe2ff;
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 12px;
+        color: #1e3a5f;
+        line-height: 1.45;
+      }
+      .backup-guide ol {
+        margin: 6px 0 0 18px;
+        padding: 0;
+      }
+      .backup-times-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .backup-times-row input[type="time"] {
+        padding: 8px 10px;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        font-size: 13px;
       }
       .panel-grid {
         display: grid;
@@ -1432,6 +1559,153 @@
         font-weight: 700;
         cursor: pointer;
       }
+
+      /* ─── Restaurant POS mode ───────────────────────────────────── */
+      html.pos-mode-restaurant .top-bar,
+      body.pos-mode-restaurant .top-bar {
+        border-bottom: 3px solid #ea580c;
+        background: linear-gradient(180deg, #fff7ed 0%, #ffffff 72%);
+        color: #292524;
+        box-shadow: 0 2px 10px rgba(234, 88, 12, 0.12);
+      }
+      body.pos-mode-restaurant .top-brand b {
+        color: #9a3412;
+      }
+      body.pos-mode-restaurant .top-brand > span:not(.restaurant-mode-badge):not(.status-badge):not(.offline-badge) {
+        background: #ffedd5;
+        color: #c2410c;
+        border: 1px solid #fdba74;
+      }
+      body.pos-mode-restaurant #cashier-meta {
+        color: #44403c;
+        font-weight: 600;
+        font-size: 13px;
+      }
+      body.pos-mode-restaurant .loc-picker {
+        background: #fff7ed;
+        border-color: #fdba74;
+      }
+      body.pos-mode-restaurant .loc-picker span,
+      body.pos-mode-restaurant .loc-picker select {
+        color: #9a3412;
+      }
+      body.pos-mode-restaurant .time-badge {
+        background: #ea580c;
+        color: #ffffff;
+      }
+      body.pos-mode-restaurant .btn-nav-action.ghost {
+        background: #fff7ed;
+        color: #9a3412;
+        border: 1px solid #fdba74;
+      }
+      body.pos-mode-restaurant .btn-nav-action.ghost:hover {
+        background: #ffedd5;
+      }
+      html.pos-mode-restaurant .sidebar,
+      body.pos-mode-restaurant .sidebar {
+        background: linear-gradient(180deg, #292524 0%, #1c1917 100%);
+      }
+      html.pos-mode-restaurant .tab-btn.active,
+      body.pos-mode-restaurant .tab-btn.active {
+        background: #ea580c;
+        border-color: #ea580c;
+      }
+      .restaurant-mode-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: #ffedd5;
+        color: #c2410c;
+        border: 1px solid #fdba74;
+      }
+      .restaurant-order-panel {
+        margin-top: 12px;
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px solid #fed7aa;
+        background: linear-gradient(180deg, #fff7ed 0%, #fff 100%);
+      }
+      .restaurant-order-panel .panel-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+      .restaurant-order-panel .panel-title b {
+        display: block;
+        font-size: 14px;
+        color: #9a3412;
+      }
+      .restaurant-order-panel .panel-title small {
+        display: block;
+        font-size: 11px;
+        color: #78716c;
+        font-weight: 500;
+      }
+      .restaurant-order-panel .panel-icon {
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        display: grid;
+        place-items: center;
+        background: #ffedd5;
+        font-size: 18px;
+      }
+      .restaurant-fields {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+      .restaurant-fields label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 11px;
+        font-weight: 700;
+        color: #57534e;
+      }
+      .restaurant-fields label.full {
+        grid-column: 1 / -1;
+      }
+      .restaurant-fields input,
+      .restaurant-fields select {
+        height: 36px;
+        border: 1px solid #fdba74;
+        border-radius: 8px;
+        padding: 0 10px;
+        font-size: 13px;
+        background: #fff;
+      }
+      .btn-send-kitchen {
+        width: 100%;
+        height: 44px;
+        border: 0;
+        border-radius: 10px;
+        background: linear-gradient(180deg, #f97316 0%, #ea580c 100%);
+        color: #fff;
+        font-weight: 800;
+        font-size: 14px;
+        cursor: pointer;
+        letter-spacing: 0.02em;
+      }
+      .btn-send-kitchen:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
+      body.pos-mode-restaurant .cart-header h3::before {
+        content: '🍽 ';
+      }
+      .restaurant-ready-header h2::before {
+        content: '🍳 ';
+      }
     </style>
   </head>
   <body>
@@ -1439,16 +1713,14 @@
       <!-- Top Bar -->
       <div class="top-bar">
         <div class="top-brand">
-          <b>Bisonstechs POS</b>
+          <img id="company-logo" class="company-logo hidden" alt="" />
+          <b id="company-brand-name">POS</b>
+          <span class="restaurant-mode-badge hidden" id="restaurant-mode-badge">Restaurant POS</span>
           <span id="terminal-badge">Terminal...</span>
           <span class="status-badge">SHIFT OPEN</span>
           <span class="offline-badge" id="offline-badge">Offline</span>
         </div>
         <div class="top-info">
-          <div class="loc-picker" title="Products and stock follow this location">
-            <span>Location</span>
-            <select id="location-select"></select>
-          </div>
           <span id="cashier-meta">Cashier: ...</span>
           <div class="time-badge" id="live-clock">00:00:00</div>
                               <div class="top-actions">
@@ -1593,6 +1865,32 @@
                     <span class="val" id="cart-grand-total">PKR 0.00</span>
                   </div>
 
+                  <div class="restaurant-order-panel hidden" id="restaurant-order-panel">
+                    <div class="panel-title">
+                      <div class="panel-icon">🍳</div>
+                      <div>
+                        <b>Send to kitchen</b>
+                        <small>Order picker ki tarah — ticket kitchen queue mein jayega</small>
+                      </div>
+                    </div>
+                    <div class="restaurant-fields">
+                      <label>Table
+                        <input type="text" id="restaurant-table" placeholder="e.g. 5" autocomplete="off" />
+                      </label>
+                      <label>Order type
+                        <select id="restaurant-order-type">
+                          <option value="dine_in">Dine in</option>
+                          <option value="takeaway">Takeaway</option>
+                          <option value="delivery">Delivery</option>
+                        </select>
+                      </label>
+                      <label class="full">Kitchen notes
+                        <input type="text" id="restaurant-notes" placeholder="Extra spicy, no onion…" autocomplete="off" />
+                      </label>
+                    </div>
+                    <button type="button" class="btn-send-kitchen" id="btn-send-kitchen" disabled>Send to Kitchen</button>
+                  </div>
+
                   <button class="btn-checkout" id="btn-checkout-trigger" disabled>
                     Checkout — <span id="checkout-grand-total">PKR 0.00</span>
                   </button>
@@ -1605,12 +1903,22 @@
 
           <div class="view-panel" id="tab-ready-orders">
             <div class="panel-content">
-              <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+              <div class="panel-header restaurant-ready-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
                 <div>
                   <h2 style="margin:0;">Ready orders</h2>
-                  <p style="margin:4px 0 0;font-size:12px;color:var(--muted);">Kitchen-ready tickets — take payment on this terminal (saved locally, then Sync).</p>
+                  <p style="margin:4px 0 0;font-size:12px;color:var(--muted);">Kitchen se ready tickets — yahan payment lo (local save, phir Sync).</p>
                 </div>
                 <button class="btn-nav-action ghost" id="btn-refresh-ready-orders" type="button">↻ Refresh</button>
+              </div>
+              <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+                <input type="text" id="ready-filter-ticket" placeholder="Ticket #" style="max-width:100px;height:36px;padding:0 10px;border:1px solid var(--line);border-radius:8px;" />
+                <input type="text" id="ready-filter-table" placeholder="Table" style="max-width:120px;height:36px;padding:0 10px;border:1px solid var(--line);border-radius:8px;" />
+                <select id="ready-filter-type" style="height:36px;padding:0 10px;border:1px solid var(--line);border-radius:8px;">
+                  <option value="">All types</option>
+                  <option value="dine_in">Dine in</option>
+                  <option value="takeaway">Takeaway</option>
+                  <option value="delivery">Delivery</option>
+                </select>
               </div>
               <div id="ready-orders-list" class="restaurant-ready-grid"></div>
             </div>
@@ -1810,6 +2118,135 @@
                     <input type="checkbox" id="settings-enable-thermal" /> Auto-print receipt on sale
                   </div>
                   <button class="btn-add-custom" id="btn-save-settings" style="margin-top:10px;">Save Settings</button>
+                </div>
+
+                <div class="settings-card" id="drive-backup-card">
+                  <h3>Google Drive backup</h3>
+                  <p class="settings-muted" style="margin-bottom:10px;">
+                    Backs up <b>this PC’s POS data only</b> to your Google Drive.
+                    <b style="color:#0b7a3e;">Does not change your cloud / Railway server.</b>
+                  </p>
+                  <div id="backup-guide" class="backup-guide"></div>
+
+                  <label class="receipt-toggle" style="margin-top:10px;">
+                    <span>Enable scheduled backup (3 times / day)</span>
+                    <input type="checkbox" id="backup-enabled" />
+                  </label>
+
+                  <div style="margin-top:12px;">
+                    <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;">Backup times (local clock)</div>
+                    <div class="backup-times-row">
+                      <input type="time" id="backup-time-1" />
+                      <input type="time" id="backup-time-2" />
+                      <input type="time" id="backup-time-3" />
+                    </div>
+                  </div>
+
+                  <details style="margin-top:12px;">
+                    <summary style="cursor:pointer;font-size:13px;font-weight:700;">Google OAuth credentials (admin)</summary>
+                    <p class="settings-muted" style="margin:8px 0;">
+                      Google Cloud Console → enable <b>Google Drive API</b> → create OAuth client type <b>Desktop app</b>.
+                      You can also put values in desktop <code>.env</code> as <code>GOOGLE_OAUTH_CLIENT_ID</code> / <code>GOOGLE_OAUTH_CLIENT_SECRET</code>.
+                    </p>
+                    <div class="receipt-field">
+                      <label>Client ID</label>
+                      <input id="backup-client-id" type="text" placeholder="xxxx.apps.googleusercontent.com" autocomplete="off" />
+                    </div>
+                    <div class="receipt-field">
+                      <label>Client Secret</label>
+                      <input id="backup-client-secret" type="password" placeholder="Leave blank to keep existing" autocomplete="off" />
+                    </div>
+                  </details>
+
+                  <div id="backup-status-line" class="settings-muted" style="margin-top:10px;"></div>
+
+                  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;">
+                    <button class="btn-add-custom" id="btn-backup-save" type="button">Save backup settings</button>
+                    <button class="btn-add-custom" id="btn-backup-connect" type="button">Connect Google Drive</button>
+                    <button class="btn-add-custom" id="btn-backup-disconnect" type="button" style="background:#6b7280;">Disconnect</button>
+                    <button class="btn-add-custom" id="btn-backup-now" type="button">Backup now</button>
+                    <button class="btn-add-custom" id="btn-backup-refresh-list" type="button" style="background:#0f766e;">Load Drive backups</button>
+                  </div>
+
+                  <div style="margin-top:14px;">
+                    <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;">Restore from Google Drive</div>
+                    <p class="settings-muted" style="margin-bottom:8px;">
+                      Pick a backup by date/time. This overwrites <b>local data on this PC only</b> (not the cloud server).
+                    </p>
+                    <select id="backup-restore-select" style="width:100%;padding:8px;border-radius:8px;border:1px solid #d1d5db;font-size:13px;">
+                      <option value="">— Load list first —</option>
+                    </select>
+                    <button class="btn-add-custom" id="btn-backup-restore" type="button" style="margin-top:8px;background:#b45309;">Restore selected backup</button>
+                  </div>
+                </div>
+
+                <div class="settings-card" id="receipt-settings-card">
+                  <h3>Receipt settings</h3>
+                  <p class="settings-muted">Saved on this computer only. Choose what prints on the receipt, and whether cashier must enter cash received.</p>
+                  <div class="receipt-settings-grid">
+                    <div>
+                      <div class="receipt-feature">
+                        <label class="receipt-toggle" style="border:0;padding:0;">
+                          <span style="font-weight:700;">Ask cashier for cash received</span>
+                          <input type="checkbox" id="rset-ask-cash" />
+                        </label>
+                        <p>When enabled, at checkout the cashier types how much the customer paid. Remaining change is calculated and printed on the receipt.</p>
+                      </div>
+                      <div class="receipt-field">
+                        <label>Header</label>
+                        <input id="rset-header" type="text" />
+                      </div>
+                      <div class="receipt-field">
+                        <label>Footer</label>
+                        <input id="rset-footer" type="text" />
+                      </div>
+                      <div class="receipt-field">
+                        <label>Return / exchange policy</label>
+                        <textarea id="rset-policy"></textarea>
+                      </div>
+                      <div class="receipt-field">
+                        <label>Extra notes</label>
+                        <textarea id="rset-notes"></textarea>
+                      </div>
+                      <div class="receipt-field">
+                        <label>Store name (blank = company name)</label>
+                        <input id="rset-store-name" type="text" />
+                      </div>
+                      <div class="receipt-field">
+                        <label>Address</label>
+                        <input id="rset-store-address" type="text" />
+                      </div>
+                      <div class="receipt-field">
+                        <label>Phone</label>
+                        <input id="rset-phone" type="text" />
+                      </div>
+                      <div class="receipt-field">
+                        <label>Thermal paper</label>
+                        <select id="rset-paper-width">
+                          <option value="58">58mm</option>
+                          <option value="80">80mm</option>
+                        </select>
+                      </div>
+                      <div style="margin:12px 0 8px;font-size:12px;font-weight:700;color:var(--muted);">Show on receipt</div>
+                      <label class="receipt-toggle"><span>Logo</span><input type="checkbox" data-rset-toggle="showLogo" /></label>
+                      <label class="receipt-toggle"><span>Address</span><input type="checkbox" data-rset-toggle="showAddress" /></label>
+                      <label class="receipt-toggle"><span>Phone</span><input type="checkbox" data-rset-toggle="showPhone" /></label>
+                      <label class="receipt-toggle"><span>Email</span><input type="checkbox" data-rset-toggle="showEmail" /></label>
+                      <label class="receipt-toggle"><span>Website</span><input type="checkbox" data-rset-toggle="showWebsite" /></label>
+                      <label class="receipt-toggle"><span>Tax ID</span><input type="checkbox" data-rset-toggle="showTaxId" /></label>
+                      <label class="receipt-toggle"><span>Barcode</span><input type="checkbox" data-rset-toggle="showBarcode" /></label>
+                      <label class="receipt-toggle"><span>SKU</span><input type="checkbox" data-rset-toggle="showSku" /></label>
+                      <label class="receipt-toggle"><span>Cashier</span><input type="checkbox" data-rset-toggle="showCashier" /></label>
+                      <label class="receipt-toggle"><span>Terminal</span><input type="checkbox" data-rset-toggle="showTerminal" /></label>
+                      <button class="btn-add-custom" id="btn-save-receipt-settings" style="margin-top:14px;">Save receipt settings</button>
+                    </div>
+                    <div>
+                      <div class="settings-muted" style="margin-bottom:8px;font-size:11px;font-weight:700;letter-spacing:.5px;">LIVE PREVIEW</div>
+                      <div class="receipt-preview-wrap">
+                        <div id="receipt-settings-preview"></div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2019,6 +2456,15 @@
         <div style="margin-bottom:12px;display:flex;justify-content:space-between;font-size:14px;border-bottom:1px solid #f1f5f9;padding-bottom:10px;">
           <span>Order Grand Total</span>
           <span style="font-weight:800;color:var(--brand);" id="checkout-modal-total">PKR 0.00</span>
+        </div>
+
+        <div class="checkout-tender" id="checkout-cash-received-panel">
+          <div style="font-size:12px;font-weight:700;margin-bottom:8px;">Cash received from customer</div>
+          <div class="checkout-tender-grid">
+            <div><span>Bill</span><b id="checkout-tender-bill">PKR 0.00</b></div>
+            <div><span>Received</span><b id="checkout-tender-received">PKR 0.00</b></div>
+            <div class="remain" id="checkout-tender-remain-box"><span id="checkout-tender-remain-label">Change</span><b id="checkout-tender-remain">PKR 0.00</b></div>
+          </div>
         </div>
 
         <div class="pay-quick-row">
@@ -2383,6 +2829,7 @@
         <p id="sync-overlay-msg">Pulling latest categories, products and customers from the cloud.</p>
       </div>
     </div>
+    <script src="./session-guard.js"></script>
     <script src="./location.js"></script>
     <script src="./scan-code.js"></script>
     <script src="./pos-receipt.js"></script>

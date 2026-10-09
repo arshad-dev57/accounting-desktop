@@ -1049,10 +1049,7 @@ async function runCatalogSync() {
   if (overlay) overlay.classList.add('show');
   if (msg) msg.textContent = 'Pulling latest categories, subcategories and products from the cloud.';
   try {
-    const locationId = window.bisonLocation
-      ? bisonLocation.effectiveId(bisonLocation.getStoredLocationId())
-      : '';
-    const catalog = await api.pos.syncMasterData({ refresh: true, locationId, skipReload: true });
+    const catalog = await api.pos.syncMasterData({ refresh: true, skipReload: true });
     if (msg) msg.textContent = 'Refreshing products and orders…';
     await Promise.all([loadProducts(), fetchOrders()]);
     const n = catalog?.counts?.products || 0;
@@ -1088,7 +1085,6 @@ btnBackToPos.addEventListener('click', () => {
 });
 btnLogout.addEventListener('click', () => api.auth.logout());
 btnDeleteAll.addEventListener('click', handleDeleteAll);
-api.auth.onExpired(() => api.auth.logout());
 
 btnCreate.addEventListener('click', () => { showCreateView(); loadProducts(); loadTaxContext(); });
 

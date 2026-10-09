@@ -34,12 +34,14 @@ const windowState = require('./window-state.cjs');
 const authStore = require('./auth-store.cjs');
 const { setupAutoUpdate } = require('./updater.cjs');
 const backendApi = require('./backend-api.cjs');
+const desktopNotifications = require('./desktop-notifications.cjs');
 const posApi = require('./pos-api.cjs');
 const salesApi = require('./sales-api.cjs');
 const localDb = require('./local-db.cjs');
 const masterSqlite = require('./master-sqlite.cjs');
 const masterSync = require('./master-sync.cjs');
 const machineInfo = require('./machine-info.cjs');
+const driveBackup = require('./drive-backup/service.cjs');
 
 const isMac = process.platform === 'darwin';
 const isDev = !app.isPackaged;
@@ -57,6 +59,7 @@ let splashWindow = null;
 let titleBarView = null;
 let appView = null;
 let sessionWatchTimer = null;
+let pendingForcedLogout = false;
 let rendererOrigin = config.DEFAULT_LOCAL;
 let shown = false;
 let pendingLogin = null;
@@ -66,9 +69,12 @@ function userData() {
   return app.getPath('userData');
 }
 
-function resolveCompanyId(user) {
+function resolveCompanyId(user, session) {
   return String(
-    user?.companyId ||
+    session?.activeCompanyId ||
+      user?.activeCompanyId ||
+      posApi.getActiveCompanyId?.() ||
+      user?.companyId ||
       user?.company_id ||
       user?.company?.id ||
       user?.company?._id ||
@@ -76,16 +82,29 @@ function resolveCompanyId(user) {
   ).trim();
 }
 
-async function enrichUserProfile(user, token) {
+function applyApiCompanyContext(companyId) {
+  const id = String(companyId || '').trim();
+  if (typeof posApi.setActiveCompanyId === 'function') {
+    posApi.setActiveCompanyId(id);
+  }
+  return id;
+}
+
+function showCompanySelectScreen() {
+  appView?.webContents.loadFile(path.join(__dirname, 'renderer', 'company-select.html'));
+}
+
+async function enrichUserProfile(user, token, companyId) {
   if (!user || !token) return user;
-  if (resolveCompanyId(user)) return user;
   try {
-    const me = await backendApi.getMe(token);
+    const me = await backendApi.getMe(token, companyId || resolveCompanyId(user));
     if (!me) return user;
     return {
       ...user,
       ...me,
       company: { ...(user.company || {}), ...(me.company || {}) },
+      businessDetails: { ...(user.businessDetails || {}), ...(me.businessDetails || {}) },
+      organizationName: me.organizationName || user.organizationName || me.company?.name || '',
     };
   } catch (err) {
     console.warn('[scope] enrichUserProfile failed:', err.message);
@@ -142,6 +161,7 @@ async function ensureCatalogOpen(user) {
 }
 
 function showLoginScreen(opts = {}) {
+  stopDesktopNotifications();
   pendingLogin = null;
   const message = typeof opts === 'string' ? opts : opts?.message;
   const reason = typeof opts === 'object' ? opts?.reason || opts?.code : undefined;
@@ -197,32 +217,43 @@ async function validateSessionAccess(token) {
 }
 
 async function forceLogoutWithReason(code, message) {
-  authStore.clearSession(userData());
-  pendingLogin = null;
-  activeShift = null;
-  try { localDb.saveActiveShift(null); } catch { /* ignore */ }
-  showLoginScreen({ message, reason: code });
+  if (pendingForcedLogout) return;
+  pendingForcedLogout = true;
   appView?.webContents.send('auth:access-denied', { code, message });
-}
-
-function showOtpScreen(email) {
-  appView?.webContents.loadFile(path.join(__dirname, 'renderer', 'otp.html'), {
-    query: { email: String(email || '') },
-  });
+  setTimeout(() => {
+    authStore.clearSession(userData());
+    pendingLogin = null;
+    activeShift = null;
+    try { localDb.saveActiveShift(null); } catch { /* ignore */ }
+    showLoginScreen({ message, reason: code });
+    pendingForcedLogout = false;
+  }, 5000);
 }
 
 function showShiftScreen() {
   appView?.webContents.loadFile(path.join(__dirname, 'renderer', 'shift.html'));
 }
 
-function showSellScreen() {
-  appView?.webContents.loadFile(path.join(__dirname, 'renderer', 'sell.html'));
+function showSellScreen(user) {
+  const authUser = user || requireAuth()?.session?.user;
+  const posMode = authUser ? resolvePosMode(authUser) : 'retail';
+  appView?.webContents.loadFile(path.join(__dirname, 'renderer', 'sell.html'), {
+    query: { posMode },
+  });
 }
 
 function showRestaurantPosScreen(tab = 'counter') {
   appView?.webContents.loadFile(path.join(__dirname, 'renderer', 'restaurant-pos.html'), {
     query: { tab: String(tab || 'counter') },
   });
+}
+
+function startDesktopNotifications() {
+  desktopNotifications.start(appView, requireAuth, mainWindow);
+}
+
+function stopDesktopNotifications() {
+  desktopNotifications.stop();
 }
 
 function resolvePosMode(user) {
@@ -238,7 +269,7 @@ function enterPosForUser(user) {
     showRestaurantPosScreen('kitchen');
     return;
   }
-  showSellScreen();
+  showSellScreen(user);
 }
 
 function showSalesScreen() {
@@ -296,11 +327,25 @@ async function loadAuthOrPos() {
     await forceLogoutWithReason(check.code, check.message);
     return;
   }
-  const user = await enrichUserProfile(session.user, session.accessToken);
-  if (user && user !== session.user) {
-    authStore.writeSession(userData(), { ...session, user });
+  const activeId = resolveCompanyId(session.user, session);
+  applyApiCompanyContext(activeId);
+  const user = await enrichUserProfile(session.user, session.accessToken, activeId);
+  const boundUser = user
+    ? {
+        ...user,
+        companyId: activeId || resolveCompanyId(user, session),
+        activeCompanyId: activeId || resolveCompanyId(user, session),
+      }
+    : session.user;
+  if (boundUser) {
+    authStore.writeSession(userData(), {
+      ...session,
+      user: boundUser,
+      activeCompanyId: boundUser.companyId || activeId,
+    });
+    applyApiCompanyContext(boundUser.companyId || activeId);
+    await switchLocalDataForCompany(boundUser);
   }
-  await switchLocalDataForCompany(user || session.user);
   showShiftScreen();
 }
 
@@ -315,7 +360,7 @@ function isAdminUser(user) {
   );
 }
 
-/** Assigned location IDs for a non-admin user (empty = no access). Admins return null (= all). */
+/** Assigned location IDs. null = company-wide / all. Admins and users with no warehouse assignment are company-wide. */
 function getUserLocationIds(user) {
   if (!user) return [];
   if (isAdminUser(user)) return null;
@@ -325,7 +370,8 @@ function getUserLocationIds(user) {
   if (Array.isArray(user.locations) && user.locations.length) {
     return user.locations.map((l) => String(l.id || l._id || '')).filter(Boolean);
   }
-  return [];
+  // No warehouse assignment = company-wide access
+  return null;
 }
 
 function filterLocationsForUser(user, list) {
@@ -352,12 +398,13 @@ function filterTerminalsForUser(user, list) {
   }
 
   const allowed = getUserLocationIds(user);
-  if (allowed === null) return rows; // admin — all
-  if (!allowed.length) return [];
+  if (allowed === null) return rows; // admin / company-wide — all
+  if (!allowed.length) return rows.filter((t) => !String(t.locationId || t.location?.id || '').trim());
   const set = new Set(allowed);
   return rows.filter((t) => {
-    const locId = String(t.locationId || t.location?.id || '');
-    return locId && set.has(locId);
+    const locId = String(t.locationId || t.location?.id || '').trim();
+    // Company-wide terminals (no warehouse) + terminals at assigned warehouses
+    return !locId || set.has(locId);
   });
 }
 
@@ -460,13 +507,21 @@ function filterRecordsForUser(user, records) {
   const rows = Array.isArray(records) ? records : [];
   const allowed = getUserLocationIds(user);
   if (allowed === null) return rows; // admin — everything
-  if (!allowed.length) return [];
-  const set = new Set(allowed.map(String));
   const uid = currentUserId(user);
+  if (!allowed.length) {
+    // No warehouse assignment — company-wide / untagged rows only
+    return rows.filter((r) => {
+      const locId = resolveRecordLocationId(r);
+      if (!locId) return true;
+      const cashier = String(r.cashierId || r.userId || r.cashier?.id || '').trim();
+      return uid && cashier && cashier === uid;
+    });
+  }
+  const set = new Set(allowed.map(String));
   return rows.filter((r) => {
     const locId = resolveRecordLocationId(r);
     if (locId) return set.has(locId);
-    // Untagged legacy row: only show if clearly this cashier's
+    // Untagged / company-wide row: only show if clearly this cashier's
     const cashier = String(r.cashierId || r.userId || r.cashier?.id || '').trim();
     return uid && cashier && cashier === uid;
   });
@@ -487,16 +542,21 @@ function stampScopedPayload(auth, payload = {}) {
         return null;
       }
     })();
+  // Only stamp warehouse when the terminal (or payload) explicitly has one —
+  // never fall back to a default / first user location.
   const locationId =
     String(payload.locationId || '').trim() ||
     String(activeShift?.terminal?.locationId || activeShift?.terminal?.location?.id || '').trim() ||
     String(terminal?.locationId || terminal?.location?.id || '').trim() ||
-    (getUserLocationIds(user) || [])[0] ||
     '';
 
   return {
     ...payload,
-    companyId: resolveCompanyId(user) || payload.companyId || undefined,
+    companyId:
+      posApi.getActiveCompanyId?.() ||
+      resolveCompanyId(user) ||
+      payload.companyId ||
+      undefined,
     shiftId: activeShift?.id || payload.shiftId,
     terminalId: activeShift?.terminalId || payload.terminalId || terminal?.id,
     locationId: locationId || undefined,
@@ -579,20 +639,8 @@ async function refreshScopedCatalogCaches(token, user) {
 
   terminals = filterTerminalsForUser(user, terminals);
 
-  // Offline / empty fallback: if user has locations but no terminals yet,
-  // seed a local counter per location so shift screen is usable.
-  if (!terminals.length && locations.length) {
-    terminals = locations.map((loc) => ({
-      id: `local-term-${loc.id}`,
-      name: `${loc.name || 'Store'} Counter`,
-      code: `T-${String(loc.code || loc.id || 'POS').replace(/\s+/g, '').slice(0, 8).toUpperCase()}`,
-      locationId: loc.id,
-      location: { id: loc.id, name: loc.name, code: loc.code, type: loc.type },
-      isActive: true,
-      status: 'Active',
-    }));
-    console.log(`[scope] seeded ${terminals.length} local terminal(s) for assigned location(s)`);
-  }
+  // Drop any leftover offline placeholders — terminals must be created explicitly.
+  terminals = terminals.filter((t) => !String(t.id || '').startsWith('local-term-'));
 
   try { localDb.saveTerminals(terminals); } catch (err) {
     console.warn('[scope] saveTerminals failed:', err.message);
@@ -610,6 +658,8 @@ function requireAuth() {
   if (!sessionData?.accessToken) {
     return { ok: false, result: { success: false, message: 'Please sign in again' } };
   }
+  const companyId = resolveCompanyId(sessionData.user, sessionData);
+  if (companyId) applyApiCompanyContext(companyId);
   return { ok: true, session: sessionData };
 }
 
@@ -636,81 +686,74 @@ function sessionSeedScript(sessionData) {
   return `(function(){try{var s=${JSON.stringify(payload)};if(s.accessToken)localStorage.setItem('auth_token',s.accessToken);if(s.refreshToken)localStorage.setItem('refresh_token',s.refreshToken);if(s.userJson&&s.userJson!=='null')localStorage.setItem('user',s.userJson);localStorage.setItem('has_subscription_access','1');}catch(e){}})();`;
 }
 
-async function completeLoginAndOpenPos(rawBody) {
-  const picked = backendApi.pickAuth(rawBody);
-  let { token, refreshToken, user } = picked;
-  if (!token) {
-    return { success: false, message: 'OTP verified but no token was returned' };
-  }
-  if (!user) {
-    user = await backendApi.getMe(token);
-  }
-  if (!user) {
-    return { success: false, message: 'Login succeeded but user profile could not be loaded' };
+async function bindCompanyAndOpenPos(token, refreshToken, user, company) {
+  const companyId = String(company?.id || company || '').trim();
+  if (!companyId) {
+    return { success: false, message: 'Select a company for this POS session' };
   }
 
-  user = await enrichUserProfile(user, token);
+  applyApiCompanyContext(companyId);
 
-  // Ensure location scope fields are present (getMe / OTP should include them)
-  if (!Array.isArray(user.locationIds) && Array.isArray(user.locations)) {
-    user.locationIds = user.locations.map((l) => l.id || l._id).filter(Boolean);
+  try {
+    await backendApi.setPrimaryCompany(token, companyId);
+  } catch (err) {
+    console.warn('[scope] setPrimaryCompany failed:', err.message);
   }
-  if (user.isLocationAdmin == null) {
-    user.isLocationAdmin = isAdminUser(user);
-  }
+
+  let boundUser = {
+    ...user,
+    companyId,
+    activeCompanyId: companyId,
+    company:
+      typeof company === 'object' && company
+        ? { ...(user.company || {}), ...company, id: companyId }
+        : { ...(user.company || {}), id: companyId },
+    organizationName:
+      (typeof company === 'object' && company?.name) ||
+      user.organizationName ||
+      user.company?.name ||
+      '',
+  };
+
+  boundUser = await enrichUserProfile(boundUser, token, companyId);
+  boundUser = {
+    ...boundUser,
+    companyId,
+    activeCompanyId: companyId,
+    company: {
+      ...(boundUser.company || {}),
+      ...(typeof company === 'object' && company ? company : {}),
+      id: companyId,
+    },
+  };
 
   authStore.writeSession(userData(), {
     accessToken: token,
     refreshToken,
-    user,
+    user: boundUser,
+    activeCompanyId: companyId,
   });
   await applyAuthCookies(token, refreshToken);
   pendingLogin = null;
-  await switchLocalDataForCompany(user);
-  resetActiveShiftForUser(user);
+  await switchLocalDataForCompany(boundUser);
+  resetActiveShiftForUser(boundUser);
 
-  // Seed local location/terminal caches scoped to this user
   try {
-    // Immediately cache locations from login payload (works offline too)
-    if (Array.isArray(user.locations) && user.locations.length) {
-      localDb.saveLocations(filterLocationsForUser(user, user.locations));
+    if (Array.isArray(boundUser.locations) && boundUser.locations.length) {
+      localDb.saveLocations(filterLocationsForUser(boundUser, boundUser.locations));
     }
-    await refreshScopedCatalogCaches(token, user);
+    await refreshScopedCatalogCaches(token, boundUser);
   } catch (err) {
     console.warn('[desktop] scope cache seed failed:', err.message);
   }
 
-  // Non-admin with zero assigned locations cannot use POS
-  if (!isAdminUser(user)) {
-    const ids = getUserLocationIds(user);
-    if (!ids || ids.length === 0) {
-      authStore.clearSession(userData());
-      return {
-        success: false,
-        message: 'No warehouse location assigned to your account. Ask an admin to assign a location.',
-      };
-    }
-
-    // Pull catalog for THIS location only so stock/products match the warehouse
-    try {
-      const locId = ids[0];
-      console.log('[scope] refreshing catalog for assigned location', locId);
-      await masterSync.refreshCatalog(token, locId);
-    } catch (err) {
-      console.warn('[scope] location catalog refresh failed:', err.message);
-    }
-  } else {
-    // Admin login after a cashier session: restore company-wide catalog
-    // (cashier sync may have wiped stock via keepOnlyProductIds).
-    try {
-      console.log('[scope] admin login — refreshing full catalog');
-      await masterSync.refreshCatalog(token, '');
-    } catch (err) {
-      console.warn('[scope] admin catalog refresh failed:', err.message);
-    }
+  try {
+    console.log('[scope] refreshing full company catalog for', companyId);
+    await masterSync.refreshCatalog(token, '');
+  } catch (err) {
+    console.warn('[scope] catalog refresh failed:', err.message);
   }
 
-  // Pull company tax profile (enabled + rates from web Tax Compliance)
   try {
     const taxRes = await posApi.fetchTaxContext(token);
     if (taxRes?.success && taxRes.data) {
@@ -721,22 +764,112 @@ async function completeLoginAndOpenPos(rawBody) {
     console.warn('[desktop] tax context fetch failed:', err.message);
   }
 
-  console.log('[desktop] session ready, opening shift screen', user.email || user.id);
+  console.log('[desktop] session ready for company', companyId, boundUser.email || boundUser.id);
   const access = await validateSessionAccess(token);
   if (!access.ok) {
     authStore.clearSession(userData());
     return { success: false, code: access.code, message: access.message };
   }
 
-  const existingShift = await hydrateShiftFromServer(token, user);
+  startDesktopNotifications();
+
+  const existingShift = await hydrateShiftFromServer(token, boundUser);
   if (existingShift?.status === 'Open') {
-    console.log('[desktop] resuming open shift for', user.email || user.id);
-    enterPosForUser(user);
-    return { success: true, resumed: true };
+    console.log('[desktop] resuming open shift for', boundUser.email || boundUser.id);
+    enterPosForUser(boundUser);
+    return { success: true, resumed: true, companyId };
   }
 
   showShiftScreen();
-  return { success: true };
+  return { success: true, companyId };
+}
+
+async function completeLoginAndOpenPos(rawBody) {
+  const picked = backendApi.pickAuth(rawBody);
+  let { token, refreshToken, user } = picked;
+  if (!token) {
+    return { success: false, message: 'Login succeeded but no token was returned' };
+  }
+  if (!user) {
+    user = await backendApi.getMe(token);
+  }
+  if (!user) {
+    return { success: false, message: 'Login succeeded but user profile could not be loaded' };
+  }
+
+  user = await enrichUserProfile(user, token);
+
+  if (!Array.isArray(user.locationIds) && Array.isArray(user.locations)) {
+    user.locationIds = user.locations.map((l) => l.id || l._id).filter(Boolean);
+  }
+  if (user.isLocationAdmin == null) {
+    user.isLocationAdmin = isAdminUser(user);
+  }
+
+  // Temporarily clear company header so /companies/mine returns DB preferred company
+  applyApiCompanyContext('');
+
+  let companies = [];
+  let erpActiveCompanyId = '';
+  try {
+    const companiesRes = await backendApi.listMyCompanies(token);
+    companies = Array.isArray(companiesRes.companies) ? companiesRes.companies : [];
+    erpActiveCompanyId = String(
+      companiesRes.preferredCompanyId || companiesRes.activeCompanyId || ''
+    ).trim();
+    if (erpActiveCompanyId === '__all__') erpActiveCompanyId = '';
+  } catch (err) {
+    console.warn('[scope] listMyCompanies failed:', err.message);
+  }
+
+  if (!companies.length && resolveCompanyId(user)) {
+    companies = [
+      {
+        id: resolveCompanyId(user),
+        name: user.company?.name || user.organizationName || 'Company',
+        logo: user.company?.logo || user.businessDetails?.logo || '',
+        isPrimary: true,
+      },
+    ];
+    erpActiveCompanyId = erpActiveCompanyId || resolveCompanyId(user);
+  }
+
+  // Multiple companies: always show picker so child (e.g. GreatLink) can be chosen
+  // over parent home company. Pre-select ERP preferred / primary.
+  if (companies.length > 1) {
+    const preferred =
+      companies.find((c) => String(c.id) === erpActiveCompanyId) ||
+      companies.find((c) => c.isPrimary) ||
+      companies[0];
+    pendingLogin = {
+      token,
+      refreshToken,
+      user,
+      companies,
+      activeCompanyId: preferred?.id || erpActiveCompanyId || '',
+    };
+    authStore.writeSession(userData(), {
+      accessToken: token,
+      refreshToken,
+      user,
+      activeCompanyId: '',
+    });
+    showCompanySelectScreen();
+    return { success: true, needsCompany: true, companies };
+  }
+
+  // Follow ERP preferred / active company when only one membership or clear preferred
+  const erpActive =
+    companies.find((c) => String(c.id) === erpActiveCompanyId) || null;
+  if (erpActive?.id) {
+    return bindCompanyAndOpenPos(token, refreshToken, user, erpActive);
+  }
+
+  if (companies.length === 1 && companies[0]?.id) {
+    return bindCompanyAndOpenPos(token, refreshToken, user, companies[0]);
+  }
+
+  return { success: false, message: 'No company found for this account' };
 }
 
 async function applyAuthCookies(accessToken, refreshToken) {
@@ -1295,38 +1428,81 @@ function registerIpc() {
 
   ipcMain.handle('auth:getSession', () => {
     const s = authStore.getValidSession(userData());
-    return s
-      ? {
-        accessToken: s.accessToken,
-        refreshToken: s.refreshToken,
-        user: s.user,
-        isAdmin: isAdminUser(s.user),
-        locationIds: getUserLocationIds(s.user),
-      }
-      : null;
+    if (!s) return null;
+    const companyId = resolveCompanyId(s.user, s);
+    if (companyId) applyApiCompanyContext(companyId);
+    return {
+      accessToken: s.accessToken,
+      refreshToken: s.refreshToken,
+      user: s.user,
+      activeCompanyId: companyId,
+      isAdmin: isAdminUser(s.user),
+      locationIds: getUserLocationIds(s.user),
+    };
   });
 
   ipcMain.handle('auth:clearSession', () => {
     authStore.clearSession(userData());
     pendingLogin = null;
+    applyApiCompanyContext('');
     return true;
+  });
+
+  ipcMain.handle('auth:listCompanies', async () => {
+    const pending = pendingLogin?.token
+      ? pendingLogin
+      : null;
+    const session = authStore.getValidSession(userData());
+    const token = pending?.token || session?.accessToken;
+    if (!token) {
+      return { success: false, message: 'Please sign in again', companies: [] };
+    }
+    if (Array.isArray(pending?.companies) && pending.companies.length) {
+      return {
+        success: true,
+        companies: pending.companies,
+        activeCompanyId: pending.activeCompanyId || pending.user?.companyId || '',
+      };
+    }
+    const res = await backendApi.listMyCompanies(token);
+    return {
+      success: !!res.success,
+      companies: res.companies || [],
+      activeCompanyId: res.activeCompanyId || session?.activeCompanyId || '',
+      message: res.message,
+    };
+  });
+
+  ipcMain.handle('auth:selectCompany', async (_event, payload) => {
+    const id = String(
+      (payload && typeof payload === 'object' ? payload.companyId : payload) || ''
+    ).trim();
+    if (!id) return { success: false, message: 'Select a company' };
+
+    const pending = pendingLogin?.token ? pendingLogin : null;
+    const session = authStore.getValidSession(userData());
+    const token = pending?.token || session?.accessToken;
+    const refreshToken = pending?.refreshToken || session?.refreshToken || '';
+    const user = pending?.user || session?.user;
+    if (!token || !user) {
+      return { success: false, message: 'Please sign in again' };
+    }
+
+    let company =
+      (pending?.companies || []).find((c) => String(c.id) === id) ||
+      null;
+    if (!company) {
+      const listed = await backendApi.listMyCompanies(token);
+      company = (listed.companies || []).find((c) => String(c.id) === id) || { id };
+    }
+
+    return bindCompanyAndOpenPos(token, refreshToken, user, company);
   });
 
   ipcMain.handle('auth:login', async (_event, payload) => {
     const email = String(payload?.email || '').trim();
     const password = String(payload?.password || '');
     const result = await backendApi.login(email, password);
-    if (result.success) {
-      pendingLogin = { email, password };
-      showOtpScreen(email);
-    }
-    return result;
-  });
-
-  ipcMain.handle('auth:verifyOtp', async (_event, payload) => {
-    const email = String(payload?.email || pendingLogin?.email || '').trim();
-    const otp = String(payload?.otp || '').trim();
-    const result = await backendApi.verifyLoginOtp(email, otp);
     if (!result.success) return result;
     const opened = await completeLoginAndOpenPos(result.data);
     if (!opened.success) {
@@ -1335,15 +1511,7 @@ function registerIpc() {
       }
       return opened;
     }
-    return result;
-  });
-
-  ipcMain.handle('auth:resendOtp', async (_event, payload) => {
-    const email = String(payload?.email || pendingLogin?.email || '').trim();
-    if (!pendingLogin || pendingLogin.email !== email) {
-      return { success: false, message: 'Please sign in again to resend OTP' };
-    }
-    return backendApi.login(pendingLogin.email, pendingLogin.password);
+    return { success: true, ...opened };
   });
 
   ipcMain.handle('auth:openLogin', () => {
@@ -1351,13 +1519,27 @@ function registerIpc() {
     return true;
   });
 
-  ipcMain.handle('auth:logout', () => {
+  ipcMain.handle('auth:logout', (_event, payload) => {
+    stopDesktopNotifications();
+    pendingForcedLogout = false;
     authStore.clearSession(userData());
     pendingLogin = null;
+    applyApiCompanyContext('');
     activeShift = null;
     try { localDb.saveActiveShift(null); } catch { /* ignore */ }
-    showLoginScreen();
+    showLoginScreen({
+      message: payload?.message,
+      reason: payload?.code,
+    });
     return true;
+  });
+
+  ipcMain.handle('auth:checkAccess', async () => {
+    const sessionData = authStore.getValidSession(userData());
+    if (!sessionData?.accessToken) {
+      return { ok: false, code: 'NO_SESSION', message: 'Please sign in again.' };
+    }
+    return validateSessionAccess(sessionData.accessToken);
   });
 
   handle('pos:listTerminals', async () => {
@@ -1397,21 +1579,12 @@ function registerIpc() {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
 
-    let locationId = String(payload?.locationId || '').trim();
-    // Non-admin: never sync "all" — force one of their assigned locations
-    if (!isAdminUser(auth.session.user)) {
-      const allowed = getUserLocationIds(auth.session.user) || [];
-      if (!locationId || locationId === 'all' || !allowed.includes(locationId)) {
-        locationId = allowed[0] || '';
-      }
-      if (!locationId) {
-        return { success: false, message: 'No warehouse location assigned to your account' };
-      }
-    }
+    // Company-wide catalog only — never prune by warehouse location
+    const locationId = '';
 
     if (payload && payload.refresh) {
       const result = await masterSync.refreshCatalog(auth.session.accessToken, locationId);
-      console.log('[pos:syncMasterData] refresh', result?.counts, 'location', locationId || 'all', result?.message || result?.success);
+      console.log('[pos:syncMasterData] refresh', result?.counts, 'location all', result?.message || result?.success);
       try {
         await refreshScopedCatalogCaches(auth.session.accessToken, auth.session.user);
       } catch (_) { /* ignore */ }
@@ -1510,13 +1683,13 @@ function registerIpc() {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
 
-    const terminalId = String(payload?.terminalId || '').trim();
+    let terminalId = String(payload?.terminalId || '').trim();
     if (!terminalId) {
       return { success: false, message: 'Select a terminal first' };
     }
 
-    const allowedTerminals = filterTerminalsForUser(auth.session.user, localDb.getTerminals());
-    const terminal = allowedTerminals.find((t) => String(t.id) === terminalId);
+    let allowedTerminals = filterTerminalsForUser(auth.session.user, localDb.getTerminals());
+    let terminal = allowedTerminals.find((t) => String(t.id) === terminalId);
     if (!terminal) {
       return {
         success: false,
@@ -1524,7 +1697,7 @@ function registerIpc() {
           ? 'Terminal not found'
           : getUserAssignedTerminalId(auth.session.user)
             ? 'You can only use your assigned terminal'
-            : 'You can only open a shift on a terminal at your assigned location',
+            : 'You can only open a shift on an allowed terminal',
       };
     }
 
@@ -1545,6 +1718,14 @@ function registerIpc() {
       return {
         success: false,
         message: 'Opening cash is required. Enter the cash in the drawer before starting.',
+      };
+    }
+
+    if (String(terminalId).startsWith('local-term-') || terminalId === 'default-terminal') {
+      return {
+        success: false,
+        message:
+          'No POS terminal is set up yet. Ask an admin to create one in POS → Management → Terminals.',
       };
     }
 
@@ -1714,13 +1895,18 @@ function registerIpc() {
     return true;
   });
 
-  ipcMain.handle('pos:enterSell', () => {
+  ipcMain.handle('pos:enterSell', async () => {
     if (!activeShift) activeShift = localDb.getActiveShift();
     if (!activeShift || activeShift.status !== 'Open') {
       return { success: false, message: 'Open a shift first' };
     }
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
+    const access = await validateSessionAccess(auth.session.accessToken);
+    if (!access.ok) {
+      await forceLogoutWithReason(access.code, access.message);
+      return { success: false, code: access.code, message: access.message };
+    }
     enterPosForUser(auth.session.user);
     return { success: true };
   });
@@ -1734,28 +1920,38 @@ function registerIpc() {
     return { success: true };
   });
 
-  ipcMain.handle('pos:restaurantKitchenQueue', async () => {
+  ipcMain.handle('pos:restaurantKitchenQueue', async (_event, query) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    return posApi.getKitchenOrders(auth.session.accessToken);
+    return posApi.getKitchenOrders(auth.session.accessToken, query || {});
   });
 
-  ipcMain.handle('pos:restaurantReadyQueue', async () => {
+  ipcMain.handle('pos:restaurantReadyQueue', async (_event, query) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    return posApi.getReadyOrders(auth.session.accessToken);
+    return posApi.getReadyOrders(auth.session.accessToken, query || {});
   });
 
-  ipcMain.handle('pos:restaurantMarkPreparing', async (_event, orderId) => {
+  ipcMain.handle('pos:restaurantKitchenStations', async () => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    return posApi.markRestaurantPreparing(auth.session.accessToken, orderId);
+    return posApi.listKitchenStations(auth.session.accessToken);
   });
 
-  ipcMain.handle('pos:restaurantMarkReady', async (_event, orderId) => {
+  ipcMain.handle('pos:restaurantMarkPreparing', async (_event, payload) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
-    return posApi.markRestaurantReady(auth.session.accessToken, orderId);
+    const orderId = typeof payload === 'string' ? payload : payload?.orderId;
+    const body = typeof payload === 'object' && payload ? { expectedVersion: payload.expectedVersion } : {};
+    return posApi.markRestaurantPreparing(auth.session.accessToken, orderId, body);
+  });
+
+  ipcMain.handle('pos:restaurantMarkReady', async (_event, payload) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    const orderId = typeof payload === 'string' ? payload : payload?.orderId;
+    const body = typeof payload === 'object' && payload ? { expectedVersion: payload.expectedVersion } : {};
+    return posApi.markRestaurantReady(auth.session.accessToken, orderId, body);
   });
 
   ipcMain.handle('pos:restaurantMarkPaid', async (_event, payload) => {
@@ -1765,7 +1961,15 @@ function registerIpc() {
     if (!orderId) return { success: false, message: 'orderId required' };
     return posApi.markRestaurantPaid(auth.session.accessToken, orderId, {
       posSaleId: payload?.posSaleId || null,
+      expectedVersion: payload?.expectedVersion,
+      paymentIdempotencyKey: payload?.paymentIdempotencyKey || null,
     });
+  });
+
+  ipcMain.handle('pos:restaurantCreateOrder', async (_event, payload) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    return posApi.createRestaurantOrder(auth.session.accessToken, payload || {});
   });
 
   ipcMain.handle('pos:getShiftHistory', async (_event, paramsString) => {
@@ -1891,7 +2095,13 @@ function registerIpc() {
     if (!auth.ok) return auth.result;
 
     const token = auth.session.accessToken;
-    // Non-admin only syncs their location's queued sales/returns
+    const activeCompany =
+      posApi.getActiveCompanyId?.() ||
+      resolveCompanyId(auth.session.user, auth.session) ||
+      '';
+    if (activeCompany) applyApiCompanyContext(activeCompany);
+
+    // Non-admin only syncs their location's queued sales/returns (already company-scoped on disk)
     const salesQueue = filterRecordsForUser(auth.session.user, localDb.getSalesQueue());
     const returnsQueue = filterRecordsForUser(auth.session.user, localDb.getReturnsQueue());
     const shiftsQueue = localDb.getShiftsQueue();
@@ -1907,6 +2117,7 @@ function registerIpc() {
 
         return {
           ...saleWithoutShiftId,
+          companyId: sale.companyId || activeCompany || undefined,
           items: (sale.items || []).map(item => {
             // Handle taxRate - if it's an object, extract the rate value
             let taxRateValue = 0;
@@ -1974,6 +2185,7 @@ function registerIpc() {
       const sanitizedReturns = returnsQueue.map((ret) => ({
         ...ret,
         type: 'RETURN',
+        companyId: ret.companyId || activeCompany || undefined,
         originalSaleId: ret.originalSaleId || ret.saleId,
         refundMethod: ret.refundMethod || 'Cash',
         reason: ret.reason || 'Customer return',
@@ -2017,11 +2229,8 @@ function registerIpc() {
 
     // 4) Refresh local caches with fresh data from the server
     try {
-      const scopeLoc =
-        (!isAdminUser(auth.session.user) && (getUserLocationIds(auth.session.user) || [])[0]) ||
-        '';
       const [prodRes, catRes, custRes, taxRes] = await Promise.all([
-        posApi.fetchAllProducts(token, scopeLoc || undefined),
+        posApi.fetchAllProducts(token),
         posApi.fetchAllCategories(token),
         posApi.fetchAllCustomers(token),
         posApi.fetchTaxContext(token),
@@ -2038,13 +2247,11 @@ function registerIpc() {
         console.warn('[sync] scope cache refresh failed:', scopeErr.message);
       }
 
-      // Non-admin: reload SQLite catalog for their warehouse only
-      if (scopeLoc) {
-        try {
-          await masterSync.refreshCatalog(token, scopeLoc);
-        } catch (catErr) {
-          console.warn('[sync] scoped catalog refresh failed:', catErr.message);
-        }
+      // Reload full company catalog into SQLite (not warehouse-scoped)
+      try {
+        await masterSync.refreshCatalog(token, '');
+      } catch (catErr) {
+        console.warn('[sync] catalog refresh failed:', catErr.message);
       }
 
       results.cacheRefreshed = !!(
@@ -2485,14 +2692,68 @@ function registerIpc() {
   ipcMain.handle('pos:getProfile', async () => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
+    const user = auth.session.user || {};
+    const company = user.company || {};
+    const business = user.businessDetails || {};
+    const companyName =
+      company.name ||
+      user.organizationName ||
+      business.companyName ||
+      [user.firstName, user.lastName].filter(Boolean).join(' ') ||
+      'POS';
+    const logo =
+      company.logo ||
+      business.logo ||
+      user.logo ||
+      '';
+
+    // Prefer live company profile when online
+    try {
+      if (auth.session.accessToken) {
+        const live = await posApi.getProfile(auth.session.accessToken);
+        if (live?.success && live.data) {
+          const d = live.data;
+          const liveCompany = d.company || {};
+          const liveBiz = d.businessDetails || {};
+          return {
+            success: true,
+            data: {
+              id: d.id || user.id,
+              name: [d.firstName || user.firstName, d.lastName || user.lastName]
+                .filter(Boolean)
+                .join(' ') || 'User',
+              email: d.email || user.email || '',
+              role: d.role || user.role || 'cashier',
+              companyName:
+                liveCompany.name ||
+                d.organizationName ||
+                liveBiz.companyName ||
+                companyName,
+              logo: liveCompany.logo || liveBiz.logo || logo || '',
+              company: liveCompany.name ? liveCompany : company,
+              businessDetails: liveBiz.logo || liveBiz.companyName ? liveBiz : business,
+              organizationName: d.organizationName || user.organizationName || '',
+            },
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('[pos:getProfile] live fetch failed, using session:', err.message);
+    }
+
     return {
       success: true,
       data: {
-        id: auth.session.userId || auth.session.id,
-        name: [auth.session.user?.firstName, auth.session.user?.lastName].filter(Boolean).join(' ') || 'User',
-        email: auth.session.user?.email || '',
-        role: auth.session.user?.role || 'cashier',
-      }
+        id: auth.session.userId || auth.session.id || user.id,
+        name: [user.firstName, user.lastName].filter(Boolean).join(' ') || 'User',
+        email: user.email || '',
+        role: user.role || 'cashier',
+        companyName,
+        logo,
+        company,
+        businessDetails: business,
+        organizationName: user.organizationName || '',
+      },
     };
   });
 
@@ -2500,19 +2761,49 @@ function registerIpc() {
   ipcMain.handle('pos:createTerminal', async (_event, payload) => {
     const auth = requireAdmin();
     if (!auth.ok) return auth.result;
-    return posApi.createTerminal(auth.session.accessToken, payload);
+    const body = { ...(payload || {}) };
+    if (!String(body.locationId || '').trim()) delete body.locationId;
+    const res = await posApi.createTerminal(auth.session.accessToken, body);
+    if (res?.success) {
+      try {
+        await refreshScopedCatalogCaches(auth.session.accessToken, auth.session.user);
+      } catch (err) {
+        console.warn('[scope] refresh after createTerminal failed:', err.message);
+      }
+    }
+    return res;
   });
 
   ipcMain.handle('pos:updateTerminal', async (_event, { id, body }) => {
     const auth = requireAdmin();
     if (!auth.ok) return auth.result;
-    return posApi.updateTerminal(auth.session.accessToken, id, body);
+    const patch = { ...(body || {}) };
+    if (Object.prototype.hasOwnProperty.call(patch, 'locationId') && !String(patch.locationId || '').trim()) {
+      patch.locationId = null;
+    }
+    const res = await posApi.updateTerminal(auth.session.accessToken, id, patch);
+    if (res?.success) {
+      try {
+        await refreshScopedCatalogCaches(auth.session.accessToken, auth.session.user);
+      } catch (err) {
+        console.warn('[scope] refresh after updateTerminal failed:', err.message);
+      }
+    }
+    return res;
   });
 
   ipcMain.handle('pos:deleteTerminal', async (_event, id) => {
     const auth = requireAdmin();
     if (!auth.ok) return auth.result;
-    return posApi.deleteTerminal(auth.session.accessToken, id);
+    const res = await posApi.deleteTerminal(auth.session.accessToken, id);
+    if (res?.success) {
+      try {
+        await refreshScopedCatalogCaches(auth.session.accessToken, auth.session.user);
+      } catch (err) {
+        console.warn('[scope] refresh after deleteTerminal failed:', err.message);
+      }
+    }
+    return res;
   });
 
   ipcMain.handle('pos:refreshScopeCache', async () => {
@@ -3010,6 +3301,75 @@ function registerIpc() {
     return false;
   });
 
+  // ─── Google Drive backup (local PC only — does not touch cloud API) ───
+  ipcMain.handle('backup:getStatus', () => {
+    try {
+      return { success: true, data: driveBackup.getStatus() };
+    } catch (err) {
+      return { success: false, message: err.message || 'Failed to read backup status' };
+    }
+  });
+
+  ipcMain.handle('backup:saveSettings', (_event, payload = {}) => {
+    try {
+      const patch = {};
+      if (typeof payload.enabled === 'boolean') patch.enabled = payload.enabled;
+      if (Array.isArray(payload.times)) patch.times = payload.times;
+      if (typeof payload.clientId === 'string') patch.clientId = payload.clientId.trim();
+      if (typeof payload.clientSecret === 'string' && payload.clientSecret.trim()) {
+        patch.clientSecret = payload.clientSecret.trim();
+      }
+      const data = driveBackup.saveSettings(patch);
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, message: err.message || 'Failed to save backup settings' };
+    }
+  });
+
+  ipcMain.handle('backup:connect', async () => {
+    try {
+      const data = await driveBackup.connectDrive();
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, message: err.message || 'Google sign-in failed' };
+    }
+  });
+
+  ipcMain.handle('backup:disconnect', () => {
+    try {
+      return { success: true, data: driveBackup.disconnectDrive() };
+    } catch (err) {
+      return { success: false, message: err.message || 'Disconnect failed' };
+    }
+  });
+
+  ipcMain.handle('backup:runNow', async () => {
+    try {
+      const data = await driveBackup.runBackup({ reason: 'manual' });
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, message: err.message || 'Backup failed' };
+    }
+  });
+
+  ipcMain.handle('backup:list', async () => {
+    try {
+      const files = await driveBackup.listRemoteBackups();
+      return { success: true, data: files };
+    } catch (err) {
+      return { success: false, message: err.message || 'Could not list Drive backups' };
+    }
+  });
+
+  ipcMain.handle('backup:restore', async (_event, fileId) => {
+    try {
+      const data = await driveBackup.runRestore(fileId);
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, message: err.message || 'Restore failed' };
+    }
+  });
+
   ipcMain.handle('codes:qrSvg', async (_event, { text, size } = {}) => {
     try {
       const QRCode = require('qrcode');
@@ -3032,39 +3392,54 @@ function registerIpc() {
 
 function watchSessionExpiry() {
   if (sessionWatchTimer) clearInterval(sessionWatchTimer);
-  let pingCounter = 0;
   sessionWatchTimer = setInterval(async () => {
     const sessionData = authStore.readSession(userData());
 
-    // JWT expiry check (every 30 s)
     if (sessionData && authStore.isExpired(sessionData)) {
       authStore.clearSession(userData());
       appView?.webContents.send('auth:expired');
-      showLoginScreen();
+      showLoginScreen({
+        message: 'Your session expired. Please sign in again.',
+        reason: 'SESSION_INVALID',
+      });
       return;
     }
 
-    // User / company / subscription status (every ~2 min = every 4th tick)
-    pingCounter += 1;
-    if (sessionData?.accessToken && pingCounter % 4 === 0) {
-      try {
-        const check = await validateSessionAccess(sessionData.accessToken);
-        if (!check.ok) {
-          await forceLogoutWithReason(check.code, check.message);
-        }
-      } catch (_) { /* network error — ignore, will retry next cycle */ }
-    }
-  }, 30_000);
+    if (!sessionData?.accessToken || pendingForcedLogout) return;
+    try {
+      const check = await validateSessionAccess(sessionData.accessToken);
+      if (!check.ok) {
+        await forceLogoutWithReason(check.code, check.message);
+      }
+    } catch (_) { /* network error — ignore, will retry next cycle */ }
+  }, 20_000);
 }
 
 app.whenReady().then(async () => {
   localDb.initialize(app.getPath('userData'));
+  try {
+    driveBackup.initialize(app.getPath('userData'), { localDb, masterSqlite });
+  } catch (err) {
+    console.error('[drive-backup] init failed', err.message);
+  }
   const bootSession = authStore.getValidSession(app.getPath('userData'));
   let bootUser = bootSession?.user || null;
   if (bootSession?.accessToken) {
-    bootUser = await enrichUserProfile(bootUser, bootSession.accessToken);
-    if (bootUser && bootUser !== bootSession.user) {
-      authStore.writeSession(app.getPath('userData'), { ...bootSession, user: bootUser });
+    const bootCompanyId = resolveCompanyId(bootUser, bootSession);
+    applyApiCompanyContext(bootCompanyId);
+    bootUser = await enrichUserProfile(bootUser, bootSession.accessToken, bootCompanyId);
+    if (bootUser) {
+      bootUser = {
+        ...bootUser,
+        companyId: bootCompanyId || resolveCompanyId(bootUser, bootSession),
+        activeCompanyId: bootCompanyId || resolveCompanyId(bootUser, bootSession),
+      };
+      authStore.writeSession(app.getPath('userData'), {
+        ...bootSession,
+        user: bootUser,
+        activeCompanyId: bootUser.companyId,
+      });
+      applyApiCompanyContext(bootUser.companyId);
     }
   }
   if (bootUser) {
@@ -3104,4 +3479,5 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   if (sessionWatchTimer) clearInterval(sessionWatchTimer);
+  try { driveBackup.stop(); } catch { /* ignore */ }
 });

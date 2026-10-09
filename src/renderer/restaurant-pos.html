@@ -9,27 +9,61 @@
     <title>Kitchen Display — Bisonstechs</title>
     <link rel="stylesheet" href="./shared.css" />
     <style>
-      body { background: #f3f6f9; min-height: 100%; }
+      body { background: #eef2f6; min-height: 100%; margin: 0; }
       .hidden { display: none !important; }
-      .top { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; background: #fff; border-bottom: 1px solid var(--line); }
+      .top {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 14px 18px; background: #fff; border-bottom: 1px solid var(--line);
+        position: sticky; top: 0; z-index: 10;
+      }
       .top h1 { margin: 0; font-size: 18px; }
-      .top .meta { font-size: 12px; color: var(--muted); }
-      .card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
-      .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); padding: 16px 18px 24px; }
+      .top .meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+      .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      .toolbar button, .toolbar select {
+        height: 38px; padding: 0 14px; border-radius: 10px;
+        border: 1px solid var(--line); background: #fff; font-weight: 600; cursor: pointer;
+      }
+      .kds-board {
+        display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+        padding: 16px 18px 24px; min-height: calc(100vh - 120px);
+      }
+      @media (max-width: 1100px) { .kds-board { grid-template-columns: 1fr; } }
+      .kds-col { background: #fff; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+      .kds-col-head {
+        padding: 12px 14px; font-weight: 800; font-size: 13px; letter-spacing: 0.04em;
+        border-bottom: 1px solid var(--line);
+      }
+      .kds-col-head.new { background: #fef3c7; color: #92400e; }
+      .kds-col-head.prep { background: #dbeafe; color: #1e40af; }
+      .kds-col-head.ready { background: #dcfce7; color: #166534; }
+      .kds-col-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; min-height: 120px; }
+      .card {
+        background: #fafbfc; border: 1px solid var(--line); border-radius: 12px; padding: 12px;
+      }
+      .card.delayed { border-color: #f87171; box-shadow: 0 0 0 2px rgba(248,113,113,0.15); }
       .ticket-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-      .ticket-head b { font-size: 16px; }
-      .badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; background: #e8eef4; }
-      .badge.sent { background: #fef3c7; color: #92400e; }
+      .ticket-head b { font-size: 15px; }
+      .meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+      .time-badge {
+        font-size: 11px; font-weight: 700; padding: 4px 8px; border-radius: 999px;
+        background: #e8eef4; color: #334155; white-space: nowrap;
+      }
+      .time-badge.delayed { background: #fee2e2; color: #b91c1c; }
+      .badge-priority {
+        font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 6px;
+        background: #fde68a; color: #92400e; margin-left: 6px;
+      }
       .lines { font-size: 13px; color: #334155; margin: 8px 0; }
       .lines div { padding: 2px 0; }
+      .station-tag { font-size: 10px; color: #64748b; }
       .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-      .actions button { flex: 1; min-width: 120px; height: 40px; border: 0; border-radius: 10px; font-weight: 700; cursor: pointer; }
+      .actions button { flex: 1; min-width: 100px; height: 36px; border: 0; border-radius: 10px; font-weight: 700; cursor: pointer; }
       .btn-brand { background: var(--brand); color: #fff; }
       .btn-soft { background: #e8eef4; color: var(--navy); }
-      .empty { text-align: center; color: var(--muted); padding: 48px 16px; grid-column: 1 / -1; }
-      .toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
-      .toolbar button { height: 38px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line); background: #fff; font-weight: 600; cursor: pointer; }
-      .note { font-size: 12px; color: var(--muted); margin: 10px 18px 0; }
+      .empty-col { text-align: center; color: var(--muted); font-size: 13px; padding: 24px 8px; }
+      .sync-meta { font-size: 11px; color: var(--muted); padding: 0 18px 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .new-badge { font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px; background: #fef3c7; color: #92400e; }
+      #btn-refresh { background: var(--brand); color: #fff; border-color: var(--brand); }
     </style>
   </head>
   <body>
@@ -39,6 +73,9 @@
         <div class="meta" id="user-meta"></div>
       </div>
       <div class="toolbar">
+        <select id="station-filter" title="Kitchen station">
+          <option value="">All stations</option>
+        </select>
         <button type="button" id="btn-refresh">Refresh</button>
         <button type="button" id="btn-pos" class="hidden">Cashier POS</button>
         <button type="button" id="btn-mgmt" class="hidden">Management</button>
@@ -46,13 +83,27 @@
       </div>
     </div>
 
-    <p class="note">
-      Waiters send orders from the <strong>Bisonstechs Order Picker</strong> app.
-      Cashier payment runs on the normal POS terminal (<strong>Ready orders</strong> tab).
-    </p>
+    <div class="sync-meta">
+      <span id="sync-meta"></span>
+      <span id="new-order-badge" class="new-badge hidden"></span>
+    </div>
 
-    <div id="kitchen-list" class="grid"></div>
+    <div class="kds-board">
+      <section class="kds-col">
+        <div class="kds-col-head new">NEW ORDERS</div>
+        <div class="kds-col-body" id="col-new"></div>
+      </section>
+      <section class="kds-col">
+        <div class="kds-col-head prep">PREPARING</div>
+        <div class="kds-col-body" id="col-preparing"></div>
+      </section>
+      <section class="kds-col">
+        <div class="kds-col-head ready">READY</div>
+        <div class="kds-col-body" id="col-ready"></div>
+      </section>
+    </div>
 
+    <script src="./session-guard.js"></script>
     <script src="./restaurant-pos.js"></script>
   </body>
 </html>

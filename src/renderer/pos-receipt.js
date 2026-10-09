@@ -40,6 +40,8 @@
       servedByPrefix: 'You were served by',
       poweredBy: 'Powered by BisonTechs POS',
       thermalPaperWidthMm: 80,
+      // Local POS setting: cashier must type cash the customer handed over.
+      askCashReceived: false,
     };
   }
 
@@ -78,8 +80,16 @@
     var comp = (profile && profile.company) || {};
     var tpl = template || loadReceiptTemplate();
     return {
-      name: tpl.storeName || bd.businessName || bd.companyName || comp.name || (profile && profile.name) || 'BisonTechs POS',
-      logo: tpl.storeLogo || bd.logo || comp.logo || APP_LOGO,
+      name:
+        tpl.storeName ||
+        (profile && profile.companyName) ||
+        bd.businessName ||
+        bd.companyName ||
+        comp.name ||
+        (profile && profile.organizationName) ||
+        (profile && profile.name) ||
+        'POS',
+      logo: tpl.storeLogo || (profile && profile.logo) || bd.logo || comp.logo || '',
       address: tpl.storeAddress || bd.address || comp.address || '',
       phone: tpl.phone || tpl.storePhone || bd.phone || comp.phone || (profile && profile.phone) || '',
       email: tpl.email || tpl.storeEmail || bd.email || comp.email || (profile && profile.email) || '',
@@ -208,16 +218,28 @@
       dash +
       row('TOTAL', money(asNumber(s.grandTotal, 0)), true);
 
+    var paidAmt = asNumber(s.paidAmount, 0);
+    if (!paidAmt && payments.length) {
+      paidAmt = payments.reduce(function (sum, p) { return sum + asNumber(p.amount, 0); }, 0);
+    }
+    var billTotal = asNumber(s.grandTotal, 0);
+    var changeAmt = asNumber(s.changeAmount, 0);
+    if (!changeAmt && paidAmt > billTotal) changeAmt = paidAmt - billTotal;
+
     var pay = '<div style="font-weight:700;margin-bottom:4px;">PAYMENT</div>';
     if (payments.length) {
       pay += payments.map(function (p) {
         return row(p.reference ? String(p.paymentMethod) + ' \u00b7 ' + p.reference : String(p.paymentMethod || 'Payment'), money(p.amount));
       }).join('');
-      pay += row('Amount paid', money(s.paidAmount), true);
-    } else {
-      pay += row('Paid', money(s.paidAmount), true);
     }
-    if (Number(s.changeAmount) > 0) pay += row('Change due', money(s.changeAmount));
+    if (tpl.askCashReceived) {
+      pay += row('Bill total', money(billTotal));
+      pay += row('Cash received', money(paidAmt), true);
+      pay += row('Change / remaining', money(Math.max(0, changeAmt)), true, true);
+    } else {
+      pay += row(payments.length ? 'Amount paid' : 'Paid', money(paidAmt), true);
+      if (changeAmt > 0) pay += row('Change due', money(changeAmt));
+    }
     if (tpl.showLoyalty && Number(s.loyaltyPoints) > 0) pay += row('Loyalty points earned', String(s.loyaltyPoints));
     if (s.notes) pay += dash + '<div style="font-size:10px;"><span style="font-weight:700;">Notes: </span>' + esc(s.notes) + '</div>';
 
@@ -452,6 +474,8 @@
       ],
       payments: [{ paymentMethod: 'Cash', amount: 500, reference: '' }],
       subTotal: 495,
+      subtotal: 495,
+      discountTotal: 10,
       discountAmount: 10,
       taxAmount: 0,
       grandTotal: 485,

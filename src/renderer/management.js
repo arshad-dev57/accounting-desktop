@@ -99,18 +99,19 @@ function defaultSettings() {
     receiptFooter: 'Thank you for shopping with us! Please visit again.',
     receiptReturnPolicy: 'Returns accepted within 7 days with original receipt.',
     receiptNotes: 'This is a computer-generated receipt.',
-    thermalPaperWidthMm: 80,
-    thermalPrintMode: 'browser',
-    autoPrintOnSale: true,
-    enableBarcodeScanner: true,
-    soundOnScan: true,
-    autoAddOnScan: true,
-    enablePaymentTerminal: false,
-    paymentTerminalModel: 'CS30G',
-    paymentTerminalConnection: 'serial',
-    paymentTerminalHost: '192.168.1.100',
-    paymentTerminalPort: 8080,
-  };
+      thermalPaperWidthMm: 80,
+      thermalPrintMode: 'browser',
+      autoPrintOnSale: true,
+      enableBarcodeScanner: true,
+      soundOnScan: true,
+      autoAddOnScan: true,
+      enablePaymentTerminal: false,
+      paymentTerminalModel: 'CS30G',
+      paymentTerminalConnection: 'serial',
+      paymentTerminalHost: '192.168.1.100',
+      paymentTerminalPort: 8080,
+      askCashReceived: false,
+    };
 }
 
 function openModal(html) {
@@ -262,12 +263,12 @@ async function loadTerminals() {
       <button class="btn btn-brand" id="btn-new-terminal" type="button">+ New Terminal</button>
     </div>
     <div class="card hidden" id="create-terminal">
-      <p class="muted" style="margin:0 0 12px">Optionally assign a cashier to this terminal when creating it.</p>
+      <p class="muted" style="margin:0 0 12px">Warehouse is optional. Leave it blank for company-wide inventory; assign a warehouse to scope this terminal. You can also assign a cashier.</p>
       <div class="form-grid">
         <input id="t-name" placeholder="Terminal name (e.g. Main Counter)" />
         <input id="t-code" placeholder="Code (e.g. TERM-01)" />
         <select id="t-location">
-          <option value="">Select location…</option>
+          <option value="">— No warehouse (all inventory) —</option>
           ${locations.map((l) => `<option value="${l.id}">${l.name} (${l.code || l.type || ''})</option>`).join('')}
         </select>
         <select id="t-user">
@@ -286,7 +287,7 @@ async function loadTerminals() {
           <tr>
             <td><b>${t.name || ''}</b></td>
             <td>${t.code || ''}</td>
-            <td>${t.location?.name || '—'}</td>
+            <td>${t.location?.name || '<span class="muted">All inventory</span>'}</td>
             <td>${assigned
               ? `<strong>${userDisplayName(assigned)}</strong><div class="muted">${assigned.email || ''}</div>`
               : '<span class="muted">—</span>'}</td>
@@ -317,11 +318,13 @@ async function loadTerminals() {
     const code = wrap.querySelector('#t-code').value.trim().toUpperCase();
     const locationId = wrap.querySelector('#t-location').value;
     const userId = wrap.querySelector('#t-user').value;
-    if (!name || !code || !locationId) return showError('Name, code and location are required');
+    if (!name || !code) return showError('Name and code are required');
     const saveBtn = wrap.querySelector('#t-save');
     saveBtn.disabled = true;
     saveBtn.textContent = 'Creating…';
-    const res = await api.pos.createTerminal({ name, code, locationId });
+    const createBody = { name, code };
+    if (locationId) createBody.locationId = locationId;
+    const res = await api.pos.createTerminal(createBody);
     if (!res?.success) {
       saveBtn.disabled = false;
       saveBtn.textContent = 'Create';
@@ -613,6 +616,14 @@ async function loadReceipt() {
           </div>
         </div>
         <div class="card">
+          <h3 style="margin:0 0 6px;">Cash received at sale</h3>
+          <div class="toggle" style="gap:10px;border-bottom:0;">
+            <span>Ask cashier how much customer paid</span>
+            <input type="checkbox" id="r-ask-cash" ${template.askCashReceived ? 'checked' : ''} />
+          </div>
+          <p class="muted" style="margin:8px 0 0;font-size:12px;">If enabled, checkout starts empty. Cashier types cash received; remaining change prints on the receipt.</p>
+        </div>
+        <div class="card">
           <h3 style="margin:0 0 6px;">Show / hide sections</h3>
           ${toggles}
         </div>
@@ -639,6 +650,8 @@ async function loadReceipt() {
     }
     const width = wrap.querySelector('#r-paper-width');
     if (width) next.thermalPaperWidthMm = Number(width.value) === 58 ? 58 : 80;
+    const askCash = wrap.querySelector('#r-ask-cash');
+    if (askCash) next.askCashReceived = askCash.checked;
     wrap.querySelectorAll('[data-toggle]').forEach((cb) => { next[cb.dataset.toggle] = cb.checked; });
     return next;
   };
@@ -804,7 +817,6 @@ async function boot() {
   tabs.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
   document.getElementById('btn-open-pos').onclick = () => api.pos.enterShift();
   document.getElementById('btn-logout').onclick = () => api.auth.logout();
-  api.auth.onExpired(() => api.auth.logout());
   await loadLocations();
   await loadTab();
 }

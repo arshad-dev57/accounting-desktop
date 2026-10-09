@@ -4,17 +4,33 @@
  */
 const config = require('./config.cjs');
 
+/** Active company for this POS session — sent as X-Company-Id on every API call */
+let activeCompanyId = '';
+
+function setActiveCompanyId(companyId) {
+  activeCompanyId = String(companyId || '').trim();
+  return activeCompanyId;
+}
+
+function getActiveCompanyId() {
+  return activeCompanyId;
+}
+
 async function request(accessToken, method, pathname, body) {
   const base = config.resolveApiUrl();
   const url = `${base}${pathname.startsWith('/') ? pathname : `/${pathname}`}`;
   try {
+    const headers = {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    };
+    if (activeCompanyId) {
+      headers['X-Company-Id'] = activeCompanyId;
+    }
     const res = await fetch(url, {
       method,
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
+      headers,
       body: body == null ? undefined : JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
@@ -30,6 +46,8 @@ async function request(accessToken, method, pathname, body) {
     return {
       success: true,
       data: data.data !== undefined ? data.data : data,
+      flat: data.flat,
+      serverTime: data.serverTime,
       stats: data.stats || null,
       total: data.total,
       message: data.message || '',
@@ -194,18 +212,18 @@ function getCategories(token, paramsString = '') {
 }
 
 // ─── Bulk-fetch helpers for offline sync cache refresh ────────────────────────
-function locationQuery(locationId) {
-  return locationId ? `&locationId=${encodeURIComponent(locationId)}` : '';
+function locationQuery(_locationId) {
+  // POS is company-scoped — never filter catalog/stock by warehouse location
+  return '';
 }
 
-async function fetchAllProducts(token, locationId) {
-  const loc = locationQuery(locationId);
+async function fetchAllProducts(token, _locationId) {
   const all = [];
   for (let page = 1; page <= 100; page += 1) {
-    const res = await request(token, 'GET', `/api/warehouse/products?limit=100&page=${page}${loc}`);
+    const res = await request(token, 'GET', `/api/warehouse/products?limit=100&page=${page}`);
     if (!res.success) {
       if (page === 1) {
-        return request(token, 'GET', `/api/pos/products/search?q=&limit=2000&includeZeroStock=true${loc}`);
+        return request(token, 'GET', `/api/pos/products/search?q=&limit=2000&includeZeroStock=true`);
       }
       break;
     }
@@ -218,7 +236,7 @@ async function fetchAllProducts(token, locationId) {
     if (rows.length < 100) break;
   }
   if (!all.length) {
-    return request(token, 'GET', `/api/pos/products/search?q=&limit=2000&includeZeroStock=true${loc}`);
+    return request(token, 'GET', `/api/pos/products/search?q=&limit=2000&includeZeroStock=true`);
   }
   return { success: true, data: all };
 }
@@ -383,20 +401,33 @@ function getProfile(token) {
 }
 
 // ─── Restaurant orders (Flow #2) ─────────────────────────────────────────────
-function getKitchenOrders(token) {
-  return request(token, 'GET', '/api/pos/restaurant/orders/kitchen');
+function buildQuery(query = {}) {
+  const params = new URLSearchParams();
+  Object.entries(query).forEach(([key, value]) => {
+    if (value != null && String(value).trim() !== '') params.set(key, String(value));
+  });
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
 }
 
-function getReadyOrders(token) {
-  return request(token, 'GET', '/api/pos/restaurant/orders/ready');
+function getKitchenOrders(token, query = {}) {
+  return request(token, 'GET', `/api/pos/restaurant/orders/kitchen${buildQuery(query)}`);
 }
 
-function markRestaurantPreparing(token, orderId) {
-  return request(token, 'POST', `/api/pos/restaurant/orders/${orderId}/preparing`);
+function getReadyOrders(token, query = {}) {
+  return request(token, 'GET', `/api/pos/restaurant/orders/ready${buildQuery(query)}`);
 }
 
-function markRestaurantReady(token, orderId) {
-  return request(token, 'POST', `/api/pos/restaurant/orders/${orderId}/ready`);
+function listKitchenStations(token) {
+  return request(token, 'GET', '/api/pos/restaurant/kitchen-stations');
+}
+
+function markRestaurantPreparing(token, orderId, body = {}) {
+  return request(token, 'POST', `/api/pos/restaurant/orders/${orderId}/preparing`, body);
+}
+
+function markRestaurantReady(token, orderId, body = {}) {
+  return request(token, 'POST', `/api/pos/restaurant/orders/${orderId}/ready`, body);
 }
 
 function markRestaurantPaid(token, orderId, body = {}) {
@@ -407,7 +438,13 @@ function createRestaurantOrder(token, body) {
   return request(token, 'POST', '/api/pos/restaurant/orders', body);
 }
 
+function getNotifications(token, query = {}) {
+  return request(token, 'GET', `/api/notifications${buildQuery(query)}`);
+}
+
 module.exports = {
+  setActiveCompanyId,
+  getActiveCompanyId,
   listTerminals,
   getCurrentShift,
   getShiftHistory,
@@ -454,10 +491,12 @@ module.exports = {
   fetchAllCategories,
   getKitchenOrders,
   getReadyOrders,
+  listKitchenStations,
   markRestaurantPreparing,
   markRestaurantReady,
   markRestaurantPaid,
   createRestaurantOrder,
+  getNotifications,
   fetchAllSuppliers,
   fetchAllCustomers,
   fetchTaxContext,

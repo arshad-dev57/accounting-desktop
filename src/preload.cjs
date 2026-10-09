@@ -10,12 +10,20 @@ const ALLOWED_CHANNELS = new Set([
   'auth:getSession',
   'auth:clearSession',
   'auth:login',
-  'auth:verifyOtp',
-  'auth:resendOtp',
+  'auth:listCompanies',
+  'auth:selectCompany',
   'auth:openLogin',
   'auth:logout',
+  'auth:checkAccess',
   'app:getInfo',
   'app:openExternal',
+  'backup:getStatus',
+  'backup:saveSettings',
+  'backup:connect',
+  'backup:disconnect',
+  'backup:runNow',
+  'backup:list',
+  'backup:restore',
   'codes:qrSvg',
   'print:showDialog',
   'pos:listTerminals',
@@ -31,9 +39,11 @@ const ALLOWED_CHANNELS = new Set([
   'pos:enterRestaurantPos',
   'pos:restaurantKitchenQueue',
   'pos:restaurantReadyQueue',
+  'pos:restaurantKitchenStations',
   'pos:restaurantMarkPreparing',
   'pos:restaurantMarkReady',
   'pos:restaurantMarkPaid',
+  'pos:restaurantCreateOrder',
   'pos:getShiftHistory',
   'pos:suspendShift',
   'pos:recordCashFlow',
@@ -177,13 +187,14 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
   },
   auth: {
     login: (email, password) => invoke('auth:login', { email, password }),
-    verifyOtp: (email, otp) => invoke('auth:verifyOtp', { email, otp }),
-    resendOtp: (email) => invoke('auth:resendOtp', { email }),
+    listCompanies: () => invoke('auth:listCompanies'),
+    selectCompany: (companyId) => invoke('auth:selectCompany', { companyId }),
     openLogin: () => invoke('auth:openLogin'),
     saveSession: (session) => invoke('auth:saveSession', session),
     getSession: () => invoke('auth:getSession'),
     clearSession: () => invoke('auth:clearSession'),
-    logout: () => invoke('auth:logout'),
+    logout: (payload) => invoke('auth:logout', payload || null),
+    checkAccess: () => invoke('auth:checkAccess'),
     onExpired: (callback) => {
       const listener = () => callback();
       ipcRenderer.on('auth:expired', listener);
@@ -219,11 +230,13 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
     enterShift: () => invoke('pos:enterShift'),
     enterSell: () => invoke('pos:enterSell'),
     enterRestaurantPos: (tab) => invoke('pos:enterRestaurantPos', tab),
-    restaurantKitchenQueue: () => invoke('pos:restaurantKitchenQueue'),
-    restaurantReadyQueue: () => invoke('pos:restaurantReadyQueue'),
-    restaurantMarkPreparing: (orderId) => invoke('pos:restaurantMarkPreparing', orderId),
-    restaurantMarkReady: (orderId) => invoke('pos:restaurantMarkReady', orderId),
+    restaurantKitchenQueue: (query) => invoke('pos:restaurantKitchenQueue', query || {}),
+    restaurantReadyQueue: (query) => invoke('pos:restaurantReadyQueue', query || {}),
+    restaurantKitchenStations: () => invoke('pos:restaurantKitchenStations'),
+    restaurantMarkPreparing: (payload) => invoke('pos:restaurantMarkPreparing', payload),
+    restaurantMarkReady: (payload) => invoke('pos:restaurantMarkReady', payload),
     restaurantMarkPaid: (payload) => invoke('pos:restaurantMarkPaid', payload),
+    restaurantCreateOrder: (payload) => invoke('pos:restaurantCreateOrder', payload),
     // Expanded layout methods
     getShiftHistory: (paramsString) => invoke('pos:getShiftHistory', paramsString),
     suspendShift: (shiftId) => invoke('pos:suspendShift', shiftId),
@@ -303,9 +316,35 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
     getContext: () => invoke('tax:getContext'),
     refreshContext: () => invoke('tax:refreshContext'),
   },
+  kitchen: {
+    onNewOrder: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('kitchen:new-order', listener);
+      return () => ipcRenderer.removeListener('kitchen:new-order', listener);
+    },
+    onNotificationClick: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('kitchen:notification-click', listener);
+      return () => ipcRenderer.removeListener('kitchen:notification-click', listener);
+    },
+    onNotificationsCleared: (callback) => {
+      const listener = () => callback();
+      ipcRenderer.on('desktop:notifications-cleared', listener);
+      return () => ipcRenderer.removeListener('desktop:notifications-cleared', listener);
+    },
+  },
   app: {
     getInfo: () => invoke('app:getInfo'),
     openExternal: (url) => invoke('app:openExternal', url),
+  },
+  backup: {
+    getStatus: () => invoke('backup:getStatus'),
+    saveSettings: (payload) => invoke('backup:saveSettings', payload),
+    connect: () => invoke('backup:connect'),
+    disconnect: () => invoke('backup:disconnect'),
+    runNow: () => invoke('backup:runNow'),
+    list: () => invoke('backup:list'),
+    restore: (fileId) => invoke('backup:restore', fileId),
   },
   codes: {
     qrSvg: (text, size) => invoke('codes:qrSvg', { text, size }),

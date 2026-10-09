@@ -39,7 +39,7 @@ function renderTerminals() {
     const assignedOnly = !!(sessionUser?.assignedTerminalId);
     listEl.innerHTML = assignedOnly
       ? '<p class="sub">Your assigned terminal is not available. Ask an admin to assign a terminal in POS → Management → Users, then sign in again.</p>'
-      : '<p class="sub">No terminals at your assigned location yet. Sign out and sign in again — a counter will be created automatically. Or ask an admin to create a terminal for your warehouse in POS → Management → Terminals.</p>';
+      : '<p class="sub">No terminals yet. Ask an admin to create one in POS → Management → Terminals (warehouse is optional).</p>';
     openBtn.disabled = true;
     return;
   }
@@ -52,7 +52,7 @@ function renderTerminals() {
       (t) => `
       <button class="term ${t.id === selectedId ? 'active' : ''}" data-id="${t.id}" type="button" ${locked ? 'disabled' : ''}>
         <b>${t.name || t.code || 'Terminal'}</b>
-        <span>${t.code || ''} ${t.location?.name ? '· ' + t.location.name : ''}</span>
+        <span>${t.code || ''} ${t.location?.name ? '· ' + t.location.name : '· All inventory'}</span>
       </button>`
     )
     .join('');
@@ -72,6 +72,37 @@ async function boot() {
   sessionUser = session?.user || {};
   const user = sessionUser;
   userEl.textContent = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email || '';
+
+  // Show logged-in company name/logo (not generic Bisonstechs)
+  try {
+    let companyName =
+      user.company?.name ||
+      user.organizationName ||
+      user.businessDetails?.companyName ||
+      '';
+    let logo = user.company?.logo || user.businessDetails?.logo || '';
+    try {
+      const prof = await api.pos.getProfile();
+      if (prof?.success && prof.data) {
+        companyName =
+          prof.data.companyName ||
+          prof.data.company?.name ||
+          prof.data.organizationName ||
+          companyName;
+        logo = prof.data.logo || prof.data.company?.logo || prof.data.businessDetails?.logo || logo;
+      }
+    } catch (_) { /* ignore */ }
+
+    const titleEl = document.getElementById('company-title');
+    if (titleEl && companyName) titleEl.textContent = companyName;
+    const logoEl = document.getElementById('company-logo');
+    if (logoEl && logo) {
+      logoEl.src = logo;
+      logoEl.alt = companyName || 'Company';
+    }
+    if (companyName) document.title = `${companyName} · Open Shift`;
+  } catch (_) { /* ignore */ }
+
   const syncEl = document.getElementById('sync-status');
   // Show local catalog status immediately — no live sync on startup (use manual Sync button)
   try {
@@ -120,14 +151,14 @@ async function boot() {
   // Hint for scoped cashiers
   if (!isAdmin && (terminals.length === 1 || sessionUser?.assignedTerminalId)) {
     const t = terminals[0];
-    const locName = t.location?.name || 'your assigned location';
+    const scopeLabel = t.location?.name || 'all inventory';
     if (terminalBox) {
       const hint = document.createElement('p');
       hint.className = 'sub';
       hint.style.marginBottom = '8px';
       hint.textContent = sessionUser?.assignedTerminalId
-        ? `Your terminal · ${t.name || t.code || 'Terminal'}${t.location?.name ? ` · ${t.location.name}` : ''}`
-        : `Working at ${locName} · ${t.name || t.code || 'Terminal'}`;
+        ? `Your terminal · ${t.name || t.code || 'Terminal'}${t.location?.name ? ` · ${t.location.name}` : ' · all inventory'}`
+        : `${t.name || t.code || 'Terminal'} · ${scopeLabel}`;
       terminalBox.insertBefore(hint, listEl);
     }
   }
@@ -187,6 +218,5 @@ resumeBtn.addEventListener('click', async () => {
 });
 
 logoutBtn.addEventListener('click', () => api.auth.logout());
-api.auth.onExpired(() => api.auth.logout());
 
 boot().catch((err) => showError(err.message));

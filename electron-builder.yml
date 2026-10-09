@@ -14,6 +14,9 @@ files:
   - "!**/*.map"
 
 asar: true
+# sql.js loads WASM from node_modules at runtime (must not stay inside asar only).
+asarUnpack:
+  - node_modules/sql.js/**/*
 
 win:
   icon: assets/icon.png
