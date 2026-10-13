@@ -224,6 +224,26 @@ function shouldAskCashReceived() {
   return method === 'cash';
 }
 
+function updateReceiptLogoPreview(logo) {
+  const wrap = document.getElementById('rset-logo-preview-wrap');
+  const img = document.getElementById('rset-logo-preview');
+  const hidden = document.getElementById('rset-store-logo');
+  const urlInp = document.getElementById('rset-logo-url');
+  if (hidden) hidden.value = logo || '';
+  if (urlInp) {
+    urlInp.value = logo && !String(logo).startsWith('data:') ? logo : '';
+  }
+  if (wrap && img) {
+    if (logo) {
+      img.src = logo;
+      wrap.style.display = 'flex';
+    } else {
+      img.removeAttribute('src');
+      wrap.style.display = 'none';
+    }
+  }
+}
+
 function collectReceiptSettingsForm() {
   const next = { ...receiptTpl() };
   const map = {
@@ -239,6 +259,12 @@ function collectReceiptSettingsForm() {
     const el = document.getElementById(id);
     if (el) next[key] = el.value;
   }
+  const hiddenLogo = document.getElementById('rset-store-logo');
+  const urlLogo = document.getElementById('rset-logo-url');
+  const fromHidden = hiddenLogo?.value || '';
+  const fromUrl = (urlLogo?.value || '').trim();
+  next.storeLogo = fromUrl || fromHidden || '';
+  if (next.storeLogo) next.showLogo = true;
   const width = document.getElementById('rset-paper-width');
   if (width) next.thermalPaperWidthMm = Number(width.value) === 58 ? 58 : 80;
   const ask = document.getElementById('rset-ask-cash');
@@ -274,6 +300,7 @@ function fillReceiptSettingsForm() {
   setVal('rset-store-name', tpl.storeName);
   setVal('rset-store-address', tpl.storeAddress);
   setVal('rset-phone', tpl.phone);
+  updateReceiptLogoPreview(tpl.storeLogo || '');
   const width = document.getElementById('rset-paper-width');
   if (width) width.value = Number(tpl.thermalPaperWidthMm) === 58 ? '58' : '80';
   const ask = document.getElementById('rset-ask-cash');
@@ -281,6 +308,46 @@ function fillReceiptSettingsForm() {
   document.querySelectorAll('[data-rset-toggle]').forEach((cb) => {
     cb.checked = tpl[cb.dataset.rsetToggle] !== false;
   });
+  const logoFile = document.getElementById('rset-logo-file');
+  if (logoFile && !logoFile.dataset.bound) {
+    logoFile.dataset.bound = '1';
+    logoFile.addEventListener('change', () => {
+      const file = logoFile.files && logoFile.files[0];
+      logoFile.value = '';
+      if (!file) return;
+      if (file.size > 1.5 * 1024 * 1024) {
+        alert('Logo must be under 1.5 MB');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        updateReceiptLogoPreview(String(reader.result || ''));
+        const showLogo = document.querySelector('[data-rset-toggle="showLogo"]');
+        if (showLogo) showLogo.checked = true;
+        renderReceiptSettingsPreview();
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+  const logoRemove = document.getElementById('rset-logo-remove');
+  if (logoRemove && !logoRemove.dataset.bound) {
+    logoRemove.dataset.bound = '1';
+    logoRemove.addEventListener('click', () => {
+      updateReceiptLogoPreview('');
+      const urlInp = document.getElementById('rset-logo-url');
+      if (urlInp) urlInp.value = '';
+      renderReceiptSettingsPreview();
+    });
+  }
+  const logoUrl = document.getElementById('rset-logo-url');
+  if (logoUrl && !logoUrl.dataset.bound) {
+    logoUrl.dataset.bound = '1';
+    logoUrl.addEventListener('input', () => {
+      const v = logoUrl.value.trim();
+      if (v) updateReceiptLogoPreview(v);
+      renderReceiptSettingsPreview();
+    });
+  }
   renderReceiptSettingsPreview();
 }
 
@@ -1732,23 +1799,82 @@ function resolveTaxRate(raw) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function addProductToCart(p) {
-  const stock = p.currentStock ?? p.availableStock ?? 0;
+function isFractionalUnitName(unit) {
+  const u = String(unit || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!u) return false;
+  if (/^(KG|KGS|G|GS|GRAM|GRAMS|KILOGRAM|KILOGRAMS|LTR|L|LITRE|LITER|LITRES|LITERS|ML|M|MTR|METER|METRE)$/.test(u)) return true;
+  return u.includes('KILO') || u.includes('GRAM') || u.includes('LITR') || u.includes('MILLI') || u.includes('METR');
+}
 
-  // Block adding if stock is 0
-  if (stock <= 0) {
+function weightQuickAmounts(unit) {
+  const u = String(unit || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (u === 'G' || u.includes('GRAM')) return [50, 100, 250, 500, 750, 1000];
+  if (u === 'ML' || u.includes('MILLI')) return [50, 100, 250, 500, 750, 1000];
+  return [0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 5];
+}
+
+function formatSellQty(qty, unit) {
+  const n = Number(qty) || 0;
+  const text = Number.isInteger(n) ? String(n) : String(Math.round(n * 1000) / 1000);
+  const u = String(unit || '').trim();
+  return u ? `${text} ${u}` : text;
+}
+
+function resolveUom(p = {}) {
+  const stockUnit = String(p.stockUnitName || p.stockUnit || 'Pcs').trim() || 'Pcs';
+  const salesUnit = String(p.salesUnitName || p.unitName || stockUnit).trim() || stockUnit;
+  const salesFactor = Number(p.salesConversionFactor) > 0 ? Number(p.salesConversionFactor) : 1;
+  const allowFractional = Boolean(
+    p.allowFractionalQty || isFractionalUnitName(stockUnit) || isFractionalUnitName(salesUnit)
+  );
+  return { stockUnit, salesUnit, salesFactor, allowFractional, step: allowFractional ? 0.1 : 1 };
+}
+
+/** POS keeps 3 decimals so 1.5 KG works even if product was saved as Pcs. */
+function normalizeCartQty(qty) {
+  const n = Number(qty);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.round(n * 1000) / 1000;
+}
+
+function maxSellable(p) {
+  const uom = resolveUom(p);
+  const avail = Number(p.availableStock ?? p.currentStock ?? 0) || 0;
+  if (uom.salesFactor <= 0) return 0;
+  return normalizeCartQty(Math.max(0, avail / uom.salesFactor));
+}
+
+function commitProductQtyToCart(p, rawQty, mode = 'add') {
+  const uom = resolveUom(p);
+  const maxQty = maxSellable(p);
+  const qty = normalizeCartQty(rawQty);
+
+  if (maxQty <= 0) {
     showToast(`⚠️ Cannot add ${p.name} - Out of stock!`, 'error');
-    return;
+    return false;
+  }
+  if (qty <= 0) {
+    showToast(`Enter a valid quantity in ${uom.salesUnit}`, 'error');
+    return false;
+  }
+  if (qty > maxQty + 1e-9) {
+    showToast(`Only ${formatSellQty(maxQty, uom.salesUnit)} available`, 'error');
+    return false;
   }
 
-  const existing = cart.find(item => item.productId === p.id);
+  const fractional = uom.allowFractional || Math.abs(qty - Math.round(qty)) > 1e-9;
+  const existing = cart.find((item) => item.productId === p.id);
   if (existing) {
-    // Only enforce stock ceiling when stock is tracked (> 0).
-    if (stock > 0 && existing.quantity >= stock) {
+    const nextQty = mode === 'edit' ? qty : normalizeCartQty(existing.quantity + qty);
+    if (nextQty > maxQty + 1e-9) {
       showToast(`Cannot add more. Stock limit reached for ${p.name}!`, 'error');
-      return;
+      return false;
     }
-    existing.quantity += 1;
+    existing.quantity = nextQty;
+    existing.unitName = uom.salesUnit;
+    existing.stockUnitName = uom.stockUnit;
+    existing.salesConversionFactor = uom.salesFactor;
+    existing.allowFractionalQty = fractional || Boolean(existing.allowFractionalQty);
     existing.lineTotal = existing.quantity * existing.unitPrice;
   } else {
     const rate = resolveTaxRate(p.taxRate)
@@ -1758,17 +1884,107 @@ function addProductToCart(p) {
       productId: p.id,
       productName: p.name,
       sku: p.sku || '',
-      quantity: 1,
+      quantity: qty,
       unitPrice,
       discount: 0,
       taxRate: taxContext?.enabled ? rate : 0,
       taxAmount: 0,
-      lineTotal: unitPrice,
-      currentStock: stock,
-      isCustom: false
+      lineTotal: unitPrice * qty,
+      currentStock: p.currentStock ?? p.availableStock ?? 0,
+      availableStock: p.availableStock ?? p.currentStock ?? 0,
+      unitName: uom.salesUnit,
+      stockUnitName: uom.stockUnit,
+      salesConversionFactor: uom.salesFactor,
+      allowFractionalQty: fractional,
+      isCustom: false,
     });
   }
   renderCartList();
+  return true;
+}
+
+function promptProductQty(p, mode = 'add') {
+  const uom = resolveUom(p);
+  const maxQty = maxSellable(p);
+  if (maxQty <= 0) {
+    showToast(`⚠️ Cannot add ${p.name} - Out of stock!`, 'error');
+    return;
+  }
+
+  document.getElementById('pos-qty-prompt')?.remove();
+  const existing = cart.find((item) => item.productId === p.id);
+  const quick = uom.allowFractional ? weightQuickAmounts(uom.salesUnit) : [1, 2, 3, 5, 10];
+  const initial = mode === 'edit' && existing ? String(existing.quantity) : (uom.allowFractional ? '' : '1');
+
+  const overlay = document.createElement('div');
+  overlay.id = 'pos-qty-prompt';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;box-shadow:0 20px 50px rgba(0,0,0,0.25);">
+      <h3 style="margin:0 0 4px;font-size:18px;color:#0f172a;">${mode === 'edit' ? 'Edit quantity' : 'Enter quantity'}</h3>
+      <p style="margin:0 0 12px;color:#64748b;font-size:13px;">${p.name || ''}</p>
+      <p style="margin:0 0 12px;color:#94a3b8;font-size:12px;">
+        Price ${pkr(Number(p.sellingPrice || p.price || 0))} / ${uom.salesUnit}
+        · Available ${formatSellQty(maxQty, uom.salesUnit)}
+      </p>
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <input id="pos-qty-input" type="number" min="0.001" step="0.001" inputmode="decimal"
+          value="${initial}" placeholder="${uom.allowFractional ? 'e.g. 1.5' : 'e.g. 1'}"
+          style="flex:1;border:2px solid #014582;border-radius:12px;padding:12px;font-size:24px;font-weight:700;text-align:center;outline:none;" />
+        <div style="min-width:56px;display:flex;align-items:center;justify-content:center;background:#e0f2fe;color:#014582;border-radius:12px;font-weight:700;font-size:13px;">
+          ${uom.salesUnit}
+        </div>
+      </div>
+      <div id="pos-qty-quick" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;"></div>
+      <p id="pos-qty-error" style="display:none;color:#dc2626;font-size:12px;margin:0 0 10px;"></p>
+      <div style="display:flex;gap:8px;">
+        <button type="button" id="pos-qty-cancel" style="flex:1;padding:10px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;font-weight:600;cursor:pointer;">Cancel</button>
+        <button type="button" id="pos-qty-ok" style="flex:1;padding:10px;border:none;border-radius:12px;background:#014582;color:#fff;font-weight:700;cursor:pointer;">
+          ${mode === 'edit' ? 'Update' : 'Add to cart'}
+        </button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const input = overlay.querySelector('#pos-qty-input');
+  const errEl = overlay.querySelector('#pos-qty-error');
+  const quickEl = overlay.querySelector('#pos-qty-quick');
+  quick.forEach((q) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = formatSellQty(q, uom.salesUnit);
+    btn.style.cssText = 'padding:6px 10px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;font-size:12px;font-weight:600;cursor:pointer;';
+    btn.addEventListener('click', () => {
+      input.value = String(q);
+      errEl.style.display = 'none';
+      input.focus();
+    });
+    quickEl.appendChild(btn);
+  });
+
+  const close = () => overlay.remove();
+  const submit = () => {
+    const ok = commitProductQtyToCart(p, parseFloat(input.value), mode);
+    if (ok) close();
+    else {
+      errEl.textContent = `Enter a valid qty in ${uom.salesUnit} (max ${formatSellQty(maxQty, uom.salesUnit)})`;
+      errEl.style.display = 'block';
+    }
+  };
+
+  overlay.querySelector('#pos-qty-cancel').addEventListener('click', close);
+  overlay.querySelector('#pos-qty-ok').addEventListener('click', submit);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    if (e.key === 'Escape') close();
+  });
+  setTimeout(() => { input.focus(); input.select(); }, 30);
+}
+
+function addProductToCart(p) {
+  promptProductQty(p, 'add');
 }
 
 function renderCartList() {
@@ -1781,14 +1997,17 @@ function renderCartList() {
       <div class="cart-item-row-top">
         <div class="cart-item-info">
           <b>${item.productName}</b>
-          <span>${item.quantity} × ${pkr(item.unitPrice)}</span>
+          <span>${formatSellQty(item.quantity, item.unitName || 'Pcs')} × ${pkr(item.unitPrice)}</span>
         </div>
         <div class="cart-item-total">${pkr(Number(item.unitPrice || 0) * Number(item.quantity || 0))}</div>
       </div>
       <div class="cart-item-controls">
         <div class="cart-item-qty">
           <button class="btn-qty btn-minus" data-idx="${index}">-</button>
-          <span style="font-weight:700;">${item.quantity}</span>
+          <button type="button" class="btn-edit-qty" data-idx="${index}" title="Edit quantity"
+            style="min-width:72px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:#fff;font-weight:700;cursor:pointer;font-size:12px;">
+            ${formatSellQty(item.quantity, item.unitName || 'Pcs')}
+          </button>
           <button class="btn-qty btn-plus" data-idx="${index}">+</button>
         </div>
         <div class="cart-item-disc">
@@ -1800,9 +2019,12 @@ function renderCartList() {
     `;
 
     // Wire listeners
+    const step = resolveUom(item).step;
     row.querySelector('.btn-minus').addEventListener('click', () => {
-      if (item.quantity > 1) {
-        item.quantity -= 1;
+      const next = normalizeCartQty(item.quantity - step);
+      if (next > 0) {
+        item.quantity = next;
+        item.lineTotal = item.quantity * item.unitPrice;
       } else {
         cart.splice(index, 1);
       }
@@ -1810,8 +2032,33 @@ function renderCartList() {
     });
 
     row.querySelector('.btn-plus').addEventListener('click', () => {
-      item.quantity += 1;
+      const maxQty = maxSellable(item);
+      const next = normalizeCartQty(item.quantity + step);
+      if (!item.isCustom && next > maxQty + 1e-9) {
+        showToast(`Stock limit for ${item.productName}`, 'error');
+        return;
+      }
+      item.quantity = next;
+      item.allowFractionalQty = Boolean(item.allowFractionalQty) || Math.abs(next - Math.round(next)) > 1e-9;
+      item.lineTotal = item.quantity * item.unitPrice;
       renderCartList();
+    });
+
+    row.querySelector('.btn-edit-qty')?.addEventListener('click', () => {
+      if (item.isCustom) return;
+      promptProductQty({
+        id: item.productId,
+        name: item.productName,
+        sku: item.sku,
+        sellingPrice: item.unitPrice,
+        currentStock: item.currentStock,
+        availableStock: item.availableStock,
+        taxRate: item.taxRate,
+        salesUnitName: item.unitName,
+        stockUnitName: item.stockUnitName,
+        salesConversionFactor: item.salesConversionFactor,
+        allowFractionalQty: item.allowFractionalQty,
+      }, 'edit');
     });
 
     row.querySelector('.inp-item-disc').addEventListener('change', (e) => {
@@ -1838,7 +2085,7 @@ function parseCustomPrice() {
 }
 
 function parseCustomQty() {
-  const qty = parseInt(String(customLineQtyInp?.value || '1'), 10);
+  const qty = Math.max(0.001, parseFloat(String(customLineQtyInp?.value || '1')) || 1);
   return Number.isFinite(qty) && qty > 0 ? qty : 1;
 }
 
@@ -2295,6 +2542,11 @@ async function submitCompleteSale() {
       productName: i.productName,
       sku: i.sku,
       quantity: i.quantity,
+      unitName: i.unitName || 'Pcs',
+      conversionFactor: i.salesConversionFactor ?? 1,
+      salesConversionFactor: i.salesConversionFactor ?? 1,
+      allowFractionalQty: Boolean(i.allowFractionalQty),
+      stockUnitName: i.stockUnitName || i.unitName || 'Pcs',
       unitPrice: i.unitPrice,
       discount: i.discount,
       taxRate: resolveTaxRate(i.taxRate),
@@ -2343,7 +2595,11 @@ async function submitCompleteSale() {
     snapItems.forEach(async (cartItem) => {
       const product = products.find((p) => p.id === cartItem.productId);
       if (product) {
-        product.currentStock = Math.max(0, (product.currentStock || 0) - cartItem.quantity);
+        const factor = Number(cartItem.conversionFactor ?? cartItem.salesConversionFactor ?? 1) || 1;
+        const baseQty = cartItem.baseQuantity != null
+          ? Number(cartItem.baseQuantity)
+          : (Number(cartItem.quantity) || 0) * factor;
+        product.currentStock = Math.max(0, (product.currentStock || 0) - baseQty);
         try {
           await window.bisonDesktop.catalog.saveProduct(product);
         } catch (err) {
@@ -2471,7 +2727,7 @@ function legacyRenderReceipt() {
   let itemsHtml = '';
   lastSale.items.forEach(i => {
     const lineTotal = i.lineTotal || (i.unitPrice * i.quantity);
-    itemsHtml += `<div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>${i.productName || i.name} x ${i.quantity}</span><span>${pkr(lineTotal)}</span></div>`;
+    itemsHtml += `<div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>${i.productName || i.name} x ${formatSellQty(i.quantity, i.unitName || 'Pcs')}</span><span>${pkr(lineTotal)}</span></div>`;
   });
   let paymentsHtml = '';
   lastSale.payments.forEach(p => {
@@ -2685,7 +2941,7 @@ function renderReturnForm(sale, sourceLabel) {
                 <td>${i.productName || i.name}</td>
                 <td>${i.quantity}</td>
                 <td>${pkr(i.unitPrice)}</td>
-                <td><input type="number" class="return-qty-inp" data-idx="${idx}" value="0" min="0" max="${i.quantity}" style="width:56px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;" /></td>
+                <td><input type="number" class="return-qty-inp" data-idx="${idx}" value="0" min="0" max="${i.quantity}" step="0.001" style="width:72px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;" /> <span style="font-size:11px;color:#64748b;">${i.unitName || 'Pcs'}</span></td>
               </tr>
             `).join('')}
           </tbody>
@@ -2717,7 +2973,7 @@ function renderReturnForm(sale, sourceLabel) {
     const qInps = document.querySelectorAll('.return-qty-inp');
     const refundItems = [];
     qInps.forEach(inp => {
-      const qty = parseInt(inp.value) || 0;
+      const qty = parseFloat(inp.value) || 0;
       if (qty > 0) {
         const idx = parseInt(inp.getAttribute('data-idx'));
         const item = sale.items[idx];
@@ -3268,7 +3524,7 @@ async function printSaleSlip() {
   if (!sale) return;
   const itemsRows = (sale.items || []).map((i) => `
     <tr><td style="text-align:left">${i.productName || i.name || '—'} (${i.sku || ''})</td>
-      <td style="text-align:right">${i.quantity || 1} x ${saleFmt(i.unitPrice)}</td>
+      <td style="text-align:right">${formatSellQty(i.quantity || 1, i.unitName || 'Pcs')} x ${saleFmt(i.unitPrice)}</td>
       <td style="text-align:right">${saleFmt(saleLineTotal(i))}</td></tr>`).join('');
   const paymentsRows = (sale.payments || []).map((p) => `<tr><td>${p.paymentMethod || '—'}</td><td style="text-align:right">${saleFmt(p.amount || 0)}</td></tr>`).join('');
   const html = `

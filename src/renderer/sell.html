@@ -1180,9 +1180,40 @@
         width: 480px;
         max-width: 90vw;
         max-height: 85vh;
-        overflow-y: auto;
+        overflow: hidden;
         box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
-        padding: 24px;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .checkout-modal-body {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 24px 24px 12px;
+      }
+      .checkout-modal-footer {
+        flex-shrink: 0;
+        display: flex;
+        gap: 12px;
+        padding: 14px 24px 20px;
+        border-top: 1px solid #e2e8f0;
+        background: #fff;
+      }
+      .checkout-modal-footer #btn-checkout-close {
+        flex: 1;
+        justify-content: center;
+        color: #0f172a;
+        border: 1px solid #cbd5e1;
+        background: #fff;
+        font-weight: 700;
+      }
+      .checkout-modal-footer #btn-checkout-submit {
+        flex: 2;
+        justify-content: center;
+        background-color: #10b981;
+        color: #fff;
+        font-weight: 700;
       }
       .payments-container {
         margin-top: 14px;
@@ -2221,6 +2252,17 @@
                         <input id="rset-phone" type="text" />
                       </div>
                       <div class="receipt-field">
+                        <label>Receipt logo</label>
+                        <p class="settings-muted" style="margin:0 0 8px;font-size:11px;">Upload a logo for receipts. If empty, company profile logo is used.</p>
+                        <div id="rset-logo-preview-wrap" style="display:none;align-items:center;gap:10px;margin-bottom:8px;">
+                          <img id="rset-logo-preview" alt="Logo" style="height:52px;max-width:140px;object-fit:contain;border:1px solid var(--line);border-radius:8px;padding:4px;background:#fff;" />
+                          <button type="button" class="btn-clear-cart" id="rset-logo-remove" style="padding:4px 10px;">Remove</button>
+                        </div>
+                        <input id="rset-logo-file" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" />
+                        <input id="rset-store-logo" type="hidden" value="" />
+                        <input id="rset-logo-url" type="text" placeholder="Or paste logo URL" style="margin-top:8px;" />
+                      </div>
+                      <div class="receipt-field">
                         <label>Thermal paper</label>
                         <select id="rset-paper-width">
                           <option value="58">58mm</option>
@@ -2450,57 +2492,59 @@
     <!-- ─── MODAL: CHECKOUT ────────────────────────────────────────── -->
     <div class="checkout-overlay" id="checkout-modal-overlay">
       <div class="checkout-modal">
-        <h3 style="margin:0 0 16px 0;">Checkout Payment</h3>
-        <p id="checkout-customer-label" class="settings-muted" style="margin:-8px 0 12px;">Walk-in Customer</p>
-        
-        <div style="margin-bottom:12px;display:flex;justify-content:space-between;font-size:14px;border-bottom:1px solid #f1f5f9;padding-bottom:10px;">
-          <span>Order Grand Total</span>
-          <span style="font-weight:800;color:var(--brand);" id="checkout-modal-total">PKR 0.00</span>
-        </div>
-
-        <div class="checkout-tender" id="checkout-cash-received-panel">
-          <div style="font-size:12px;font-weight:700;margin-bottom:8px;">Cash received from customer</div>
-          <div class="checkout-tender-grid">
-            <div><span>Bill</span><b id="checkout-tender-bill">PKR 0.00</b></div>
-            <div><span>Received</span><b id="checkout-tender-received">PKR 0.00</b></div>
-            <div class="remain" id="checkout-tender-remain-box"><span id="checkout-tender-remain-label">Change</span><b id="checkout-tender-remain">PKR 0.00</b></div>
+        <div class="checkout-modal-body">
+          <h3 style="margin:0 0 16px 0;">Checkout Payment</h3>
+          <p id="checkout-customer-label" class="settings-muted" style="margin:-8px 0 12px;">Walk-in Customer</p>
+          
+          <div style="margin-bottom:12px;display:flex;justify-content:space-between;font-size:14px;border-bottom:1px solid #f1f5f9;padding-bottom:10px;">
+            <span>Order Grand Total</span>
+            <span style="font-weight:800;color:var(--brand);" id="checkout-modal-total">PKR 0.00</span>
           </div>
-        </div>
 
-        <div class="pay-quick-row">
-          <button type="button" class="pay-quick" data-method="Cash">Cash</button>
-          <button type="button" class="pay-quick" data-method="Card">Card</button>
-          <button type="button" class="pay-quick credit" data-method="Credit">Credit</button>
-        </div>
-        <p class="credit-note" id="checkout-credit-note">This sale will be posted to the customer’s account.</p>
-        
-        <div style="margin-bottom:12px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <label style="font-size:12px;color:var(--muted);">Payments</label>
-            <button class="btn-clear-cart" id="btn-add-split-payment" style="background-color:rgba(1,69,130,0.1);color:var(--brand);padding:2px 8px;">+ Add Split</button>
+          <div class="checkout-tender" id="checkout-cash-received-panel">
+            <div style="font-size:12px;font-weight:700;margin-bottom:8px;">Cash received from customer</div>
+            <div class="checkout-tender-grid">
+              <div><span>Bill</span><b id="checkout-tender-bill">PKR 0.00</b></div>
+              <div><span>Received</span><b id="checkout-tender-received">PKR 0.00</b></div>
+              <div class="remain" id="checkout-tender-remain-box"><span id="checkout-tender-remain-label">Change</span><b id="checkout-tender-remain">PKR 0.00</b></div>
+            </div>
           </div>
-          <div class="payments-container" id="payments-split-list">
-            <!-- Split payments rows -->
+
+          <div class="pay-quick-row">
+            <button type="button" class="pay-quick" data-method="Cash">Cash</button>
+            <button type="button" class="pay-quick" data-method="Card">Card</button>
+            <button type="button" class="pay-quick credit" data-method="Credit">Credit</button>
           </div>
+          <p class="credit-note" id="checkout-credit-note">This sale will be posted to the customer’s account.</p>
+          
+          <div style="margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <label style="font-size:12px;color:var(--muted);">Payments</label>
+              <button class="btn-clear-cart" id="btn-add-split-payment" style="background-color:rgba(1,69,130,0.1);color:var(--brand);padding:2px 8px;">+ Add Split</button>
+            </div>
+            <div class="payments-container" id="payments-split-list">
+              <!-- Split payments rows -->
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:14px;font-weight:700;">
+            <span id="checkout-change-label">Change Due:</span>
+            <span style="font-size:18px;" id="checkout-modal-change">PKR 0.00</span>
+          </div>
+
+          <!-- Checkout Numpad helper -->
+          <div class="keypad-grid">
+            <button class="keypad-btn">7</button><button class="keypad-btn">8</button><button class="keypad-btn">9</button>
+            <button class="keypad-btn">4</button><button class="keypad-btn">5</button><button class="keypad-btn">6</button>
+            <button class="keypad-btn">1</button><button class="keypad-btn">2</button><button class="keypad-btn">3</button>
+            <button class="keypad-btn">00</button><button class="keypad-btn">0</button><button class="keypad-btn" style="color:#ef4444;">⌫</button>
+          </div>
+          <button class="btn-hold" id="btn-checkout-set-exact" style="width:100%;margin-top:10px;">Set Exact Amount</button>
         </div>
 
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:14px;font-weight:700;">
-          <span id="checkout-change-label">Change Due:</span>
-          <span style="font-size:18px;" id="checkout-modal-change">PKR 0.00</span>
-        </div>
-
-        <!-- Checkout Numpad helper -->
-        <div class="keypad-grid">
-          <button class="keypad-btn">7</button><button class="keypad-btn">8</button><button class="keypad-btn">9</button>
-          <button class="keypad-btn">4</button><button class="keypad-btn">5</button><button class="keypad-btn">6</button>
-          <button class="keypad-btn">1</button><button class="keypad-btn">2</button><button class="keypad-btn">3</button>
-          <button class="keypad-btn">00</button><button class="keypad-btn">0</button><button class="keypad-btn" style="color:#ef4444;">⌫</button>
-        </div>
-        <button class="btn-hold" id="btn-checkout-set-exact" style="width:100%;margin-top:10px;">Set Exact Amount</button>
-
-        <div style="display:flex;gap:12px;margin-top:20px;">
-          <button class="btn-nav-action ghost" style="flex:1;justify-content:center;" id="btn-checkout-close">Cancel</button>
-          <button class="btn-nav-action" style="flex:2;justify-content:center;background-color:#10b981;color:#fff;" id="btn-checkout-submit">Submit Sale</button>
+        <div class="checkout-modal-footer">
+          <button class="btn-nav-action ghost" type="button" id="btn-checkout-close">Cancel</button>
+          <button class="btn-nav-action" type="button" id="btn-checkout-submit">Submit Sale</button>
         </div>
       </div>
     </div>

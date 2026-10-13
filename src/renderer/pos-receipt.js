@@ -104,6 +104,13 @@
     return 'PKR ' + v.toFixed(2);
   }
 
+  function formatReceiptQty(item) {
+    var qty = asNumber(item && item.quantity, 0);
+    var unit = String((item && (item.unitName || item.salesUnitName || item.stockUnitName)) || 'Pcs').trim() || 'Pcs';
+    var text = Number.isInteger(qty) ? String(qty) : String(Math.round(qty * 1000) / 1000);
+    return text + ' ' + unit;
+  }
+
   function asNumber(v, fallback) {
     if (v == null || v === '') return fallback || 0;
     if (typeof v === 'object') {
@@ -137,7 +144,7 @@
   }
 
   function row(label, value, strong, large) {
-    return '<table style="width:100%;border-collapse:collapse;font-size:' + (large ? 13 : 11) + ';font-weight:' + (strong ? 700 : 400) + ';"><tbody><tr>' +
+    return '<table style="width:100%;border-collapse:collapse;font-size:' + (large ? 13 : 11) + ';font-weight:' + (strong ? 600 : 400) + ';"><tbody><tr>' +
       '<td style="text-align:left;padding:1px 8px 1px 0;vertical-align:top;">' + esc(label) + '</td>' +
       '<td style="text-align:right;padding:1px 0;vertical-align:top;white-space:nowrap;">' + esc(value == null ? '' : value) + '</td>' +
       '</tr></tbody></table>';
@@ -160,20 +167,20 @@
       header += '<div style="text-align:center;margin-bottom:6px;"><img src="' + esc(comp.logo) + '" alt="' + esc(comp.name) + '" style="height:56px;max-width:160px;object-fit:contain;"/></div>';
     }
     header += '<div style="text-align:center;">';
-    header += '<div style="font-size:15px;font-weight:900;letter-spacing:.4px;text-transform:uppercase;">' + esc(comp.name) + '</div>';
-    if (tpl.showAddress && comp.address) header += '<div style="font-size:12px;font-weight:700;margin-top:4px;">' + esc(comp.address) + '</div>';
-    if (tpl.showPhone && comp.phone) header += '<div style="font-size:12px;font-weight:700;">Tel: ' + esc(comp.phone) + '</div>';
-    if (tpl.showEmail && comp.email) header += '<div style="font-size:12px;font-weight:700;">' + esc(comp.email) + '</div>';
-    if (tpl.showWebsite && comp.website) header += '<div style="font-size:12px;font-weight:700;">' + esc(String(comp.website).replace(/^https?:\/\//, '')) + '</div>';
-    if (tpl.showTaxId && comp.taxId) header += '<div style="font-size:12px;font-weight:700;margin-top:4px;">NTN / Tax ID: ' + esc(comp.taxId) + '</div>';
+    header += '<div style="font-size:15px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;">' + esc(comp.name) + '</div>';
+    if (tpl.showAddress && comp.address) header += '<div style="font-size:12px;font-weight:400;margin-top:4px;">' + esc(comp.address) + '</div>';
+    if (tpl.showPhone && comp.phone) header += '<div style="font-size:12px;font-weight:400;">Tel: ' + esc(comp.phone) + '</div>';
+    if (tpl.showEmail && comp.email) header += '<div style="font-size:12px;font-weight:400;">' + esc(comp.email) + '</div>';
+    if (tpl.showWebsite && comp.website) header += '<div style="font-size:12px;font-weight:400;">' + esc(String(comp.website).replace(/^https?:\/\//, '')) + '</div>';
+    if (tpl.showTaxId && comp.taxId) header += '<div style="font-size:12px;font-weight:400;margin-top:4px;">NTN / Tax ID: ' + esc(comp.taxId) + '</div>';
     header += '</div>';
 
     // Return receipts: prominent banner + original invoice reference
     if (s.receiptTitle) {
-      header += '<div style="text-align:center;margin-top:6px;font-size:13px;font-weight:900;letter-spacing:1.5px;text-transform:uppercase;">' + esc(s.receiptTitle) + '</div>';
+      header += '<div style="text-align:center;margin-top:6px;font-size:13px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;">' + esc(s.receiptTitle) + '</div>';
     }
 
-    var meta = row('Receipt #', invoice, true) + row('Date', sold.toLocaleDateString()) + row('Time', sold.toLocaleTimeString());
+    var meta = row('Receipt #', invoice) + row('Date', sold.toLocaleDateString()) + row('Time', sold.toLocaleTimeString());
     if (s.originalInvoice) meta += row('Original inv', s.originalInvoice);
     if (s.customerName || (s.customer && s.customer.name)) meta += row('Customer', s.customerName || s.customer.name);
     if (tpl.showTerminal) {
@@ -188,25 +195,25 @@
 
     var itemsTable = '';
     items.forEach(function (it) {
-      var qty = asNumber(it.quantity, 0);
+      var qtyLabel = formatReceiptQty(it);
       var unit = asNumber(it.unitPrice, 0);
       var amt = lineTotal(it);
       var taxPct = asNumber(it.taxRate, 0);
       var discPct = asNumber(it.discount, 0);
       var skuLine = '';
       if (tpl.showSku) {
-        skuLine += '<div style="font-size:12px;font-weight:700;">' + (it.sku ? 'SKU ' + esc(it.sku) : 'SKU \u2014');
+        skuLine += '<div style="font-size:12px;font-weight:400;">' + (it.sku ? 'SKU ' + esc(it.sku) : 'SKU \u2014');
         if (it.barcodeNumber) skuLine += '  \u00b7  ' + esc(it.barcodeNumber);
         skuLine += '</div>';
       }
-      var sub = qty + ' \u00d7 ' + money(unit);
+      var sub = qtyLabel + ' \u00d7 ' + money(unit);
       if (discPct) sub += '  Disc ' + discPct + '%';
       if (taxPct) sub += '  Tax ' + taxPct + '%';
-      itemsTable += '<div style="margin:8px 0;"><div style="font-weight:700;text-transform:uppercase;">' + esc(it.productName || it.name || 'Item') + '</div>' +
+      itemsTable += '<div style="margin:8px 0;"><div style="font-weight:400;text-transform:uppercase;">' + esc(it.productName || it.name || 'Item') + '</div>' +
         skuLine +
-        '<table style="width:100%;border-collapse:collapse;font-size:12px;font-weight:700;"><tbody><tr>' +
-        '<td style="padding-top:2px;text-align:left;">' + sub + '</td>' +
-        '<td style="padding-top:2px;text-align:center;width:36px;">' + qty + '</td>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12px;font-weight:400;"><tbody><tr>' +
+        '<td style="padding-top:2px;text-align:left;">' + esc(sub) + '</td>' +
+        '<td style="padding-top:2px;text-align:center;width:56px;">' + esc(qtyLabel) + '</td>' +
         '<td style="padding-top:2px;text-align:right;width:88px;">' + money(amt) + '</td>' +
         '</tr></tbody></table></div>';
     });
@@ -226,7 +233,7 @@
     var changeAmt = asNumber(s.changeAmount, 0);
     if (!changeAmt && paidAmt > billTotal) changeAmt = paidAmt - billTotal;
 
-    var pay = '<div style="font-weight:700;margin-bottom:4px;">PAYMENT</div>';
+    var pay = '<div style="font-weight:600;margin-bottom:4px;">PAYMENT</div>';
     if (payments.length) {
       pay += payments.map(function (p) {
         return row(p.reference ? String(p.paymentMethod) + ' \u00b7 ' + p.reference : String(p.paymentMethod || 'Payment'), money(p.amount));
@@ -234,14 +241,14 @@
     }
     if (tpl.askCashReceived) {
       pay += row('Bill total', money(billTotal));
-      pay += row('Cash received', money(paidAmt), true);
+      pay += row('Cash received', money(paidAmt));
       pay += row('Change / remaining', money(Math.max(0, changeAmt)), true, true);
     } else {
-      pay += row(payments.length ? 'Amount paid' : 'Paid', money(paidAmt), true);
+      pay += row(payments.length ? 'Amount paid' : 'Paid', money(paidAmt));
       if (changeAmt > 0) pay += row('Change due', money(changeAmt));
     }
     if (tpl.showLoyalty && Number(s.loyaltyPoints) > 0) pay += row('Loyalty points earned', String(s.loyaltyPoints));
-    if (s.notes) pay += dash + '<div style="font-size:10px;"><span style="font-weight:700;">Notes: </span>' + esc(s.notes) + '</div>';
+    if (s.notes) pay += dash + '<div style="font-size:10px;"><span style="font-weight:600;">Notes: </span>' + esc(s.notes) + '</div>';
 
     var lower = '';
     if (tpl.showBarcode) {
@@ -249,26 +256,26 @@
       var bcSvg = code128BarcodeSvg(bcVal, paperWidth);
       lower += dash;
       lower += '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 0 4px;overflow:hidden;">' + bcSvg + '</div>';
-      lower += '<div style="text-align:center;font-size:10px;font-weight:700;">Scan code = receipt #</div>';
+      lower += '<div style="text-align:center;font-size:10px;font-weight:400;">Scan code = receipt #</div>';
     }
-    if (tpl.receiptReturnPolicy) lower += '<div style="text-align:center;font-size:11px;font-weight:700;white-space:pre-wrap;">' + esc(tpl.receiptReturnPolicy) + '</div>';
-    if (tpl.receiptNotes) lower += '<div style="text-align:center;font-size:11px;font-weight:700;margin-top:8px;white-space:pre-wrap;">' + esc(tpl.receiptNotes) + '</div>';
-    if (tpl.receiptFooter) lower += '<div style="text-align:center;font-weight:700;margin-top:12px;">' + esc(tpl.receiptFooter) + '</div>';
-    if (tpl.servedByPrefix) lower += '<div style="text-align:center;font-size:11px;font-weight:700;margin-top:8px;">' + esc(tpl.servedByPrefix) + ' ' + esc(s.cashierName || 'our team') + '</div>';
-    lower += '<div style="text-align:center;font-size:11px;font-weight:700;margin-top:4px;">Generated ' + new Date().toLocaleString() + '</div>';
-    if (tpl.poweredBy) lower += '<div style="text-align:center;font-size:11px;font-weight:700;margin-top:2px;">' + esc(tpl.poweredBy) + '</div>';
+    if (tpl.receiptReturnPolicy) lower += '<div style="text-align:center;font-size:11px;font-weight:400;white-space:pre-wrap;">' + esc(tpl.receiptReturnPolicy) + '</div>';
+    if (tpl.receiptNotes) lower += '<div style="text-align:center;font-size:11px;font-weight:400;margin-top:8px;white-space:pre-wrap;">' + esc(tpl.receiptNotes) + '</div>';
+    if (tpl.receiptFooter) lower += '<div style="text-align:center;font-weight:400;margin-top:12px;">' + esc(tpl.receiptFooter) + '</div>';
+    if (tpl.servedByPrefix) lower += '<div style="text-align:center;font-size:11px;font-weight:400;margin-top:8px;">' + esc(tpl.servedByPrefix) + ' ' + esc(s.cashierName || 'our team') + '</div>';
+    lower += '<div style="text-align:center;font-size:11px;font-weight:400;margin-top:4px;">Generated ' + new Date().toLocaleString() + '</div>';
+    if (tpl.poweredBy) lower += '<div style="text-align:center;font-size:11px;font-weight:400;margin-top:2px;">' + esc(tpl.poweredBy) + '</div>';
 
     return '<div style="width:' + paperWidth + 'px;max-width:100%;margin:0 auto;background:#fff;color:#000;font-family:Courier New,Courier,monospace;">' +
-      '<div style="padding:16px 14px;font-size:13px;line-height:1.35;font-weight:700;">' +
+      '<div style="padding:16px 14px;font-size:13px;line-height:1.35;font-weight:400;">' +
       header + dash +
-      '<div style="text-align:center;font-weight:900;letter-spacing:1.4px;font-size:11px;">' + esc(tpl.receiptHeader) + '</div>' +
-      (tpl.copyLabel ? '<div style="text-align:center;font-size:11px;font-weight:700;margin-top:2px;">' + esc(tpl.copyLabel) + '</div>' : '') +
+      '<div style="text-align:center;font-weight:600;letter-spacing:1.4px;font-size:11px;">' + esc(tpl.receiptHeader) + '</div>' +
+      (tpl.copyLabel ? '<div style="text-align:center;font-size:11px;font-weight:400;margin-top:2px;">' + esc(tpl.copyLabel) + '</div>' : '') +
       dash + meta + dash +
-      '<div style="font-weight:700;">BILL TO</div><div>' + esc(s.customerName || 'Walk-in Customer') + '</div>' +
+      '<div style="font-weight:600;">BILL TO</div><div>' + esc(s.customerName || 'Walk-in Customer') + '</div>' +
       (s.customerPhone ? '<div>Phone: ' + esc(s.customerPhone) + '</div>' : '') +
       (s.customerEmail ? '<div>Email: ' + esc(s.customerEmail) + '</div>' : '') +
       dash +
-      '<table style="width:100%;border-collapse:collapse;font-size:12px;font-weight:700;border-bottom:1px dashed #000;"><tbody><tr>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:12px;font-weight:400;border-bottom:1px dashed #000;"><tbody><tr>' +
       '<td style="padding:0 0 4px;text-align:left;">ITEM</td>' +
       '<td style="padding:0 0 4px;text-align:center;width:36px;">QTY</td>' +
       '<td style="padding:0 0 4px;text-align:right;width:88px;">AMOUNT</td>' +
@@ -447,7 +454,7 @@
         '<rect width="100%" height="100%" fill="#ffffff"/>' +
         bars +
         '</svg>' +
-        '<div style="text-align:center;font-size:11px;font-weight:800;letter-spacing:1.5px;margin-top:4px;font-family:monospace;">' +
+        '<div style="text-align:center;font-size:11px;font-weight:400;letter-spacing:1.5px;margin-top:4px;font-family:monospace;">' +
         esc(encoded.text) +
         '</div>'
       );
@@ -468,19 +475,19 @@
       terminalName: 'Terminal 01',
       locationName: 'Gulberg Store',
       items: [
-        { name: 'Kurleez Snack City 120g', sku: 'KASHIF-0001', quantity: 2, unitPrice: 120, lineTotal: 240, taxRate: 0 },
-        { name: 'Pepsi Black 500ml', sku: 'KASHIF-0003', quantity: 1, unitPrice: 90, lineTotal: 90, taxRate: 0 },
-        { name: 'Doritos Nacho Cheese', sku: 'KASHIF-0004', quantity: 3, unitPrice: 55, lineTotal: 165, taxRate: 0 },
+        { productName: 'Basmati Rice', sku: 'RICE-001', quantity: 1.5, unitName: 'KG', unitPrice: 280, lineTotal: 420, taxRate: 0 },
+        { productName: 'Pepsi Black 500ml', sku: 'KASHIF-0003', quantity: 1, unitName: 'Pcs', unitPrice: 90, lineTotal: 90, taxRate: 0 },
+        { productName: 'Cooking Oil', sku: 'OIL-001', quantity: 0.75, unitName: 'LTR', unitPrice: 520, lineTotal: 390, taxRate: 0 },
       ],
-      payments: [{ paymentMethod: 'Cash', amount: 500, reference: '' }],
-      subTotal: 495,
-      subtotal: 495,
+      payments: [{ paymentMethod: 'Cash', amount: 950, reference: '' }],
+      subTotal: 900,
+      subtotal: 900,
       discountTotal: 10,
       discountAmount: 10,
       taxAmount: 0,
-      grandTotal: 485,
-      paidAmount: 500,
-      changeAmount: 15,
+      grandTotal: 890,
+      paidAmount: 950,
+      changeAmount: 60,
       loyaltyPoints: 485,
       notes: '',
     };
@@ -577,7 +584,7 @@
     }
 
     doc.open();
-    doc.write('<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="utf-8" />\n  <title>Receipt</title>\n  <style>\n    @page {\n      size: ' + paperWidth + 'mm auto;\n      margin: 0;\n    }\n    @media print {\n      @page {\n        size: ' + paperWidth + 'mm auto;\n        margin: 0;\n      }\n      body {\n        width: ' + paperWidth + 'mm !important;\n        max-width: ' + paperWidth + 'mm !important;\n      }\n      * {\n        -webkit-print-color-adjust: exact !important;\n        print-color-adjust: exact !important;\n      }\n    }\n    * {\n      box-sizing: border-box;\n    }\n    html, body {\n      margin: 0;\n      padding: 0;\n      width: ' + paperWidth + 'mm;\n      max-width: ' + paperWidth + 'mm;\n      background: #fff;\n      color: #000;\n    }\n    html, body, .pos-receipt-paper, .pos-receipt-paper * {\n      color: #000 !important;\n      font-weight: 700 !important;\n      -webkit-text-stroke: 0.25px #000;\n    }\n    body {\n      font-family: "Courier New", Courier, monospace;\n      font-size: 12px;\n      line-height: 1.2;\n      font-weight: 700;\n    }\n    .pos-receipt-paper {\n      width: 100% !important;\n      max-width: 100% !important;\n      margin: 0;\n      padding: 2px 4px 30px 4px;\n      background: #fff;\n    }\n    .no-print { display: none !important; }\n    img.company-logo {\n      max-width: ' + (paperWidth === 58 ? 100 : 140) + 'px;\n      height: auto;\n      display: block;\n      margin: 0 auto 4px;\n    }\n    img.receipt-qr {\n      width: ' + (paperWidth === 58 ? 100 : 140) + 'px;\n      height: ' + (paperWidth === 58 ? 100 : 140) + 'px;\n      image-rendering: pixelated;\n      display: block;\n      margin: 4px auto;\n    }\n    table { width: 100%; border-collapse: collapse; }\n    svg {\n      max-width: 100%;\n      height: auto;\n      display: block;\n      margin: 2px auto;\n    }\n    div, p { margin: 0; padding: 0; }\n  </style>\n</head><body>' + clone.outerHTML + '</body></html>');
+    doc.write('<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="utf-8" />\n  <title>Receipt</title>\n  <style>\n    @page {\n      size: ' + paperWidth + 'mm auto;\n      margin: 0;\n    }\n    @media print {\n      @page {\n        size: ' + paperWidth + 'mm auto;\n        margin: 0;\n      }\n      body {\n        width: ' + paperWidth + 'mm !important;\n        max-width: ' + paperWidth + 'mm !important;\n      }\n      * {\n        -webkit-print-color-adjust: exact !important;\n        print-color-adjust: exact !important;\n      }\n    }\n    * {\n      box-sizing: border-box;\n    }\n    html, body {\n      margin: 0;\n      padding: 0;\n      width: ' + paperWidth + 'mm;\n      max-width: ' + paperWidth + 'mm;\n      background: #fff;\n      color: #000;\n    }\n    html, body, .pos-receipt-paper, .pos-receipt-paper * {\n      color: #000 !important;\n    }\n    body {\n      font-family: "Courier New", Courier, monospace;\n      font-size: 12px;\n      line-height: 1.2;\n      font-weight: 400;\n    }\n    .pos-receipt-paper {\n      width: 100% !important;\n      max-width: 100% !important;\n      margin: 0;\n      padding: 2px 4px 30px 4px;\n      background: #fff;\n    }\n    .no-print { display: none !important; }\n    img.company-logo {\n      max-width: ' + (paperWidth === 58 ? 100 : 140) + 'px;\n      height: auto;\n      display: block;\n      margin: 0 auto 4px;\n    }\n    img.receipt-qr {\n      width: ' + (paperWidth === 58 ? 100 : 140) + 'px;\n      height: ' + (paperWidth === 58 ? 100 : 140) + 'px;\n      image-rendering: pixelated;\n      display: block;\n      margin: 4px auto;\n    }\n    table { width: 100%; border-collapse: collapse; }\n    svg {\n      max-width: 100%;\n      height: auto;\n      display: block;\n      margin: 2px auto;\n    }\n    div, p { margin: 0; padding: 0; }\n  </style>\n</head><body>' + clone.outerHTML + '</body></html>');
     doc.close();
 
     var printed = false;

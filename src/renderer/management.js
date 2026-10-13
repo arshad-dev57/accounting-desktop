@@ -597,6 +597,17 @@ async function loadReceipt() {
             ${field('r-website', 'Website', 'website')}
             ${field('r-tax-id', 'NTN / Tax ID', 'taxId')}
           </div>
+          <div style="margin-top:10px;">
+            <label class="muted">Receipt logo</label>
+            <p class="muted" style="margin:4px 0 8px;font-size:12px;">Upload a logo for receipts. If empty, company profile logo is used.</p>
+            <div id="r-logo-preview-wrap" style="display:${template.storeLogo ? 'flex' : 'none'};align-items:center;gap:10px;margin-bottom:8px;">
+              <img id="r-logo-preview" src="${receiptEsc(template.storeLogo || '')}" alt="Logo" style="height:52px;max-width:140px;object-fit:contain;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#fff;" />
+              <button type="button" class="btn" id="r-logo-remove">Remove</button>
+            </div>
+            <input type="file" id="r-logo-file" accept="image/png,image/jpeg,image/webp,image/svg+xml" />
+            <input type="hidden" id="r-store-logo" value="${receiptEsc(template.storeLogo || '')}" />
+            <input id="r-logo-url" placeholder="Or paste logo URL" value="${template.storeLogo && !String(template.storeLogo).startsWith('data:') ? receiptEsc(template.storeLogo) : ''}" style="margin-top:8px;" />
+          </div>
         </div>
         <div class="card">
           <h3 style="margin:0 0 10px;">Receipt text</h3>
@@ -648,12 +659,36 @@ async function loadReceipt() {
       const el = wrap.querySelector('#' + id);
       if (el) next[key] = el.value;
     }
+    const hiddenLogo = wrap.querySelector('#r-store-logo');
+    const urlLogo = wrap.querySelector('#r-logo-url');
+    const fromUrl = (urlLogo?.value || '').trim();
+    const fromHidden = hiddenLogo?.value || '';
+    next.storeLogo = fromUrl || fromHidden || '';
+    if (next.storeLogo) next.showLogo = true;
     const width = wrap.querySelector('#r-paper-width');
     if (width) next.thermalPaperWidthMm = Number(width.value) === 58 ? 58 : 80;
     const askCash = wrap.querySelector('#r-ask-cash');
     if (askCash) next.askCashReceived = askCash.checked;
     wrap.querySelectorAll('[data-toggle]').forEach((cb) => { next[cb.dataset.toggle] = cb.checked; });
     return next;
+  };
+
+  const setMgmtLogoPreview = (logo) => {
+    const hidden = wrap.querySelector('#r-store-logo');
+    const img = wrap.querySelector('#r-logo-preview');
+    const wrapEl = wrap.querySelector('#r-logo-preview-wrap');
+    const urlInp = wrap.querySelector('#r-logo-url');
+    if (hidden) hidden.value = logo || '';
+    if (urlInp) urlInp.value = logo && !String(logo).startsWith('data:') ? logo : '';
+    if (img && wrapEl) {
+      if (logo) {
+        img.src = logo;
+        wrapEl.style.display = 'flex';
+      } else {
+        img.removeAttribute('src');
+        wrapEl.style.display = 'none';
+      }
+    }
   };
 
   const renderPreview = () => {
@@ -663,6 +698,33 @@ async function loadReceipt() {
       window.PosReceipt.sampleReceiptSale(), comp, next
     );
   };
+
+  wrap.querySelector('#r-logo-file')?.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    if (file.size > 1.5 * 1024 * 1024) {
+      alert('Logo must be under 1.5 MB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setMgmtLogoPreview(String(reader.result || ''));
+      const showLogo = wrap.querySelector('[data-toggle="showLogo"]');
+      if (showLogo) showLogo.checked = true;
+      renderPreview();
+    };
+    reader.readAsDataURL(file);
+  });
+  wrap.querySelector('#r-logo-remove')?.addEventListener('click', () => {
+    setMgmtLogoPreview('');
+    renderPreview();
+  });
+  wrap.querySelector('#r-logo-url')?.addEventListener('input', () => {
+    const v = (wrap.querySelector('#r-logo-url')?.value || '').trim();
+    if (v) setMgmtLogoPreview(v);
+    renderPreview();
+  });
 
   wrap.querySelectorAll('input, select, textarea').forEach((el) => {
     el.addEventListener('input', renderPreview);
