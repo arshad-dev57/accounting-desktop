@@ -157,6 +157,20 @@ function migrate() {
       is_deleted INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT
     );
+    CREATE TABLE IF NOT EXISTS customer_ledger (
+      id TEXT PRIMARY KEY,
+      customer_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      type TEXT NOT NULL,
+      points REAL NOT NULL DEFAULT 0,
+      amount REAL NOT NULL DEFAULT 0,
+      reference TEXT,
+      note TEXT,
+      created_by TEXT,
+      sync_status TEXT NOT NULL DEFAULT 'PENDING',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_customer_ledger_customer ON customer_ledger(customer_id);
     CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name);
     CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);
     CREATE INDEX IF NOT EXISTS idx_suppliers_name ON suppliers(name);
@@ -618,6 +632,187 @@ function getCustomerById(id) {
   return row;
 }
 
+/** Merge edited fields into a customer's payload and columns. */
+function updateCustomerFields(id, patch = {}) {
+  const row = getCustomerById(id);
+  if (!row) throw new Error('Customer not found');
+  const current = parseJson(row.payload, {}) || {};
+  upsertCustomer({
+    ...current,
+    id: row.id,
+    name: row.name,
+    phone: row.phone,
+    email: row.email,
+    companyName: row.company_name,
+    customerType: row.customer_type,
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  });
+  return searchCustomers({ query: '', limit: 1_000_000 }).find((c) => c.id === row.id) || null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CUSTOMER LEDGER — loyalty points, store credit (liability) and on-account
+// receivable. Balances are always the sum of entries, never a stored number.
+//   kind POINTS  : points  (+ earned / − redeemed)
+//   kind CREDIT  : amount  (+ store credit issued to customer / − spent)
+//   kind ACCOUNT : amount  (+ customer owes us / − payment received)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const LEDGER_KINDS = new Set(['POINTS', 'CREDIT', 'ACCOUNT']);
+
+function insertLedgerRow(entry, syncStatus = 'PENDING') {
+  const id = entry.id || crypto.randomUUID();
+  run(
+    `INSERT INTO customer_ledger (id, customer_id, kind, type, points, amount, reference, note, created_by, sync_status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      id,
+      String(entry.customerId),
+      entry.kind,
+      String(entry.type || 'ADJUST').toUpperCase(),
+      Number(entry.points) || 0,
+      Math.round((Number(entry.amount) || 0) * 100) / 100,
+      entry.reference || '',
+      entry.note || '',
+      entry.createdBy || '',
+      syncStatus,
+      entry.createdAt || new Date().toISOString(),
+    ]
+  );
+  return id;
+}
+
+/**
+ * First time we see a customer, carry over the balances the cloud already knows
+ * (loyaltyPoints / outstandingBalance) as OPENING entries so nothing is lost.
+ * Returns true when rows were inserted (caller persists).
+ */
+function ensureCustomerOpening(customerId) {
+  const has = get(`SELECT 1 AS x FROM customer_ledger WHERE customer_id = ? AND type = 'OPENING' LIMIT 1`, [customerId]);
+  if (has) return false;
+  const row = getCustomerById(customerId);
+  const payload = parseJson(row?.payload, {}) || {};
+  const points = Number(payload.loyaltyPoints ?? payload.loyalty_points ?? 0) || 0;
+  const owed = Number(payload.outstandingBalance ?? payload.outstanding_balance ?? 0) || 0;
+  const credit = Number(payload.storeCredit ?? payload.store_credit ?? 0) || 0;
+  const base = { customerId, type: 'OPENING', note: 'Opening balance from cloud', createdAt: '1970-01-01T00:00:00.000Z' };
+  // Always write a POINTS opening row (even 0) so we never re-import later cloud totals.
+  insertLedgerRow({ ...base, kind: 'POINTS', points }, 'SYNCED');
+  if (owed) insertLedgerRow({ ...base, kind: 'ACCOUNT', amount: owed }, 'SYNCED');
+  if (credit) insertLedgerRow({ ...base, kind: 'CREDIT', amount: credit }, 'SYNCED');
+  return true;
+}
+
+function addCustomerLedgerEntries(entries = []) {
+  const list = (Array.isArray(entries) ? entries : [entries]).filter(
+    (e) => e && e.customerId && LEDGER_KINDS.has(e.kind) && (Number(e.points) || Number(e.amount))
+  );
+  if (!list.length) return [];
+  const touched = new Set(list.map((e) => String(e.customerId)));
+  touched.forEach((cid) => ensureCustomerOpening(cid));
+  const ids = list.map((e) => insertLedgerRow(e));
+  persist();
+  return ids;
+}
+
+function balancesFromRows(rows) {
+  const out = { points: 0, storeCredit: 0, accountBalance: 0 };
+  for (const r of rows) {
+    if (r.kind === 'POINTS') out.points += Number(r.points) || 0;
+    else if (r.kind === 'CREDIT') out.storeCredit += Number(r.amount) || 0;
+    else if (r.kind === 'ACCOUNT') out.accountBalance += Number(r.amount) || 0;
+  }
+  out.points = Math.round(out.points * 100) / 100;
+  out.storeCredit = Math.round(out.storeCredit * 100) / 100;
+  out.accountBalance = Math.round(out.accountBalance * 100) / 100;
+  return out;
+}
+
+function getCustomerBalances(customerId) {
+  if (ensureCustomerOpening(customerId)) persist();
+  const rows = all(
+    `SELECT kind, SUM(points) AS points, SUM(amount) AS amount FROM customer_ledger WHERE customer_id = ? GROUP BY kind`,
+    [customerId]
+  );
+  return balancesFromRows(rows);
+}
+
+/** Balances for every customer, keyed by id (one query for list screens). */
+function getAllCustomerBalances() {
+  const ids = all(`SELECT id FROM customers WHERE is_deleted = 0`).map((r) => r.id);
+  let inserted = false;
+  ids.forEach((id) => { if (ensureCustomerOpening(id)) inserted = true; });
+  if (inserted) persist();
+  const rows = all(`SELECT customer_id, kind, SUM(points) AS points, SUM(amount) AS amount FROM customer_ledger GROUP BY customer_id, kind`);
+  const grouped = new Map();
+  rows.forEach((r) => {
+    if (!grouped.has(r.customer_id)) grouped.set(r.customer_id, []);
+    grouped.get(r.customer_id).push(r);
+  });
+  const out = {};
+  grouped.forEach((list, cid) => { out[cid] = balancesFromRows(list); });
+  return out;
+}
+
+function listCustomerLedger(customerId, limit = 500) {
+  if (ensureCustomerOpening(customerId)) persist();
+  return all(
+    `SELECT * FROM customer_ledger WHERE customer_id = ? ORDER BY created_at DESC LIMIT ?`,
+    [customerId, Math.max(1, Number(limit) || 500)]
+  ).map((r) => ({
+    id: r.id,
+    customerId: r.customer_id,
+    kind: r.kind,
+    type: r.type,
+    points: Number(r.points) || 0,
+    amount: Number(r.amount) || 0,
+    reference: r.reference || '',
+    note: r.note || '',
+    createdBy: r.created_by || '',
+    syncStatus: r.sync_status,
+    createdAt: r.created_at,
+  }));
+}
+
+/** Post contra entries for every ledger row tied to a sale reference (void). */
+function reverseLedgerForReference(reference, note) {
+  if (!reference) return 0;
+  const rows = all(
+    `SELECT * FROM customer_ledger WHERE reference = ? AND type NOT IN ('VOID', 'OPENING')`,
+    [reference]
+  );
+  const already = get(`SELECT 1 AS x FROM customer_ledger WHERE reference = ? AND type = 'VOID' LIMIT 1`, [reference]);
+  if (!rows.length || already) return 0;
+  rows.forEach((r) => insertLedgerRow({
+    customerId: r.customer_id,
+    kind: r.kind,
+    type: 'VOID',
+    points: -(Number(r.points) || 0),
+    amount: -(Number(r.amount) || 0),
+    reference,
+    note: note || 'Sale voided',
+  }));
+  persist();
+  return rows.length;
+}
+
+/** Every ledger row in a date range (for liability / receivable reports). */
+function listLedgerBetween(fromIso, toIso) {
+  return all(
+    `SELECT * FROM customer_ledger WHERE created_at >= ? AND created_at <= ? ORDER BY created_at`,
+    [fromIso, toIso]
+  ).map((r) => ({
+    customerId: r.customer_id,
+    kind: r.kind,
+    type: r.type,
+    points: Number(r.points) || 0,
+    amount: Number(r.amount) || 0,
+    reference: r.reference || '',
+    createdAt: r.created_at,
+  }));
+}
+
 
 function keepOnlyProductIds(ids) {
   const list = (ids || []).map((id) => String(id || '').trim()).filter(Boolean);
@@ -883,7 +1078,7 @@ function addLocalSale(sale) {
   run(
     `INSERT INTO local_sales (id, payload, status, created_at) VALUES (?, ?, 'pending', ?)
      ON CONFLICT(id) DO UPDATE SET payload = excluded.payload`,
-    [id, JSON.stringify(sale), new Date().toISOString()]
+    [id, JSON.stringify(sale), sale.createdAt || new Date().toISOString()]
   );
   persist();
   return id;
@@ -901,10 +1096,21 @@ function listPendingSales() {
  * display on the Sell screen's sales register without hitting the API.
  */
 function listAllLocalSales() {
-  return all(`SELECT * FROM local_sales ORDER BY created_at DESC`).map((row) => ({
-    id: row.id,
-    ...JSON.parse(row.payload || '{}'),
-  }));
+  return all(`SELECT * FROM local_sales ORDER BY created_at DESC`).map((row) => {
+    const sale = JSON.parse(row.payload || '{}');
+    return {
+      ...sale,
+      id: row.id,
+      createdAt: sale.createdAt || row.created_at,
+      syncStatus: row.status,
+    };
+  });
+}
+
+/** Keep synced sales for history, returns lookup and reports — just flag them. */
+function markLocalSaleSynced(id) {
+  run(`UPDATE local_sales SET status = 'synced' WHERE id = ?`, [id]);
+  persist();
 }
 
 function deleteLocalSale(id) {
@@ -1425,12 +1631,20 @@ module.exports = {
   searchCustomers,
   getCustomerById,
   upsertCustomer,
+  updateCustomerFields,
+  addCustomerLedgerEntries,
+  getCustomerBalances,
+  getAllCustomerBalances,
+  listCustomerLedger,
+  listLedgerBetween,
+  reverseLedgerForReference,
 
   getCategoryTree,
   counts,
   addLocalSale,
   listPendingSales,
   listAllLocalSales,
+  markLocalSaleSynced,
   deleteLocalSale,
   addLocalReturn,
   listAllLocalReturns,

@@ -26,6 +26,7 @@ const ALLOWED_CHANNELS = new Set([
   'backup:restore',
   'codes:qrSvg',
   'print:showDialog',
+  'print:thermalReceipt',
   'pos:listTerminals',
   'pos:getCurrentShift',
   'pos:getActiveShift',
@@ -56,6 +57,7 @@ const ALLOWED_CHANNELS = new Set([
   'pos:processReturn',
   'pos:listLocalSales',
   'pos:listLocalReturns',
+  'pos:getReturnSummary',
   'pos:clearReturnsQueue',
   'pos:getShiftReport',
   'pos:getDailyReport',
@@ -108,6 +110,11 @@ const ALLOWED_CHANNELS = new Set([
   'sales:enterSales',
   'customers:list',
   'customers:search',
+  'customers:listAccounts',
+  'customers:getAccount',
+  'customers:update',
+  'customers:postEntry',
+  'reports:getData',
   'products:list',
   'tax:getContext',
   'tax:refreshContext',
@@ -250,6 +257,7 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
     processReturn: (payload) => invoke('pos:processReturn', payload),
     listLocalSales: () => invoke('pos:listLocalSales'),
     listLocalReturns: () => invoke('pos:listLocalReturns'),
+    getReturnSummary: (saleId) => invoke('pos:getReturnSummary', saleId),
     clearReturnsQueue: () => invoke('pos:clearReturnsQueue'),
     getShiftReport: (shiftId) => invoke('pos:getShiftReport', shiftId),
     getDailyReport: (paramsString) => invoke('pos:getDailyReport', paramsString),
@@ -308,6 +316,14 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
   customers: {
     list: (params) => invoke('customers:list', params),
     search: (q, limit) => invoke('customers:search', { q, limit }),
+    listAccounts: (params) => invoke('customers:listAccounts', params),
+    getAccount: (id) => invoke('customers:getAccount', id),
+    update: (id, patch) => invoke('customers:update', { id, patch }),
+    /** { customerId, action: PAYMENT|CREDIT_ISSUE|CREDIT_ADJUST|POINTS_ADJUST, amount?, points?, method?, note? } */
+    postEntry: (entry) => invoke('customers:postEntry', entry),
+  },
+  reports: {
+    getData: (params) => invoke('reports:getData', params),
   },
   products: {
     list: (params) => invoke('products:list', params),
@@ -351,5 +367,7 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
   },
   print: {
     showDialog: (options) => invoke('print:showDialog', options),
+    /** HTML receipt → mono bitmap → thermal print (solid black like printer self-test). */
+    thermalReceipt: (html, widthMm) => invoke('print:thermalReceipt', { html, widthMm }),
   },
 });

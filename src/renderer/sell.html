@@ -9,6 +9,7 @@
     <title>POS Dashboard — Bisonstechs</title>
     <script src="./sell-mode-init.js"></script>
     <link rel="stylesheet" href="./shared.css" />
+    <link rel="stylesheet" href="./pos-modules.css" />
     <style>
       /* Layout & Nav styling */
       body {
@@ -1774,6 +1775,9 @@
           <button class="tab-btn" data-tab="returns">
             <span>Returns</span>
           </button>
+          <button class="tab-btn" data-tab="customers">
+            <span>Customers</span>
+          </button>
           <button class="tab-btn" data-tab="reports">
             <span>Reports</span>
           </button>
@@ -1843,10 +1847,10 @@
                   <!-- Credit info card -->
                   <div class="cust-credit-panel" id="cust-credit-info-card">
                     <div class="cust-credit-grid">
-                      <div>Limit: <b id="cc-limit">PKR 0.00</b></div>
-                      <div>Owed: <b id="cc-owed">PKR 0.00</b></div>
-                      <div>Available: <b id="cc-avail">PKR 0.00</b></div>
                       <div>Points: <b id="cc-points">0</b></div>
+                      <div>Store credit: <b id="cc-store-credit">PKR 0.00</b></div>
+                      <div>Balance due: <b id="cc-owed">PKR 0.00</b></div>
+                      <div>Credit available: <b id="cc-avail">—</b></div>
                     </div>
                   </div>
                 </div>
@@ -1974,28 +1978,108 @@
               </div>
             </div>
           </div>
-          <div class="view-panel" id="tab-reports">
-            <div class="panel-content">
-              <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+          <!-- ─── CUSTOMERS ─────────────────────────────────────────── -->
+          <div class="view-panel" id="tab-customers">
+            <div class="panel-content cust-page">
+              <div class="mod-head">
                 <div>
-                  <h2 style="margin:0;">Shift Reports</h2>
-                  <p id="reports-cashier-meta" style="margin:4px 0 0;font-size:12px;color:var(--muted);">Current cashier shift stats</p>
+                  <h2>Customers</h2>
+                  <p>Accounts, loyalty points, store credit and amounts owed</p>
                 </div>
-                <button class="btn-nav-action ghost" id="btn-refresh-reports" type="button" style="font-size:12px;">↻ Refresh</button>
+                <div class="mod-head-actions">
+                  <button class="btn-nav-action ghost" id="cust-btn-refresh" type="button">↻ Refresh</button>
+                  <button class="btn-nav-action ghost" id="cust-btn-loyalty" type="button">Loyalty program</button>
+                  <button class="btn-nav-action" id="cust-btn-new" type="button">+ New customer</button>
+                </div>
               </div>
-              <div class="embed-kpi" id="reports-kpi-row" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));">
-                <!-- filled by JS -->
+              <div class="mod-kpis" id="cust-kpis"></div>
+              <div class="cust-layout">
+                <div class="cust-list-card">
+                  <div class="cust-toolbar">
+                    <input type="search" class="inp-search" id="cust-search" placeholder="Search name, phone, email…" autocomplete="off" />
+                    <div class="chip-row" id="cust-filters">
+                      <button type="button" class="chip active" data-filter="all">All</button>
+                      <button type="button" class="chip" data-filter="owes">Owes money</button>
+                      <button type="button" class="chip" data-filter="credit">Has store credit</button>
+                      <button type="button" class="chip" data-filter="points">Has points</button>
+                    </div>
+                    <select id="cust-sort" class="mod-select">
+                      <option value="name">Sort: Name</option>
+                      <option value="spent">Sort: Total spent</option>
+                      <option value="owed">Sort: Balance due</option>
+                      <option value="points">Sort: Points</option>
+                      <option value="recent">Sort: Last visit</option>
+                    </select>
+                    <span class="cust-count" id="cust-count"></span>
+                  </div>
+                  <div class="cust-table-wrap">
+                    <table class="cust-table">
+                      <thead>
+                        <tr>
+                          <th>Customer</th>
+                          <th class="num">Points</th>
+                          <th class="num">Store credit</th>
+                          <th class="num">Balance due</th>
+                          <th class="num">Total spent</th>
+                          <th class="num">Visits</th>
+                          <th>Last visit</th>
+                        </tr>
+                      </thead>
+                      <tbody id="cust-table-body"></tbody>
+                    </table>
+                  </div>
+                </div>
+                <aside class="cust-detail" id="cust-detail"></aside>
               </div>
-              <div class="panel-grid" id="reports-cards-grid">
-                <!-- report cards -->
+            </div>
+          </div>
+
+          <div class="view-panel" id="tab-reports">
+            <div class="panel-content rpt-page">
+              <div class="mod-head">
+                <div>
+                  <h2>Reports</h2>
+                  <p id="rpt-subtitle">Sales performance for the selected period</p>
+                </div>
+                <div class="mod-head-actions">
+                  <button class="btn-nav-action ghost" id="rpt-btn-refresh" type="button">↻ Refresh</button>
+                  <button class="btn-nav-action ghost" id="rpt-btn-csv" type="button">Export CSV</button>
+                  <button class="btn-nav-action" id="rpt-btn-print" type="button">Print</button>
+                </div>
               </div>
-              <div class="data-panel" id="reports-recent-panel" style="display:none;">
-                <h3>Recent sales this shift</h3>
-                <div id="reports-recent-sales"></div>
+
+              <div class="rpt-period">
+                <div class="chip-row" id="rpt-presets">
+                  <button type="button" class="chip active" data-preset="today">Today</button>
+                  <button type="button" class="chip" data-preset="yesterday">Yesterday</button>
+                  <button type="button" class="chip" data-preset="week">This week</button>
+                  <button type="button" class="chip" data-preset="month">This month</button>
+                  <button type="button" class="chip" data-preset="last30">Last 30 days</button>
+                  <button type="button" class="chip" data-preset="custom">Custom</button>
+                </div>
+                <div class="rpt-custom" id="rpt-custom">
+                  <input type="date" id="rpt-from" class="mod-select" />
+                  <span>to</span>
+                  <input type="date" id="rpt-to" class="mod-select" />
+                  <button type="button" class="btn-nav-action ghost" id="rpt-apply">Apply</button>
+                </div>
+                <span class="rpt-range" id="rpt-range"></span>
               </div>
-              <div class="data-panel" id="reports-products-panel" style="display:none;">
-                <h3>Top products this shift</h3>
-                <div id="reports-top-products"></div>
+
+              <div class="rpt-layout">
+                <nav class="rpt-nav" id="rpt-nav">
+                  <button type="button" class="active" data-report="summary">Sales summary</button>
+                  <button type="button" data-report="items">Sales by item</button>
+                  <button type="button" data-report="time">Sales by time</button>
+                  <button type="button" data-report="payments">Payment methods</button>
+                  <button type="button" data-report="cashiers">Cashiers</button>
+                  <button type="button" data-report="customers">Customers &amp; loyalty</button>
+                  <button type="button" data-report="returns">Returns &amp; refunds</button>
+                  <button type="button" data-report="shift">Shift (X-report)</button>
+                </nav>
+                <section class="rpt-body" id="rpt-body">
+                  <div class="cust-empty">Loading report…</div>
+                </section>
               </div>
             </div>
           </div>
@@ -2512,6 +2596,15 @@
             <button type="button" class="pay-quick credit" data-method="Credit">Credit</button>
           </div>
           <p class="credit-note" id="checkout-credit-note">This sale will be posted to the customer’s account.</p>
+
+          <div class="checkout-wallet" id="checkout-wallet" style="display:none;">
+            <div class="checkout-wallet-info" id="checkout-wallet-info"></div>
+            <div class="checkout-wallet-actions">
+              <button type="button" class="wallet-btn" id="btn-pay-store-credit">Use store credit</button>
+              <button type="button" class="wallet-btn" id="btn-pay-points">Redeem points</button>
+            </div>
+            <div class="checkout-wallet-earn" id="checkout-wallet-earn"></div>
+          </div>
           
           <div style="margin-bottom:12px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
@@ -2875,5 +2968,7 @@
     <script src="./pos-receipt.js"></script>
     <script src="./product-codes.js"></script>
     <script src="./sell.js"></script>
+    <script src="./pos-customers.js"></script>
+    <script src="./pos-reports.js"></script>
   </body>
 </html>

@@ -18,7 +18,7 @@
     "copy-installer:web": "mkdir -p ../accounting-web-app/public/downloads && cp \"dist-electron/Bisonstechs POS-\"*\"-mac-arm64.dmg\" ../accounting-web-app/public/downloads/Bisonstechs-POS-1.0.0-mac-arm64.dmg"
   },
   "dependencies": {
-    "adm-zip": "^0.6.0",
+    "adm-zip": "^0.6.1",
     "dotenv": "^16.6.1",
     "electron-updater": "^6.6.2",
     "qrcode": "^1.5.4",

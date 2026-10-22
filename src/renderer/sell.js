@@ -1035,7 +1035,7 @@ function setupTabs() {
         }
       });
 
-      if (targetTab === 'reports') { try { loadShiftReports(); } catch (e) { console.warn('loadShiftReports not defined', e); } }
+      if (targetTab === 'reports') { try { loadReportsTab(); } catch (e) { console.warn('loadReportsTab not defined', e); } }
       if (targetTab === 'sales') { try { loadSalesRegister(); } catch (e) { console.warn('loadSalesRegister not defined', e); } }
       if (targetTab === 'categories') { try { loadLocalCatalog(); } catch (e) { console.warn('loadLocalCatalog not defined', e); } }
       if (targetTab === 'products') { try { loadLocalProducts(); } catch (e) { console.warn('loadLocalProducts not defined', e); } }
@@ -1716,13 +1716,20 @@ function lineAmount(item) {
 function calculateTotals() {
   const subtotal = cart.reduce((acc, item) => acc + lineAmount(item), 0);
 
-  // Calculate discount
-  let discountTotal = 0;
+  // Discounts: line discount % first, then the order discount on what is left.
+  const itemDiscountTotal = cart.reduce(
+    (acc, item) => acc + (lineAmount(item) * Math.min(100, money(item.discount))) / 100, 0
+  );
+  const afterItemDiscounts = Math.max(0, subtotal - itemDiscountTotal);
+  let orderDiscount = 0;
   if (discountMode === 'pct') {
-    discountTotal = money(((money(subtotal) * money(overallDiscount)) / 100).toFixed(2));
+    orderDiscount = (afterItemDiscounts * money(overallDiscount)) / 100;
   } else {
-    discountTotal = Math.min(money(cartDiscountAmount), money(subtotal));
+    orderDiscount = Math.min(money(cartDiscountAmount), afterItemDiscounts);
   }
+  const discountTotal = money((itemDiscountTotal + orderDiscount).toFixed(2));
+  // Share of the order discount each line carries (keeps tax on the discounted price)
+  const orderDiscountShare = afterItemDiscounts > 0 ? orderDiscount / afterItemDiscounts : 0;
 
   // Calculate tax
   let taxTotal = 0;
@@ -1732,8 +1739,8 @@ function calculateTotals() {
   cart.forEach(item => {
     // calculate line-item tax
     const linePrice = lineAmount(item);
-    const lineDisc = (linePrice * (item.discount || 0)) / 100;
-    const netLinePrice = linePrice - lineDisc;
+    const lineDisc = (linePrice * Math.min(100, money(item.discount))) / 100;
+    const netLinePrice = (linePrice - lineDisc) * (1 - orderDiscountShare);
 
     let lineTax = 0;
     if (taxContext?.enabled) {
@@ -2238,6 +2245,29 @@ async function selectCustomer(c) {
   customerSearchInp.value = c.name;
   customerDropdown.style.display = 'none';
   custCreditInfoCard.style.display = 'none';
+  await refreshCustomerCreditInfo();
+}
+
+/** Load points / store credit / balance due for the selected customer into the cart card. */
+async function refreshCustomerCreditInfo() {
+  const cust = selectedCustomer;
+  if (!cust?.id) return;
+  try {
+    const res = await api.pos.getCustomerCreditInfo(cust.id);
+    if (selectedCustomer !== cust || !res?.success) return;
+    customerCreditInfo = res.data;
+    const info = res.data;
+    const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+    const pts = money(info.loyaltyPoints);
+    const ptsValue = window.PosLoyalty ? window.PosLoyalty.pointsValue(pts) : 0;
+    setText('cc-points', ptsValue ? `${pts} (${pkr(ptsValue)})` : String(pts));
+    setText('cc-store-credit', pkr(info.storeCredit));
+    setText('cc-owed', pkr(info.outstandingBalance));
+    setText('cc-avail', info.availableCredit == null ? 'No limit' : pkr(info.availableCredit));
+    custCreditInfoCard.style.display = 'block';
+  } catch (err) {
+    console.warn('[POS] customer balances unavailable', err);
+  }
 }
 
 // Click anywhere closes autocomplete customer dropdown
@@ -2279,8 +2309,19 @@ document.getElementById('btn-add-customer-yes').addEventListener('click', async 
   }
 });
 
+/** On-account ("Credit") tender — not store credit, which is the customer's own balance. */
 function isCreditMethod(method) {
-  return String(method || '').toLowerCase().includes('credit');
+  const m = String(method || '').toLowerCase();
+  return m.includes('credit') && !m.includes('store credit');
+}
+
+function isStoreCreditMethod(method) {
+  return String(method || '').toLowerCase().includes('store credit');
+}
+
+function isPointsMethod(method) {
+  const m = String(method || '').toLowerCase();
+  return m.includes('loyalty') || m.includes('points');
 }
 
 function saleHasCredit() {
@@ -2295,10 +2336,136 @@ function canSellOnCredit(amount) {
   const limit = money(customerCreditInfo?.creditLimit);
   const available = money(customerCreditInfo?.availableCredit);
   if (limit > 0 && amount > available + 0.009) {
-    alert(`Credit limit exceeded. Available: ${pkr(available)}`);
-    return false;
+    const policy = String(customerCreditInfo?.creditPolicy || 'WARN').toUpperCase();
+    if (policy === 'BLOCK') {
+      alert(`Credit limit exceeded. Available: ${pkr(available)}`);
+      return false;
+    }
+    if (policy !== 'ALLOW' && !confirm(`This takes ${selectedCustomer.name} over the credit limit (available ${pkr(available)}). Continue?`)) {
+      return false;
+    }
   }
   return true;
+}
+
+// ─── Customer wallet at checkout (store credit + loyalty points) ─────────────
+function walletAmounts() {
+  const p = { storeCredit: 0, pointsAmount: 0, points: 0 };
+  payments.forEach((pmt) => {
+    if (isStoreCreditMethod(pmt.paymentMethod)) p.storeCredit += money(pmt.amount);
+    if (isPointsMethod(pmt.paymentMethod)) {
+      p.pointsAmount += money(pmt.amount);
+      p.points += money(pmt.points);
+    }
+  });
+  return p;
+}
+
+/** Points earned = loyalty rule on what the customer actually paid (not on points/credit used). */
+function loyaltyEarnedForSale(grandTotal) {
+  if (!selectedCustomer?.id || !window.PosLoyalty) return 0;
+  const used = walletAmounts();
+  return window.PosLoyalty.earnFor(Math.max(0, grandTotal - used.storeCredit - used.pointsAmount));
+}
+
+/** Most the customer may pay with points on this bill, in currency. */
+function maxPointsAmount(grandTotal) {
+  if (!window.PosLoyalty || !customerCreditInfo) return 0;
+  return window.PosLoyalty.maxRedeemAmount(money(customerCreditInfo.loyaltyPoints), grandTotal);
+}
+
+function syncPointsForPayment(pmt) {
+  if (!isPointsMethod(pmt.paymentMethod) || !window.PosLoyalty) return;
+  pmt.points = window.PosLoyalty.pointsForAmount(pmt.amount);
+}
+
+function renderCheckoutWallet() {
+  const box = document.getElementById('checkout-wallet');
+  if (!box) return;
+  const info = customerCreditInfo;
+  const loyalty = window.PosLoyalty ? window.PosLoyalty.get() : { enabled: false };
+  if (!selectedCustomer?.id || !info) {
+    box.style.display = 'none';
+    return;
+  }
+  const totals = calculateTotals();
+  const credit = money(info.storeCredit);
+  const pts = money(info.loyaltyPoints);
+  const maxPts = loyalty.enabled ? maxPointsAmount(totals.grandTotal) : 0;
+  const earn = loyalty.enabled ? loyaltyEarnedForSale(totals.grandTotal) : 0;
+  box.style.display = 'block';
+  document.getElementById('checkout-wallet-info').innerHTML = `
+    <span>Store credit <b>${pkr(credit)}</b></span>
+    ${loyalty.enabled ? `<span>Points <b>${pts}</b>${pts ? ` ≈ ${pkr(window.PosLoyalty.pointsValue(pts))}` : ''}</span>` : ''}
+    <span>Balance due <b>${pkr(info.outstandingBalance)}</b></span>`;
+  const btnCredit = document.getElementById('btn-pay-store-credit');
+  const btnPts = document.getElementById('btn-pay-points');
+  const used = walletAmounts();
+  btnCredit.disabled = credit <= 0 || used.storeCredit > 0;
+  btnCredit.textContent = credit > 0 ? `Use store credit (${pkr(Math.min(credit, totals.grandTotal))})` : 'No store credit';
+  btnPts.style.display = loyalty.enabled ? '' : 'none';
+  btnPts.disabled = maxPts <= 0 || used.pointsAmount > 0;
+  btnPts.textContent = maxPts > 0
+    ? `Redeem ${window.PosLoyalty.pointsForAmount(maxPts)} pts (${pkr(maxPts)})`
+    : (pts > 0 && loyalty.minRedeemPoints > pts ? `Min ${loyalty.minRedeemPoints} pts to redeem` : 'No points to redeem');
+  document.getElementById('checkout-wallet-earn').textContent = earn > 0 ? `Customer earns ${earn} points on this sale` : '';
+}
+
+/** Put a wallet tender first and give the rest to the existing cash/card line. */
+function applyWalletTender(method, amount, points) {
+  if (!(amount > 0)) return;
+  const totals = calculateTotals();
+  const others = payments.filter((p) => p.paymentMethod !== method);
+  const tender = { paymentMethod: method, amount: Math.round(amount * 100) / 100, reference: '' };
+  if (points != null) tender.points = points;
+  const remaining = Math.max(0, Math.round((totals.grandTotal - tender.amount - others
+    .filter((p) => isStoreCreditMethod(p.paymentMethod) || isPointsMethod(p.paymentMethod))
+    .reduce((n, p) => n + money(p.amount), 0)) * 100) / 100);
+  const wallet = others.filter((p) => isStoreCreditMethod(p.paymentMethod) || isPointsMethod(p.paymentMethod));
+  const rest = others.filter((p) => !isStoreCreditMethod(p.paymentMethod) && !isPointsMethod(p.paymentMethod));
+  const main = rest[0] || { paymentMethod: 'Cash', amount: 0, reference: '' };
+  main.amount = remaining;
+  payments = [...wallet, tender, ...(remaining > 0 ? [main] : []), ...rest.slice(1)];
+  focusedPaymentIndex = payments.length - 1;
+  renderPaymentSplitRows();
+  updateCheckoutChange();
+}
+
+document.getElementById('btn-pay-store-credit')?.addEventListener('click', () => {
+  const totals = calculateTotals();
+  const used = walletAmounts();
+  const amount = Math.min(money(customerCreditInfo?.storeCredit), totals.grandTotal - used.pointsAmount);
+  applyWalletTender('Store Credit', amount);
+});
+
+document.getElementById('btn-pay-points')?.addEventListener('click', () => {
+  const totals = calculateTotals();
+  const used = walletAmounts();
+  const amount = Math.min(maxPointsAmount(totals.grandTotal), totals.grandTotal - used.storeCredit);
+  applyWalletTender('Loyalty Points', amount, window.PosLoyalty.pointsForAmount(amount));
+});
+
+/** Wallet tenders must stay within the customer's balance and the program rules. */
+function validateWalletTenders(grandTotal) {
+  const used = walletAmounts();
+  if ((used.storeCredit || used.pointsAmount) && !selectedCustomer?.id) {
+    return 'Select a customer to use store credit or loyalty points.';
+  }
+  if (used.storeCredit > money(customerCreditInfo?.storeCredit) + 0.009) {
+    return `Store credit available is only ${pkr(customerCreditInfo?.storeCredit)}.`;
+  }
+  if (used.pointsAmount > 0) {
+    const max = maxPointsAmount(grandTotal);
+    if (used.pointsAmount > max + 0.009) {
+      return max > 0
+        ? `Points can cover at most ${pkr(max)} of this bill.`
+        : 'This customer has no redeemable points for this bill.';
+    }
+  }
+  if (used.storeCredit + used.pointsAmount > grandTotal + 0.009) {
+    return 'Store credit and points cannot be more than the bill total.';
+  }
+  return '';
 }
 
 function highlightPayQuick(method) {
@@ -2343,6 +2510,8 @@ function openCheckout(method) {
   renderPaymentSplitRows();
   updateCheckoutChange();
   checkoutModalOverlay.style.display = 'flex';
+  // Balances may have moved since the customer was picked (another sale, a return)
+  if (selectedCustomer?.id) refreshCustomerCreditInfo().then(updateCheckoutChange);
   if (shouldAskCashReceived()) {
     setTimeout(() => {
       const inp = document.querySelector('.pay-amount-inp');
@@ -2376,7 +2545,10 @@ function renderPaymentSplitRows() {
         <option value="Bank Transfer" ${pmt.paymentMethod === 'Bank Transfer' ? 'selected' : ''}>Bank Transfer</option>
         <option value="Mobile Wallet" ${pmt.paymentMethod === 'Mobile Wallet' ? 'selected' : ''}>Mobile Wallet</option>
         <option value="Cheque" ${pmt.paymentMethod === 'Cheque' ? 'selected' : ''}>Cheque</option>
-        <option value="Credit" ${pmt.paymentMethod === 'Credit' ? 'selected' : ''}>Credit</option>
+        <option value="Credit" ${pmt.paymentMethod === 'Credit' ? 'selected' : ''}>Credit (on account)</option>
+        ${selectedCustomer?.id ? `
+        <option value="Store Credit" ${pmt.paymentMethod === 'Store Credit' ? 'selected' : ''}>Store Credit</option>
+        ${window.PosLoyalty?.get().enabled ? `<option value="Loyalty Points" ${pmt.paymentMethod === 'Loyalty Points' ? 'selected' : ''}>Loyalty Points</option>` : ''}` : ''}
       </select>
       <input type="number" class="pay-amount-inp" data-idx="${idx}" value="${amountVal}" step="0.01" min="0" style="width:120px;" placeholder="${askCash ? 'Customer paid' : ''}" />
       ${payments.length > 1 ? `<button style="background:transparent;border:none;color:#ef4444;cursor:pointer;" class="btn-remove-pay" data-idx="${idx}">✕</button>` : ''}
@@ -2390,6 +2562,7 @@ function renderPaymentSplitRows() {
 
     amountInp.addEventListener('input', (e) => {
       pmt.amount = parseFloat(e.target.value) || 0;
+      syncPointsForPayment(pmt);
       updateCheckoutChange();
     });
 
@@ -2400,6 +2573,7 @@ function renderPaymentSplitRows() {
         return;
       }
       pmt.paymentMethod = method;
+      syncPointsForPayment(pmt);
       updateCheckoutChange();
     });
 
@@ -2451,6 +2625,7 @@ function updateCheckoutChange() {
   const remainEl = document.getElementById('checkout-tender-remain');
   const remainLabel = document.getElementById('checkout-tender-remain-label');
   const remainBox = document.getElementById('checkout-tender-remain-box');
+  renderCheckoutWallet();
   if (billEl) billEl.textContent = pkr(totals.grandTotal);
   if (recEl) recEl.textContent = pkr(paidTotal);
   if (remainEl) remainEl.textContent = pkr(Math.abs(diff));
@@ -2514,6 +2689,13 @@ async function submitCompleteSale() {
 
   if (saleHasCredit() && !canSellOnCredit(totals.grandTotal)) return;
 
+  const walletError = validateWalletTenders(totals.grandTotal);
+  if (walletError) {
+    alert(walletError);
+    return;
+  }
+  payments.forEach(syncPointsForPayment);
+
   if (shouldAskCashReceived() && paidTotal <= 0) {
     alert('Enter how much the customer paid.');
     return;
@@ -2557,10 +2739,17 @@ async function submitCompleteSale() {
     payments: payments.map(p => ({
       paymentMethod: p.paymentMethod,
       amount: p.amount,
-      reference: p.reference || ''
+      reference: p.reference || '',
+      ...(isPointsMethod(p.paymentMethod) ? { points: money(p.points) } : {}),
     })),
+    subtotal: totals.subtotal,
     discountTotal: totals.discountTotal,
     taxTotal: totals.taxTotal,
+    grandTotal: totals.grandTotal,
+    paidAmount: paidTotal,
+    changeAmount: Math.max(0, paidTotal - totals.grandTotal),
+    loyaltyEarned: loyaltyEarnedForSale(totals.grandTotal),
+    cashierName: (cashierMetaEl?.textContent || '').replace('Cashier: ', '').trim(),
     notes: saleHasCredit() ? 'Credit sale' : ''
   };
 
@@ -2667,6 +2856,7 @@ function buildLastSaleFromRecord(saleData, extras = {}) {
     notes: extras.notes ?? saleData.notes,
     receiptTitle: extras.receiptTitle,
     customerName: extras.customerName ?? saleData.customerName,
+    loyaltyPoints: extras.loyaltyPoints ?? saleData.loyaltyEarned ?? saleData.loyaltyPoints ?? 0,
   };
 }
 
@@ -2914,113 +3104,261 @@ if (btnKickDrawer) {
 }
 
 // ─── T2: RETURNS TAB (offline-first) ──────────────────────────────────────────
-function renderReturnForm(sale, sourceLabel) {
+function returnLineKey(item) {
+  return String(item?.productId || item?.productName || item?.name || '').trim().toLowerCase();
+}
+
+/** Refund the way the customer paid (retail standard), unless that tender can't be refunded. */
+function defaultRefundMethod(sale) {
+  const pays = Array.isArray(sale.payments) ? sale.payments : [];
+  const main = pays.slice().sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0))[0];
+  const m = String(main?.paymentMethod || 'Cash').toLowerCase();
+  if (m.includes('store credit') || m.includes('loyalty')) return 'Store Credit';
+  if (m.includes('credit') || m.includes('on account')) return 'Credit to Account';
+  if (m.includes('card')) return 'Card';
+  if (m.includes('bank')) return 'Bank Transfer';
+  return 'Cash';
+}
+
+async function renderReturnForm(sale, sourceLabel) {
   const wrap = document.getElementById('returns-list-wrap');
   const invNo = sale.invoiceNumber || sale.orderNumber || sale.id || '—';
+  const saleId = sale.id || sale._id;
+  const customerId = sale.customerId || sale.customer?.id || '';
+  const customerName = sale.customerName || (sale.customer && sale.customer.name) || 'Walk-in Customer';
+
+  // Cloud list rows can come without line items — fetch the full sale first.
+  if (!(Array.isArray(sale.items) && sale.items.length) && saleId) {
+    try {
+      const full = await api.pos.getSale(saleId);
+      if (full?.success && full.data?.items?.length) sale = { ...sale, ...full.data };
+    } catch { /* keep what we have */ }
+  }
+  const items = Array.isArray(sale.items) ? sale.items : [];
+
+  let summary = { returnedQty: {}, returnsCount: 0, refundedTotal: 0, loyaltyReversed: 0 };
+  try {
+    const res = await api.pos.getReturnSummary(saleId);
+    if (res?.success && res.data) summary = res.data;
+  } catch { /* first return */ }
+
+  const lines = items.map((i) => {
+    const sold = money(i.quantity);
+    const already = money(summary.returnedQty?.[returnLineKey(i)]);
+    const remaining = Math.max(0, Math.round((sold - already) * 1000) / 1000);
+    return { item: i, sold, already, remaining };
+  });
+  const anyLeft = lines.some((l) => l.remaining > 0);
+  const saleTotal = money(sale.grandTotal || sale.totalAmount) || lines.reduce((n, l) => n + l.sold * money(l.item.unitPrice), 0);
+  const earned = Math.floor(money(sale.loyaltyEarned));
+  const pointsLeftToReverse = Math.max(0, earned - money(summary.loyaltyReversed));
+  const refundDefault = defaultRefundMethod(sale);
+  const hasCustomer = Boolean(customerId);
+
+  const methodOption = (value, label, enabled = true) =>
+    `<option value="${value}" ${value === refundDefault ? 'selected' : ''} ${enabled ? '' : 'disabled'}>${label}</option>`;
+
   wrap.innerHTML = `
-      <div style="background:#fff;padding:16px;border-radius:12px;border:1px solid var(--line);margin-top:10px;">
-        <div style="display:flex;justify-content:space-between;margin-bottom:12px;">
-          <b>Invoice: ${invNo}</b>
-          <span style="font-weight:700;color:var(--brand);">${pkr(sale.totalAmount || sale.grandTotal)}</span>
+      <div class="ret-card">
+        <div class="ret-head">
+          <div>
+            <div class="ret-inv">Invoice ${escapeHtmlAttr(invNo)}</div>
+            <div class="ret-meta">
+              ${escapeHtmlAttr(customerName)} · ${new Date(sale.orderDate || sale.createdAt || Date.now()).toLocaleString()} · Source: ${sourceLabel}
+              ${summary.returnsCount ? ` · <b style="color:#b45309;">${summary.returnsCount} earlier return(s), ${pkr(summary.refundedTotal)} refunded</b>` : ''}
+            </div>
+          </div>
+          <div class="ret-total"><span>Sale total</span><b>${pkr(saleTotal)}</b></div>
         </div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">
-          Customer: ${sale.customerName || (sale.customer && sale.customer.name) || 'Walk-in Customer'} | Date: ${new Date(sale.orderDate || sale.createdAt || Date.now()).toLocaleDateString()} | Source: ${sourceLabel}
-        </div>
+        ${anyLeft ? '' : '<div class="ret-banner">Every item on this receipt has already been returned.</div>'}
         <table class="returns-table">
           <thead>
             <tr>
               <th>Item</th>
-              <th>Qty Sold</th>
-              <th>Unit Price</th>
-              <th>Return Qty</th>
+              <th style="text-align:right;">Sold</th>
+              <th style="text-align:right;">Returned</th>
+              <th style="text-align:right;">Unit price</th>
+              <th style="text-align:center;">Return qty</th>
+              <th style="text-align:right;">Refund</th>
             </tr>
           </thead>
           <tbody>
-            ${(sale.items || []).map((i, idx) => `
-              <tr>
-                <td>${i.productName || i.name}</td>
-                <td>${i.quantity}</td>
-                <td>${pkr(i.unitPrice)}</td>
-                <td><input type="number" class="return-qty-inp" data-idx="${idx}" value="0" min="0" max="${i.quantity}" step="0.001" style="width:72px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;" /> <span style="font-size:11px;color:#64748b;">${i.unitName || 'Pcs'}</span></td>
+            ${lines.map((l, idx) => `
+              <tr class="${l.remaining > 0 ? '' : 'ret-done'}">
+                <td><b>${escapeHtmlAttr(l.item.productName || l.item.name || 'Item')}</b>${l.item.sku ? `<div class="ret-sku">${escapeHtmlAttr(l.item.sku)}</div>` : ''}</td>
+                <td style="text-align:right;">${l.sold} ${escapeHtmlAttr(l.item.unitName || 'Pcs')}</td>
+                <td style="text-align:right;">${l.already || '—'}</td>
+                <td style="text-align:right;">${pkr(l.item.unitPrice)}</td>
+                <td style="text-align:center;">
+                  <div class="ret-qty">
+                    <button type="button" class="ret-step" data-idx="${idx}" data-step="-1" ${l.remaining > 0 ? '' : 'disabled'}>−</button>
+                    <input type="number" class="return-qty-inp" data-idx="${idx}" value="${l.remaining}" min="0" max="${l.remaining}" step="${l.item.allowFractionalQty ? '0.001' : '1'}" ${l.remaining > 0 ? '' : 'disabled'} />
+                    <button type="button" class="ret-step" data-idx="${idx}" data-step="1" ${l.remaining > 0 ? '' : 'disabled'}>+</button>
+                  </div>
+                  <div class="ret-sku">of ${l.remaining} left</div>
+                </td>
+                <td style="text-align:right;font-weight:700;" class="ret-line-total" data-idx="${idx}">${pkr(l.remaining * money(l.item.unitPrice))}</td>
               </tr>
             `).join('')}
           </tbody>
         </table>
 
-        <div style="margin-top:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <label style="font-size:13px;font-weight:600;color:var(--muted);">Refund Method:</label>
-          <select id="refund-method-select" style="padding:6px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:#fff;">
-            <option value="Cash">Cash</option>
-            <option value="Card">Card</option>
-            <option value="Bank Transfer">Bank Transfer</option>
-            <option value="Store Credit">Store Credit</option>
-          </select>
-          <label style="font-size:13px;font-weight:600;color:var(--muted);">Reason:</label>
-          <select id="return-reason-select" style="padding:6px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:#fff;">
-            <option value="Customer return">Customer return</option>
-            <option value="Defective item">Defective item</option>
-            <option value="Wrong item">Wrong item</option>
-            <option value="Overcharged">Overcharged</option>
-            <option value="Other">Other</option>
-          </select>
+        <div class="ret-actions-row">
+          <button type="button" class="btn-nav-action ghost" id="btn-return-all" ${anyLeft ? '' : 'disabled'}>Return all</button>
+          <button type="button" class="btn-nav-action ghost" id="btn-return-none" ${anyLeft ? '' : 'disabled'}>Clear</button>
+          <div style="flex:1;"></div>
+          <div class="ret-summary">
+            <div>Items: <b id="ret-sum-qty">0</b></div>
+            ${pointsLeftToReverse ? `<div>Points reversed: <b id="ret-sum-points">0</b></div>` : ''}
+            <div class="ret-sum-total">Refund: <b id="ret-sum-total">${pkr(0)}</b></div>
+          </div>
         </div>
 
-        <button class="btn-add-custom" id="btn-submit-refund" style="margin-top:14px;background-color:#ef4444;">Process Refund</button>
+        <div class="ret-options">
+          <label>Refund method
+            <select id="refund-method-select">
+              ${methodOption('Cash', 'Cash')}
+              ${methodOption('Card', 'Card')}
+              ${methodOption('Bank Transfer', 'Bank Transfer')}
+              ${methodOption('Store Credit', hasCustomer ? 'Store Credit (customer balance)' : 'Store Credit — needs a customer', hasCustomer)}
+              ${methodOption('Credit to Account', hasCustomer ? 'Reduce amount owed (on account)' : 'On account — needs a customer', hasCustomer)}
+            </select>
+          </label>
+          <label>Reason
+            <select id="return-reason-select">
+              <option value="Customer return">Customer return / changed mind</option>
+              <option value="Defective item">Defective / damaged</option>
+              <option value="Wrong item">Wrong item supplied</option>
+              <option value="Overcharged">Overcharged</option>
+              <option value="Other">Other</option>
+            </select>
+          </label>
+          <label class="ret-restock"><input type="checkbox" id="return-restock" checked /> Put items back in stock</label>
+        </div>
+
+        <button class="btn-add-custom" id="btn-submit-refund" style="margin-top:14px;background-color:#ef4444;" ${anyLeft ? '' : 'disabled'}>Process Refund</button>
       </div>
     `;
 
-  document.getElementById('btn-submit-refund').addEventListener('click', async () => {
-    const qInps = document.querySelectorAll('.return-qty-inp');
+  const qtyInputs = Array.from(wrap.querySelectorAll('.return-qty-inp'));
+  const clampQty = (inp) => {
+    const l = lines[Number(inp.dataset.idx)];
+    let v = parseFloat(inp.value);
+    if (!Number.isFinite(v) || v < 0) v = 0;
+    if (v > l.remaining) v = l.remaining;
+    if (!l.item.allowFractionalQty) v = Math.floor(v);
+    return v;
+  };
+  const pointsToReverse = (refund) => {
+    if (!pointsLeftToReverse || !(saleTotal > 0)) return 0;
+    return Math.min(pointsLeftToReverse, Math.round(earned * (refund / saleTotal)));
+  };
+  const refresh = () => {
+    let qtySum = 0;
+    let refund = 0;
+    qtyInputs.forEach((inp) => {
+      const l = lines[Number(inp.dataset.idx)];
+      const q = clampQty(inp);
+      qtySum += q;
+      refund += q * money(l.item.unitPrice);
+      const cell = wrap.querySelector(`.ret-line-total[data-idx="${inp.dataset.idx}"]`);
+      if (cell) cell.textContent = pkr(q * money(l.item.unitPrice));
+    });
+    document.getElementById('ret-sum-qty').textContent = String(Math.round(qtySum * 1000) / 1000);
+    document.getElementById('ret-sum-total').textContent = pkr(refund);
+    const pts = document.getElementById('ret-sum-points');
+    if (pts) pts.textContent = String(pointsToReverse(refund));
+    return refund;
+  };
+  document.getElementById('return-reason-select')?.addEventListener('change', (e) => {
+    const restockBox = document.getElementById('return-restock');
+    if (restockBox) restockBox.checked = e.target.value !== 'Defective item';
+  });
+  qtyInputs.forEach((inp) => {
+    inp.addEventListener('input', refresh);
+    inp.addEventListener('change', () => { inp.value = clampQty(inp); refresh(); });
+  });
+  wrap.querySelectorAll('.ret-step').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const inp = qtyInputs.find((i) => i.dataset.idx === btn.dataset.idx);
+      if (!inp) return;
+      inp.value = Math.max(0, (parseFloat(inp.value) || 0) + Number(btn.dataset.step));
+      inp.value = clampQty(inp);
+      refresh();
+    });
+  });
+  document.getElementById('btn-return-all')?.addEventListener('click', () => {
+    qtyInputs.forEach((inp) => { inp.value = lines[Number(inp.dataset.idx)].remaining; });
+    refresh();
+  });
+  document.getElementById('btn-return-none')?.addEventListener('click', () => {
+    qtyInputs.forEach((inp) => { inp.value = 0; });
+    refresh();
+  });
+  refresh();
+
+  const submitBtn = document.getElementById('btn-submit-refund');
+  submitBtn.addEventListener('click', async () => {
     const refundItems = [];
-    qInps.forEach(inp => {
-      const qty = parseFloat(inp.value) || 0;
-      if (qty > 0) {
-        const idx = parseInt(inp.getAttribute('data-idx'));
-        const item = sale.items[idx];
-        refundItems.push({
-          productId: item.productId,
-          productName: item.productName || item.name,
-          sku: item.sku || '',
-          quantity: qty,
-          unitPrice: item.unitPrice
-        });
-      }
+    qtyInputs.forEach((inp) => {
+      const qty = clampQty(inp);
+      if (qty <= 0) return;
+      const l = lines[Number(inp.dataset.idx)];
+      refundItems.push({
+        productId: l.item.productId,
+        productName: l.item.productName || l.item.name,
+        sku: l.item.sku || '',
+        quantity: qty,
+        soldQuantity: l.sold,
+        unitName: l.item.unitName || 'Pcs',
+        unitPrice: money(l.item.unitPrice),
+      });
     });
 
     if (refundItems.length === 0) {
-      alert('Please specify items to refund!');
+      alert('Set a return quantity for at least one item.');
       return;
     }
 
     const refundMethod = document.getElementById('refund-method-select')?.value || 'Cash';
     const reason = document.getElementById('return-reason-select')?.value || 'Customer return';
+    const restock = document.getElementById('return-restock')?.checked !== false;
+    const refundTotal = refundItems.reduce((sum, r) => sum + r.unitPrice * r.quantity, 0);
+    const loyaltyReversed = pointsToReverse(refundTotal);
+
+    if (!confirm(`Refund ${pkr(refundTotal)} by ${refundMethod}?`)) return;
 
     const payload = {
-      saleId: sale.id || sale._id,
-      originalSaleId: sale.id || sale._id,
+      saleId,
+      originalSaleId: saleId,
+      invoiceNumber: invNo,
+      customerId: customerId || null,
+      customerName,
       items: refundItems,
       refundMethod,
       reason,
+      restock,
+      loyaltyReversed,
+      cashierName: (cashierMetaEl?.textContent || '').replace('Cashier: ', '').trim(),
       type: 'RETURN',
     };
 
+    submitBtn.disabled = true;
     const retRes = await api.pos.processReturn(payload);
+    submitBtn.disabled = false;
     if (retRes?.success) {
-      // Refresh local cache and list of products
       try {
         await loadLocalProducts();
       } catch (e) {
         console.warn('[returns] failed to refresh products:', e);
       }
 
-      // Build the offline RETURN RECEIPT and show it in the receipt modal
-      const refundTotal = refundItems.reduce((sum, r) => sum + Number(r.unitPrice) * r.quantity, 0);
       lastSale = {
         receiptTitle: 'RETURN RECEIPT',
         invoiceNumber: 'RET-' + String(invNo) + '-' + String(Date.now()).slice(-4),
         originalInvoice: invNo,
         createdAt: new Date().toISOString(),
-        customerName: sale.customerName || (sale.customer && sale.customer.name) || 'Walk-in Customer',
+        customerName,
         items: refundItems,
         subtotal: refundTotal,
         taxTotal: 0,
@@ -3029,12 +3367,12 @@ function renderReturnForm(sale, sourceLabel) {
         payments: [{ paymentMethod: refundMethod + ' Refund', amount: refundTotal }],
         paidAmount: refundTotal,
         changeAmount: 0,
-        status: 'RETURNED (offline — will sync)',
+        notes: [reason, loyaltyReversed ? `${loyaltyReversed} loyalty points reversed` : ''].filter(Boolean).join(' · '),
+        status: 'RETURNED',
       };
       renderReceipt();
       modalReceipt.style.display = 'flex';
-      wrap.innerHTML = '<div style="color:#10b981;font-weight:bold;">Return queued locally — refund receipt opened. It will sync to the cloud on next sync.</div>';
-      // Reload the history register to show the latest return
+      wrap.innerHTML = `<div class="ret-ok">Refund of <b>${pkr(refundTotal)}</b> recorded (${escapeHtmlAttr(refundMethod)}). It will sync to the cloud on next sync.</div>`;
       loadReturnHistory();
     } else {
       alert(retRes?.message || 'Refund failed');
@@ -3076,7 +3414,7 @@ async function loadReturnHistory() {
     list.forEach(r => {
       const dateStr = new Date(r.createdAt || Date.now()).toLocaleString();
       const itemsStr = (r.items || []).map(i => `${i.productName || i.name} (${i.quantity})`).join(', ');
-      const total = (r.items || []).reduce((sum, item) => sum + (Number(item.unitPrice) || 0) * (Number(item.quantity) || 0), 0);
+      const total = Number(r.refundAmount) || (r.items || []).reduce((sum, item) => sum + (Number(item.unitPrice) || 0) * (Number(item.quantity) || 0), 0);
       html += `
         <tr>
           <td><span style="font-family:monospace;font-weight:700;">${r.id}</span></td>
@@ -3222,149 +3560,6 @@ document.querySelector('.tab-btn[data-tab="returns"]')?.addEventListener('click'
 document.getElementById('btn-search-return').addEventListener('click', async () => {
   const inv = document.getElementById('return-search-invoice').value.trim();
   await searchReturnByCode(inv);
-});
-
-// ─── T3: REPORTS TAB ──────────────────────────────────────────────────────────
-async function loadShiftReports() {
-  const wrap = document.getElementById('reports-cards-grid');
-  const kpiRow = document.getElementById('reports-kpi-row');
-  const metaEl = document.getElementById('reports-cashier-meta');
-  const recentPanel = document.getElementById('reports-recent-panel');
-  const productsPanel = document.getElementById('reports-products-panel');
-  const recentWrap = document.getElementById('reports-recent-sales');
-  const topWrap = document.getElementById('reports-top-products');
-
-  if (wrap) wrap.innerHTML = '<div class="report-card">Loading reports…</div>';
-  if (kpiRow) kpiRow.innerHTML = '';
-
-  if (!activeShift?.id) {
-    if (wrap) wrap.innerHTML = '<div class="report-card">Open a shift to see cashier reports.</div>';
-    return;
-  }
-
-  const res = await api.pos.getShiftReport(activeShift.id);
-  if (!(res?.success && res.data)) {
-    if (wrap) wrap.innerHTML = `<div class="report-card">${res?.message || 'Could not load current shift reports'}</div>`;
-    return;
-  }
-
-  const report = res.data;
-  const openedLabel = report.openedAt ? new Date(report.openedAt).toLocaleString() : '—';
-  if (metaEl) {
-    metaEl.textContent = [
-      report.cashierName || 'Cashier',
-      report.terminalName ? `· ${report.terminalName}` : '',
-      report.locationName ? `· ${report.locationName}` : '',
-      `· ${report.status || 'Open'}`,
-      `· since ${openedLabel}`,
-    ].filter(Boolean).join(' ');
-  }
-
-  if (kpiRow) {
-    const kpis = [
-      ['Receipts', report.salesCount || 0],
-      ['Gross sales', pkr(report.totalSales)],
-      ['Items sold', report.itemsSold || 0],
-      ['Avg ticket', pkr(report.avgTicket)],
-      ['Cash sales', pkr(report.cashSales)],
-      ['Card sales', pkr(report.cardSales)],
-      ['Credit sales', pkr(report.creditSales)],
-      ['Returns', `${report.returnsCount || 0} · ${pkr(report.returnsTotal)}`],
-    ];
-    kpiRow.innerHTML = kpis.map(([label, val]) => `
-      <div class="kpi"><span>${label}</span><b>${val}</b></div>
-    `).join('');
-  }
-
-  const payRows = Object.entries(report.paymentsBreakdown || {});
-  wrap.innerHTML = `
-      <div class="report-card">
-        <h4 style="margin:0 0 12px 0;">Cashier</h4>
-        <div class="totals-row"><span>Name</span><b>${report.cashierName || '—'}</b></div>
-        <div class="totals-row"><span>Terminal</span><b>${report.terminalName || '—'}</b></div>
-        <div class="totals-row"><span>Location</span><b>${report.locationName || '—'}</b></div>
-        <div class="totals-row"><span>Shift status</span><b>${report.status || 'Open'}</b></div>
-        <div class="totals-row"><span>Opened</span><b>${openedLabel}</b></div>
-      </div>
-
-      <div class="report-card">
-        <h4 style="margin:0 0 12px 0;">Shift Cash Summary</h4>
-        <div class="totals-row"><span>Opening Cash</span><b>${pkr(report.openingCash)}</b></div>
-        <div class="totals-row"><span>Cash Sales</span><b>${pkr(report.cashSales)}</b></div>
-        <div class="totals-row"><span>Cash Inflow</span><b>${pkr(report.cashIn)}</b></div>
-        <div class="totals-row"><span>Cash Outflow</span><b>-${pkr(report.cashOut)}</b></div>
-        <div class="totals-row" style="border-top:1px solid var(--line);padding-top:6px;margin-top:6px;">
-          <span>Expected Cash</span><b>${pkr(report.expectedCash)}</b>
-        </div>
-      </div>
-
-      <div class="report-card">
-        <h4 style="margin:0 0 12px 0;">Sales Summary</h4>
-        <div class="totals-row"><span>Total Sales</span><b>${pkr(report.totalSales)}</b></div>
-        <div class="totals-row"><span>GST Tax</span><b>${pkr(report.taxTotal)}</b></div>
-        <div class="totals-row"><span>Discounts</span><b>-${pkr(report.discountTotal)}</b></div>
-        <div class="totals-row"><span>Net Sales</span><b>${pkr(report.netSales)}</b></div>
-        <div class="totals-row"><span>Receipts Issued</span><b>${report.salesCount || 0}</b></div>
-        <div class="totals-row"><span>Items Sold</span><b>${report.itemsSold || 0}</b></div>
-        <div class="totals-row"><span>Average Ticket</span><b>${pkr(report.avgTicket)}</b></div>
-        <div class="totals-row"><span>Returns</span><b>${report.returnsCount || 0} (${pkr(report.returnsTotal)})</b></div>
-      </div>
-
-      <div class="report-card">
-        <h4 style="margin:0 0 12px 0;">Payment Methods</h4>
-        ${payRows.length
-          ? payRows.map(([method, amount]) => `
-          <div class="totals-row"><span>${method}</span><b>${pkr(amount)}</b></div>
-        `).join('')
-          : '<div class="totals-row"><span>No payments yet</span><b>—</b></div>'}
-        <div class="totals-row" style="border-top:1px solid var(--line);padding-top:6px;margin-top:6px;">
-          <span>Card</span><b>${pkr(report.cardSales)}</b>
-        </div>
-        <div class="totals-row"><span>Credit</span><b>${pkr(report.creditSales)}</b></div>
-        <div class="totals-row"><span>Other</span><b>${pkr(report.otherSales)}</b></div>
-      </div>
-    `;
-
-  const recent = report.recentSales || [];
-  if (recentPanel && recentWrap) {
-    if (!recent.length) {
-      recentPanel.style.display = 'none';
-    } else {
-      recentPanel.style.display = 'block';
-      recentWrap.innerHTML = `<table>
-        <thead><tr><th>Invoice</th><th>Time</th><th>Customer</th><th>Pay</th><th>Items</th><th style="text-align:right">Total</th></tr></thead>
-        <tbody>${recent.map((s) => `<tr>
-          <td>${s.invoiceNumber || '—'}</td>
-          <td>${s.createdAt ? new Date(s.createdAt).toLocaleString() : '—'}</td>
-          <td>${s.customerName || 'Walk-in'}</td>
-          <td>${s.paymentMethod || '—'}</td>
-          <td>${s.itemsCount || 0}</td>
-          <td style="text-align:right;font-weight:700">${pkr(s.total)}</td>
-        </tr>`).join('')}</tbody>
-      </table>`;
-    }
-  }
-
-  const tops = report.topProducts || [];
-  if (productsPanel && topWrap) {
-    if (!tops.length) {
-      productsPanel.style.display = 'none';
-    } else {
-      productsPanel.style.display = 'block';
-      topWrap.innerHTML = `<table>
-        <thead><tr><th>Product</th><th>Qty</th><th style="text-align:right">Amount</th></tr></thead>
-        <tbody>${tops.map((p) => `<tr>
-          <td>${p.name}</td>
-          <td>${p.qty}</td>
-          <td style="text-align:right;font-weight:700">${pkr(p.amount)}</td>
-        </tr>`).join('')}</tbody>
-      </table>`;
-    }
-  }
-}
-
-document.getElementById('btn-refresh-reports')?.addEventListener('click', () => {
-  loadShiftReports().catch((err) => console.warn('refresh reports', err));
 });
 
 function saleMoney(n) {

@@ -143,8 +143,9 @@
     return asNumber(item.quantity, 0) * asNumber(item.unitPrice, 0);
   }
 
+  // Screen + thermal: normal body (400), bold only for labels/TOTAL. Heavy stroke/shadow blobs on thermal.
   function row(label, value, strong, large) {
-    return '<table style="width:100%;border-collapse:collapse;font-size:' + (large ? 13 : 11) + ';font-weight:' + (strong ? 600 : 400) + ';"><tbody><tr>' +
+    return '<table style="width:100%;border-collapse:collapse;font-size:' + (large ? 14 : 12) + 'px;font-weight:' + (strong ? 700 : 400) + ';"><tbody><tr>' +
       '<td style="text-align:left;padding:1px 8px 1px 0;vertical-align:top;">' + esc(label) + '</td>' +
       '<td style="text-align:right;padding:1px 0;vertical-align:top;white-space:nowrap;">' + esc(value == null ? '' : value) + '</td>' +
       '</tr></tbody></table>';
@@ -167,7 +168,7 @@
       header += '<div style="text-align:center;margin-bottom:6px;"><img src="' + esc(comp.logo) + '" alt="' + esc(comp.name) + '" style="height:56px;max-width:160px;object-fit:contain;"/></div>';
     }
     header += '<div style="text-align:center;">';
-    header += '<div style="font-size:15px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;">' + esc(comp.name) + '</div>';
+    header += '<div style="font-size:15px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;">' + esc(comp.name) + '</div>';
     if (tpl.showAddress && comp.address) header += '<div style="font-size:12px;font-weight:400;margin-top:4px;">' + esc(comp.address) + '</div>';
     if (tpl.showPhone && comp.phone) header += '<div style="font-size:12px;font-weight:400;">Tel: ' + esc(comp.phone) + '</div>';
     if (tpl.showEmail && comp.email) header += '<div style="font-size:12px;font-weight:400;">' + esc(comp.email) + '</div>';
@@ -177,7 +178,7 @@
 
     // Return receipts: prominent banner + original invoice reference
     if (s.receiptTitle) {
-      header += '<div style="text-align:center;margin-top:6px;font-size:13px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;">' + esc(s.receiptTitle) + '</div>';
+      header += '<div style="text-align:center;margin-top:6px;font-size:13px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;">' + esc(s.receiptTitle) + '</div>';
     }
 
     var meta = row('Receipt #', invoice) + row('Date', sold.toLocaleDateString()) + row('Time', sold.toLocaleTimeString());
@@ -202,14 +203,14 @@
       var discPct = asNumber(it.discount, 0);
       var skuLine = '';
       if (tpl.showSku) {
-        skuLine += '<div style="font-size:12px;font-weight:400;">' + (it.sku ? 'SKU ' + esc(it.sku) : 'SKU \u2014');
+        skuLine += '<div style="font-size:11px;font-weight:400;">' + (it.sku ? 'SKU ' + esc(it.sku) : 'SKU \u2014');
         if (it.barcodeNumber) skuLine += '  \u00b7  ' + esc(it.barcodeNumber);
         skuLine += '</div>';
       }
       var sub = qtyLabel + ' \u00d7 ' + money(unit);
       if (discPct) sub += '  Disc ' + discPct + '%';
       if (taxPct) sub += '  Tax ' + taxPct + '%';
-      itemsTable += '<div style="margin:8px 0;"><div style="font-weight:400;text-transform:uppercase;">' + esc(it.productName || it.name || 'Item') + '</div>' +
+      itemsTable += '<div style="margin:8px 0;"><div style="font-weight:700;text-transform:uppercase;">' + esc(it.productName || it.name || 'Item') + '</div>' +
         skuLine +
         '<table style="width:100%;border-collapse:collapse;font-size:12px;font-weight:400;"><tbody><tr>' +
         '<td style="padding-top:2px;text-align:left;">' + esc(sub) + '</td>' +
@@ -223,7 +224,7 @@
       (asNumber(s.discountTotal, 0) > 0 ? row('Discount', '-' + money(asNumber(s.discountTotal, 0))) : '') +
       (asNumber(s.taxTotal, 0) > 0 ? row('Tax', money(asNumber(s.taxTotal, 0))) : '') +
       dash +
-      row('TOTAL', money(asNumber(s.grandTotal, 0)), true);
+      row('TOTAL', money(asNumber(s.grandTotal, 0)), true, true);
 
     var paidAmt = asNumber(s.paidAmount, 0);
     if (!paidAmt && payments.length) {
@@ -233,7 +234,7 @@
     var changeAmt = asNumber(s.changeAmount, 0);
     if (!changeAmt && paidAmt > billTotal) changeAmt = paidAmt - billTotal;
 
-    var pay = '<div style="font-weight:600;margin-bottom:4px;">PAYMENT</div>';
+    var pay = '<div style="font-weight:700;margin-bottom:4px;">PAYMENT</div>';
     if (payments.length) {
       pay += payments.map(function (p) {
         return row(p.reference ? String(p.paymentMethod) + ' \u00b7 ' + p.reference : String(p.paymentMethod || 'Payment'), money(p.amount));
@@ -248,7 +249,7 @@
       if (changeAmt > 0) pay += row('Change due', money(changeAmt));
     }
     if (tpl.showLoyalty && Number(s.loyaltyPoints) > 0) pay += row('Loyalty points earned', String(s.loyaltyPoints));
-    if (s.notes) pay += dash + '<div style="font-size:10px;"><span style="font-weight:600;">Notes: </span>' + esc(s.notes) + '</div>';
+    if (s.notes) pay += dash + '<div style="font-size:11px;"><span style="font-weight:700;">Notes: </span>' + esc(s.notes) + '</div>';
 
     var lower = '';
     if (tpl.showBarcode) {
@@ -265,17 +266,17 @@
     lower += '<div style="text-align:center;font-size:11px;font-weight:400;margin-top:4px;">Generated ' + new Date().toLocaleString() + '</div>';
     if (tpl.poweredBy) lower += '<div style="text-align:center;font-size:11px;font-weight:400;margin-top:2px;">' + esc(tpl.poweredBy) + '</div>';
 
-    return '<div style="width:' + paperWidth + 'px;max-width:100%;margin:0 auto;background:#fff;color:#000;font-family:Courier New,Courier,monospace;">' +
-      '<div style="padding:16px 14px;font-size:13px;line-height:1.35;font-weight:400;">' +
+    return '<div class="pos-receipt-paper" style="width:' + paperWidth + 'px;max-width:100%;margin:0 auto;background:#fff;color:#000;font-family:Courier New,Courier,monospace;">' +
+      '<div style="padding:14px 12px;font-size:13px;line-height:1.35;font-weight:400;color:#000;">' +
       header + dash +
-      '<div style="text-align:center;font-weight:600;letter-spacing:1.4px;font-size:11px;">' + esc(tpl.receiptHeader) + '</div>' +
+      '<div style="text-align:center;font-weight:700;letter-spacing:1.4px;font-size:12px;">' + esc(tpl.receiptHeader) + '</div>' +
       (tpl.copyLabel ? '<div style="text-align:center;font-size:11px;font-weight:400;margin-top:2px;">' + esc(tpl.copyLabel) + '</div>' : '') +
       dash + meta + dash +
-      '<div style="font-weight:600;">BILL TO</div><div>' + esc(s.customerName || 'Walk-in Customer') + '</div>' +
-      (s.customerPhone ? '<div>Phone: ' + esc(s.customerPhone) + '</div>' : '') +
-      (s.customerEmail ? '<div>Email: ' + esc(s.customerEmail) + '</div>' : '') +
+      '<div style="font-weight:700;">BILL TO</div><div style="font-weight:400;">' + esc(s.customerName || 'Walk-in Customer') + '</div>' +
+      (s.customerPhone ? '<div style="font-weight:400;">Phone: ' + esc(s.customerPhone) + '</div>' : '') +
+      (s.customerEmail ? '<div style="font-weight:400;">Email: ' + esc(s.customerEmail) + '</div>' : '') +
       dash +
-      '<table style="width:100%;border-collapse:collapse;font-size:12px;font-weight:400;border-bottom:1px dashed #000;"><tbody><tr>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:12px;font-weight:700;border-bottom:1px dashed #000;"><tbody><tr>' +
       '<td style="padding:0 0 4px;text-align:left;">ITEM</td>' +
       '<td style="padding:0 0 4px;text-align:center;width:36px;">QTY</td>' +
       '<td style="padding:0 0 4px;text-align:right;width:88px;">AMOUNT</td>' +
@@ -497,38 +498,12 @@
   var printInProgress = false;
   var printQueue = [];
 
-  function printReceiptNode(node, widthMm) {
-    if (typeof document === 'undefined') {
-      throw new Error('Cannot print - document not available');
-    }
-
-    // If a print is already in progress, queue this one
-    if (printInProgress) {
-      printQueue.push({ node: node, widthMm: widthMm });
-      console.log('[POS] Print queued - another print in progress');
-      return;
-    }
-
-    printInProgress = true;
-
-    // Clean up any existing print iframes (but be more careful)
-    var existingIframes = document.querySelectorAll('iframe[title="POS thermal print"]');
-    for (var i = 0; i < existingIframes.length; i++) {
-      try { 
-        existingIframes[i].style.display = 'none';
-        setTimeout(function() { 
-          try { document.body.removeChild(existingIframes[i]); } catch (e) { /* ignore */ }
-        }, 1000);
-      } catch (e) { /* ignore */ }
-    }
-
-    // Find the actual receipt paper element if node is a wrapper
-    var receiptPaper = node.querySelector && node.querySelector('.pos-receipt-paper') ? node.querySelector('.pos-receipt-paper') : node;
-
-    // Clone the receipt node
+  function prepareReceiptClone(node) {
+    var receiptPaper = node.querySelector && node.querySelector('.pos-receipt-paper')
+      ? node.querySelector('.pos-receipt-paper')
+      : node;
     var clone = receiptPaper.cloneNode(true);
 
-    // Fix relative image URLs to absolute
     var cloneImages = clone.querySelectorAll('img');
     for (var i = 0; i < cloneImages.length; i++) {
       var img = cloneImages[i];
@@ -538,7 +513,6 @@
       }
     }
 
-    // Convert canvas elements to images (for QR/barcode)
     var sourceCanvases = Array.from(receiptPaper.querySelectorAll('canvas'));
     var cloneCanvases = clone.querySelectorAll('canvas');
     for (var j = 0; j < cloneCanvases.length; j++) {
@@ -554,60 +528,107 @@
         /* ignore */
       }
     }
+    return clone;
+  }
 
+  function finishPrintJob() {
+    printInProgress = false;
+    processPrintQueue();
+  }
+
+  /** Preferred path: mono bitmap via Electron (matches Black Copper self-test solidity). */
+  function printReceiptMonoBitmap(clone, widthMm) {
+    var api = global.bisonDesktop && global.bisonDesktop.print && global.bisonDesktop.print.thermalReceipt;
+    if (typeof api !== 'function') return Promise.reject(new Error('no-thermal-api'));
+    return api(clone.outerHTML, Number(widthMm) === 58 ? 58 : 80).then(function (res) {
+      if (res && res.ok) return res;
+      throw new Error((res && res.error) || 'thermal-print-failed');
+    });
+  }
+
+  /** Fallback: browser iframe print (can look light on thermal). */
+  function printReceiptBrowserIframe(clone, widthMm) {
     var paperWidth = Number(widthMm) === 58 ? 58 : 80;
 
-    // Hidden iframe — only receipt content inside, nothing else
+    var existingIframes = document.querySelectorAll('iframe[title="POS thermal print"]');
+    for (var i = 0; i < existingIframes.length; i++) {
+      try {
+        existingIframes[i].style.display = 'none';
+        (function (el) {
+          setTimeout(function () {
+            try { document.body.removeChild(el); } catch (e) { /* ignore */ }
+          }, 1000);
+        })(existingIframes[i]);
+      } catch (e) { /* ignore */ }
+    }
+
     var iframe = document.createElement('iframe');
     iframe.setAttribute('title', 'POS thermal print');
     iframe.setAttribute('data-print-id', String(Date.now()));
-    iframe.style.position = 'fixed';
-    iframe.style.right = '0';
-    iframe.style.bottom = '0';
-    iframe.style.width = '0';
-    iframe.style.height = '0';
-    iframe.style.border = '0';
-    iframe.style.opacity = '0';
-    iframe.style.pointerEvents = 'none';
-    iframe.style.zIndex = '-1';
+    iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none;z-index:-1;';
     document.body.appendChild(iframe);
 
     var win = iframe.contentWindow;
-    var doc = win.document;
-
-    if (!win || !doc) {
+    var doc = win && win.document;
+    if (!doc) {
       try { document.body.removeChild(iframe); } catch (e) { /* ignore */ }
-      printInProgress = false;
-      processPrintQueue();
       window.print();
       return;
     }
 
+    // Thermal heads only burn ~72mm of 80mm paper (48mm of 58mm). Laying out at full
+    // paper width pushes right-aligned amounts off the printable area (cut words).
+    // Black Copper clips the right edge even on its own test page — keep a safety margin.
+    var printableWidth = paperWidth === 58 ? 44 : 66;
+
+    var thermalCss =
+      '@page{size:' + paperWidth + 'mm auto;margin:0;}' +
+      '@media print{' +
+      '@page{size:' + paperWidth + 'mm auto;margin:0;}' +
+      'body{width:' + printableWidth + 'mm!important;max-width:' + printableWidth + 'mm!important;}' +
+      '*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}' +
+      '}' +
+      '*{box-sizing:border-box;}' +
+      'html,body{margin:0;padding:0;background:#fff;color:#000;}' +
+      'body{width:' + printableWidth + 'mm;max-width:' + printableWidth + 'mm;margin:0;}' +
+      'html,body,.pos-receipt-paper,.pos-receipt-paper *{color:#000!important;}' +
+      // Courier New strokes are ~1 dot wide at 203dpi; Windows anti-aliases them to gray and
+      // the driver dithers gray into broken/light glyphs. Bold sans prints solid black.
+      'body,.pos-receipt-paper,.pos-receipt-paper *{font-family:Arial,Tahoma,"Segoe UI",sans-serif!important;' +
+      'text-rendering:geometricPrecision;-webkit-font-smoothing:none;}' +
+      'body{font-size:12px;line-height:1.3;}' +
+      // Tiny 10–11px lines (SKU, policy, footer) are the ones that drop out first.
+      '.pos-receipt-paper [style*="font-size:10px"],.pos-receipt-paper [style*="font-size:11px"]{font-size:12px!important;}' +
+      '.pos-receipt-paper div,.pos-receipt-paper td{overflow-wrap:anywhere;word-break:break-word;}' +
+      '.pos-receipt-paper{width:100%!important;max-width:100%!important;margin:0;padding:2px 2px 30px 2px;background:#fff;}' +
+      '.pos-receipt-paper [style*="padding:14px 12px"]{padding:4px 2px!important;}' +
+      '.no-print{display:none!important;}' +
+      'img{max-width:100%;height:auto;display:block;margin:0 auto;}' +
+      'table{width:100%;border-collapse:collapse;}' +
+      'svg{max-width:100%;height:auto;display:block;margin:2px auto;}' +
+      'div,p{margin:0;padding:0;}';
+
     doc.open();
-    doc.write('<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="utf-8" />\n  <title>Receipt</title>\n  <style>\n    @page {\n      size: ' + paperWidth + 'mm auto;\n      margin: 0;\n    }\n    @media print {\n      @page {\n        size: ' + paperWidth + 'mm auto;\n        margin: 0;\n      }\n      body {\n        width: ' + paperWidth + 'mm !important;\n        max-width: ' + paperWidth + 'mm !important;\n      }\n      * {\n        -webkit-print-color-adjust: exact !important;\n        print-color-adjust: exact !important;\n      }\n    }\n    * {\n      box-sizing: border-box;\n    }\n    html, body {\n      margin: 0;\n      padding: 0;\n      width: ' + paperWidth + 'mm;\n      max-width: ' + paperWidth + 'mm;\n      background: #fff;\n      color: #000;\n    }\n    html, body, .pos-receipt-paper, .pos-receipt-paper * {\n      color: #000 !important;\n    }\n    body {\n      font-family: "Courier New", Courier, monospace;\n      font-size: 12px;\n      line-height: 1.2;\n      font-weight: 400;\n    }\n    .pos-receipt-paper {\n      width: 100% !important;\n      max-width: 100% !important;\n      margin: 0;\n      padding: 2px 4px 30px 4px;\n      background: #fff;\n    }\n    .no-print { display: none !important; }\n    img.company-logo {\n      max-width: ' + (paperWidth === 58 ? 100 : 140) + 'px;\n      height: auto;\n      display: block;\n      margin: 0 auto 4px;\n    }\n    img.receipt-qr {\n      width: ' + (paperWidth === 58 ? 100 : 140) + 'px;\n      height: ' + (paperWidth === 58 ? 100 : 140) + 'px;\n      image-rendering: pixelated;\n      display: block;\n      margin: 4px auto;\n    }\n    table { width: 100%; border-collapse: collapse; }\n    svg {\n      max-width: 100%;\n      height: auto;\n      display: block;\n      margin: 2px auto;\n    }\n    div, p { margin: 0; padding: 0; }\n  </style>\n</head><body>' + clone.outerHTML + '</body></html>');
+    doc.write(
+      '<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Receipt</title><style>' +
+      thermalCss +
+      '</style></head><body>' + clone.outerHTML + '</body></html>'
+    );
     doc.close();
 
     var printed = false;
     var printId = iframe.getAttribute('data-print-id');
-
-    var cleanup = function() {
-      setTimeout(function() {
-        try { 
-          // Only remove if it's still the same iframe
+    var cleanup = function () {
+      setTimeout(function () {
+        try {
           var currentIframe = document.querySelector('iframe[data-print-id="' + printId + '"]');
-          if (currentIframe) {
-            document.body.removeChild(currentIframe);
-          }
-          printInProgress = false;
-          processPrintQueue();
-        } catch (e) { 
-          printInProgress = false;
-          processPrintQueue();
-        }
-      }, 15000);
+          if (currentIframe) document.body.removeChild(currentIframe);
+        } catch (e) { /* ignore */ }
+        finishPrintJob();
+      }, 8000);
     };
 
-    var printWhenReady = function() {
+    var printWhenReady = function () {
       if (printed) return;
       printed = true;
       try {
@@ -616,35 +637,68 @@
         cleanup();
       } catch (e) {
         console.error('[POS] Print error', e);
-        printInProgress = false;
-        processPrintQueue();
+        finishPrintJob();
         window.print();
       }
     };
 
     var images = Array.from(doc.images);
     if (!images.length) {
-      setTimeout(printWhenReady, 500);
+      setTimeout(printWhenReady, 400);
+      return;
+    }
+    var remaining = images.length;
+    var done = function () {
+      remaining -= 1;
+      if (remaining <= 0) setTimeout(printWhenReady, 250);
+    };
+    for (var k = 0; k < images.length; k++) {
+      if (images[k].complete) done();
+      else {
+        images[k].onload = done;
+        images[k].onerror = done;
+      }
+    }
+    setTimeout(function () { if (!printed) printWhenReady(); }, 5000);
+  }
+
+  function printReceiptNode(node, widthMm) {
+    if (typeof document === 'undefined') {
+      throw new Error('Cannot print - document not available');
+    }
+
+    if (printInProgress) {
+      printQueue.push({ node: node, widthMm: widthMm });
+      console.log('[POS] Print queued - another print in progress');
       return;
     }
 
-    var remaining = images.length;
-    var done = function() {
-      remaining -= 1;
-      if (remaining <= 0) setTimeout(printWhenReady, 300);
-    };
-    for (var k = 0; k < images.length; k++) {
-      var img = images[k];
-      if (img.complete) {
-        done();
-      } else {
-        img.onload = done;
-        img.onerror = done;
-      }
+    printInProgress = true;
+    var clone;
+    try {
+      clone = prepareReceiptClone(node);
+    } catch (e) {
+      console.error('[POS] Print failed', e);
+      finishPrintJob();
+      window.print();
+      return;
     }
-
-    // Force print after 5s even if images stall
-    setTimeout(function() { if (!printed) printWhenReady(); }, 5000);
+    // Mono bitmap prints solid black regardless of driver halftoning; the main process
+    // sets an exact page height so there is no long blank feed. Iframe print is the fallback.
+    printReceiptMonoBitmap(clone, widthMm).then(finishPrintJob, function (err) {
+      if (err && /cancel/i.test(String(err.message))) {
+        finishPrintJob();
+        return;
+      }
+      console.warn('[POS] Mono print unavailable, using browser print', err);
+      try {
+        printReceiptBrowserIframe(clone, widthMm);
+      } catch (e) {
+        console.error('[POS] Print failed', e);
+        finishPrintJob();
+        window.print();
+      }
+    });
   }
 
   function processPrintQueue() {

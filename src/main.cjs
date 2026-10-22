@@ -14,6 +14,7 @@ const {
   shell,
   globalShortcut,
   session,
+  nativeImage,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -528,6 +529,113 @@ function filterRecordsForUser(user, records) {
 }
 
 /** Stamp user/location onto offline POS payloads before local persist. */
+/** 'STORE_CREDIT' | 'POINTS' | 'ACCOUNT' | null for a payment method label. */
+function customerTenderKind(method) {
+  const m = String(method || '').toLowerCase();
+  if (m.includes('store credit')) return 'STORE_CREDIT';
+  if (m.includes('loyalty') || m.includes('points')) return 'POINTS';
+  if (m.includes('credit') || m.includes('on account')) return 'ACCOUNT';
+  return null;
+}
+
+function roundMoney(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+/**
+ * Ledger rows a sale produces for its customer. Throws (sale is rejected) when a
+ * customer tender is not covered by the balance — the renderer checks first, this
+ * is the last line of defence against double-spend from two windows.
+ */
+function buildSaleLedgerEntries(sale, auth) {
+  const pays = Array.isArray(sale.payments) ? sale.payments : [];
+  let creditUsed = 0;
+  let pointsUsed = 0;
+  let accountCharge = 0;
+  for (const p of pays) {
+    const kind = customerTenderKind(p.paymentMethod);
+    if (kind === 'STORE_CREDIT') creditUsed += Number(p.amount) || 0;
+    else if (kind === 'POINTS') pointsUsed += Number(p.points) || 0;
+    else if (kind === 'ACCOUNT') accountCharge += Number(p.amount) || 0;
+  }
+  const earned = Math.max(0, Math.floor(Number(sale.loyaltyEarned) || 0));
+  const customerId = String(sale.customerId || '').trim();
+  if (!customerId) {
+    if (creditUsed || pointsUsed || accountCharge) {
+      throw new Error('Select a customer to use store credit, loyalty points or on-account payment.');
+    }
+    return [];
+  }
+
+  const bal = masterSqlite.getCustomerBalances(customerId);
+  if (creditUsed > bal.storeCredit + 0.009) {
+    throw new Error(`Store credit balance is only ${roundMoney(bal.storeCredit).toFixed(2)}.`);
+  }
+  if (pointsUsed > bal.points + 0.0001) {
+    throw new Error(`Customer has only ${bal.points} loyalty points.`);
+  }
+  if (accountCharge > 0) {
+    const row = masterSqlite.getCustomerById(customerId);
+    let payload = {};
+    try { payload = JSON.parse(row?.payload || '{}'); } catch { payload = {}; }
+    const limit = Number(payload.creditLimit || 0);
+    const policy = String(payload.creditPolicy || 'WARN').toUpperCase();
+    if (limit > 0 && policy === 'BLOCK' && bal.accountBalance + accountCharge > limit + 0.009) {
+      throw new Error(`Credit limit exceeded. Available: ${roundMoney(limit - bal.accountBalance).toFixed(2)}`);
+    }
+  }
+
+  const createdBy = currentUserId(auth.session?.user);
+  const entries = [];
+  if (creditUsed) entries.push({ customerId, kind: 'CREDIT', type: 'REDEEM', amount: -roundMoney(creditUsed), note: 'Paid with store credit', createdBy });
+  if (pointsUsed) entries.push({ customerId, kind: 'POINTS', type: 'REDEEM', points: -pointsUsed, note: 'Points redeemed on sale', createdBy });
+  if (accountCharge) entries.push({ customerId, kind: 'ACCOUNT', type: 'CHARGE', amount: roundMoney(accountCharge), note: 'Sale on account', createdBy });
+  if (earned) entries.push({ customerId, kind: 'POINTS', type: 'EARN', points: earned, note: 'Points earned on sale', createdBy });
+  return entries;
+}
+
+function returnLineKey(item) {
+  return String(item?.productId || item?.productName || item?.name || '').trim().toLowerCase();
+}
+
+/** Quantity already returned per line for one sale (from the permanent local returns log). */
+function returnedQtyBySale(saleId) {
+  const out = new Map();
+  if (!saleId) return out;
+  for (const r of masterSqlite.listAllLocalReturns() || []) {
+    if (String(r.originalSaleId || r.saleId || '') !== String(saleId)) continue;
+    for (const item of r.items || []) {
+      const key = returnLineKey(item);
+      out.set(key, (out.get(key) || 0) + (Number(item.quantity) || 0));
+    }
+  }
+  return out;
+}
+
+/** Totals for a stored sale, rebuilding grand total for older rows that lack it. */
+function saleGrandTotal(sale) {
+  const explicit = Number(sale.grandTotal ?? sale.totalAmount ?? sale.total ?? sale.finalTotal ?? 0);
+  if (explicit > 0) return explicit;
+  const items = sale.items || [];
+  const lines = items.reduce((sum, i) => sum + (Number(i.lineTotal) || (Number(i.quantity || 0) * Number(i.unitPrice || 0))), 0);
+  return Math.max(0, lines - (Number(sale.discountTotal) || 0));
+}
+
+function customerSaleStats(customerId, sales) {
+  const mine = sales.filter((s) => String(s.customerId || '') === String(customerId) && !s.voided && s.status !== 'Voided');
+  const totalSpent = mine.reduce((sum, s) => sum + saleGrandTotal(s), 0);
+  const last = mine.reduce((acc, s) => {
+    const t = new Date(s.createdAt || 0).getTime();
+    return t > acc ? t : acc;
+  }, 0);
+  return {
+    visits: mine.length,
+    totalSpent: roundMoney(totalSpent),
+    avgTicket: mine.length ? roundMoney(totalSpent / mine.length) : 0,
+    lastVisit: last ? new Date(last).toISOString() : null,
+  };
+}
+
 function stampScopedPayload(auth, payload = {}) {
   const user = auth.session?.user || {};
   const uid = currentUserId(user);
@@ -1415,6 +1523,183 @@ function registerIpc() {
   ipcMain.handle('window:close', () => app.quit());
   ipcMain.handle('window:isMaximized', () => Boolean(mainWindow?.isMaximized()));
 
+  /**
+   * Thermal HTML → pure black/white bitmap → print.
+   * Browser print of live fonts anti-aliases to gray; thermal heads dither that as
+   * "light / blotchy". Printer self-test uses native fonts (solid). Rasterizing then
+   * thresholding matches that solid look while keeping our HTML layout.
+   */
+  ipcMain.handle('print:thermalReceipt', async (_event, payload) => {
+    const htmlBody = String(payload?.html || '');
+    const paperMm = Number(payload?.widthMm) === 58 ? 58 : 80;
+    if (!htmlBody) return { ok: false, error: 'empty-html' };
+
+    // 203dpi head = 8 dots/mm. Black Copper's driver reports a wider page than the head
+    // burns (even the Windows test page is clipped on the right), so stay at 66mm/44mm,
+    // left-aligned, and render at exactly 8 dots/mm so the bitmap is never resampled.
+    const printableMm = paperMm === 58 ? 44 : 66;
+    const contentWidth = printableMm * 8;
+    // Lay out at half the dot width then zoom 2x, so a 12px font is ~24 dots (~3mm) tall.
+    const ZOOM = 2;
+    const cssWidth = contentWidth / ZOOM;
+    let renderWin = null;
+    let printWin = null;
+    const tmpFiles = [];
+
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const writeTemp = (name, contents) => {
+      const filePath = path.join(app.getPath('temp'), name);
+      fs.writeFileSync(filePath, contents, 'utf8');
+      tmpFiles.push(filePath);
+      return filePath;
+    };
+
+    try {
+      renderWin = new BrowserWindow({
+        show: false,
+        width: contentWidth,
+        height: 900,
+        backgroundColor: '#ffffff',
+        webPreferences: {
+          offscreen: true,
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+        },
+      });
+
+      const renderCss =
+        '*{box-sizing:border-box;margin:0;padding:0;}' +
+        'html,body{width:' + cssWidth + 'px;background:#fff;color:#000;overflow:hidden;}' +
+        'body{padding:2px 2px 12px;font-size:12px;line-height:1.3;}' +
+        'body,.pos-receipt-paper,.pos-receipt-paper *{color:#000!important;' +
+        'font-family:Arial,Tahoma,"Segoe UI",sans-serif!important;}' +
+        '.pos-receipt-paper [style*="font-size:10px"],.pos-receipt-paper [style*="font-size:11px"]{font-size:12px!important;}' +
+        '.pos-receipt-paper div,.pos-receipt-paper td{overflow-wrap:anywhere;word-break:break-word;}' +
+        '.pos-receipt-paper [style*="padding:14px 12px"]{padding:4px 2px!important;}' +
+        '.pos-receipt-paper{width:100%!important;max-width:100%!important;margin:0;padding:0!important;}' +
+        'img{max-width:100%;height:auto;display:block;margin:0 auto;}' +
+        'svg{max-width:100%;height:auto;display:block;margin:2px auto;}' +
+        'table{width:100%;border-collapse:collapse;}';
+
+      const renderHtml =
+        '<!DOCTYPE html><html><head><meta charset="utf-8"/>' +
+        '<style>' + renderCss + '</style></head><body>' + htmlBody + '</body></html>';
+
+      const renderPath = writeTemp('bison-thermal-render-' + Date.now() + '.html', renderHtml);
+      await renderWin.loadFile(renderPath);
+      renderWin.webContents.setZoomFactor(ZOOM);
+      await sleep(250);
+
+      const scrollH = await renderWin.webContents.executeJavaScript(`
+        (async () => {
+          const imgs = Array.from(document.images || []);
+          await Promise.all(imgs.map((img) => {
+            if (img.complete) return Promise.resolve();
+            return new Promise((res) => {
+              img.onload = () => res();
+              img.onerror = () => res();
+              setTimeout(res, 2000);
+            });
+          }));
+          return document.documentElement.scrollHeight || document.body.scrollHeight || 600;
+        })()
+      `);
+      const h = Math.max(200, Math.min((Number(scrollH) || 600) * ZOOM, 9000));
+      renderWin.setSize(contentWidth, h);
+      await sleep(250);
+
+      let captured = await renderWin.webContents.capturePage();
+      // Windows display scaling (125%/150%) enlarges the capture — snap back to head dots.
+      if (captured.getSize().width !== contentWidth) {
+        captured = captured.resize({ width: contentWidth, quality: 'best' });
+      }
+      const size = captured.getSize();
+      const bitmap = Buffer.from(captured.toBitmap());
+      // BGRA → pure mono (gray anti-alias becomes solid black — like printer self-test)
+      // Mid threshold keeps normal-weight strokes close to true width (200 fattened them).
+      const THRESH = 165;
+      for (let i = 0; i + 3 < bitmap.length; i += 4) {
+        const b = bitmap[i];
+        const g = bitmap[i + 1];
+        const r = bitmap[i + 2];
+        const gray = (r * 77 + g * 150 + b * 29) >> 8;
+        const v = gray < THRESH ? 0 : 255;
+        bitmap[i] = v;
+        bitmap[i + 1] = v;
+        bitmap[i + 2] = v;
+        bitmap[i + 3] = 255;
+      }
+
+      const mono = nativeImage.createFromBitmap(bitmap, {
+        width: size.width,
+        height: size.height,
+      });
+      const pngPath = path.join(app.getPath('temp'), 'bison-thermal-' + Date.now() + '.png');
+      fs.writeFileSync(pngPath, mono.toPNG());
+      tmpFiles.push(pngPath);
+
+      // Exact page height = no long blank feed (CSS "@page auto" is ignored by Chromium).
+      const imgHeightMm = (size.height * printableMm) / size.width;
+      const pageHeightMicrons = Math.ceil((imgHeightMm + 6) * 1000);
+
+      printWin = new BrowserWindow({
+        show: false,
+        width: contentWidth,
+        height: Math.min(size.height + 40, 2000),
+        backgroundColor: '#ffffff',
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+        },
+      });
+
+      const printHtml =
+        '<!DOCTYPE html><html><head><meta charset="utf-8"/>' +
+        '<style>' +
+        '@page{margin:0;}' +
+        '@media print{*{ -webkit-print-color-adjust:exact!important;print-color-adjust:exact!important; }}' +
+        'html,body{margin:0;padding:0;background:#fff;}' +
+        'img{width:' + printableMm + 'mm;display:block;margin:0;image-rendering:pixelated;image-rendering:crisp-edges;}' +
+        '</style></head><body><img src="file:///' + pngPath.replace(/\\/g, '/') + '"/></body></html>';
+
+      const printPath = writeTemp('bison-thermal-print-' + Date.now() + '.html', printHtml);
+      await printWin.loadFile(printPath);
+      await sleep(250);
+
+      await new Promise((resolve, reject) => {
+        printWin.webContents.print(
+          {
+            silent: false,
+            printBackground: true,
+            margins: { marginType: 'none' },
+            pageSize: { width: paperMm * 1000, height: pageHeightMicrons },
+            scaleFactor: 100,
+          },
+          (success, failureReason) => {
+            if (success) resolve();
+            else reject(new Error(failureReason || 'print-cancelled'));
+          }
+        );
+      });
+
+      return { ok: true };
+    } catch (err) {
+      console.error('[thermal print]', err);
+      return { ok: false, error: String(err?.message || err) };
+    } finally {
+      try { if (renderWin && !renderWin.isDestroyed()) renderWin.close(); } catch { /* ignore */ }
+      try { if (printWin && !printWin.isDestroyed()) printWin.close(); } catch { /* ignore */ }
+      // Spooler may still read the PNG briefly after print returns
+      setTimeout(() => {
+        for (const f of tmpFiles) {
+          try { fs.unlinkSync(f); } catch { /* ignore */ }
+        }
+      }, 15000);
+    }
+  });
+
   ipcMain.handle('auth:saveSession', (_event, sessionData) => {
     if (!sessionData || !sessionData.accessToken) return false;
     const existing = authStore.readSession(userData()) || {};
@@ -1881,9 +2166,26 @@ function registerIpc() {
     if (!auth.ok) return auth.result;
     if (!activeShift?.id) return { success: false, message: 'Open a shift first' };
     const enriched = stampScopedPayload(auth, payload);
+
+    // Customer tenders (store credit / points / on account) must be backed by a balance.
+    let ledgerEntries = [];
+    try {
+      masterSqlite.reloadFromDiskSafe();
+      ledgerEntries = buildSaleLedgerEntries(enriched, auth);
+    } catch (err) {
+      return { success: false, message: err.message };
+    }
+
     const saved = localDb.addSaleToQueue(enriched);
-    try { masterSqlite.addLocalSale(enriched); } catch (err) {
+    try { masterSqlite.addLocalSale(saved); } catch (err) {
       console.warn('[sqlite] local sale persist failed', err.message);
+    }
+    try {
+      masterSqlite.addCustomerLedgerEntries(
+        ledgerEntries.map((e) => ({ ...e, reference: saved.invoiceNumber || saved.id }))
+      );
+    } catch (err) {
+      console.warn('[sqlite] customer ledger write failed', err.message);
     }
     console.log('[offline] Sale queued locally:', saved.id, 'loc=', enriched.locationId);
     return { success: true, data: saved, message: 'Sale saved locally. Will sync on next sync.' };
@@ -2162,12 +2464,12 @@ function registerIpc() {
           masterSqlite.reloadFromDiskSafe();
           syncedIds.forEach(id => {
             try {
-              masterSqlite.deleteLocalSale(id);
+              masterSqlite.markLocalSaleSynced(id);
             } catch (err) {
-              console.error(`Error deleting synced sale ${id} from local DB:`, err.message);
+              console.error(`Error marking synced sale ${id} in local DB:`, err.message);
             }
           });
-          console.log(`[sync] Cleaned ${syncedIds.length} synced sales from local SQLite.`);
+          console.log(`[sync] Marked ${syncedIds.length} sales as synced in local SQLite.`);
         } catch (err) {
           console.error(`Error cleaning local SQLite:`, err.message);
         }
@@ -2290,23 +2592,76 @@ function registerIpc() {
     if (!auth.ok) return auth.result;
     if (!activeShift?.id) return { success: false, message: 'Open a shift first' };
 
+    const refundAmount = roundMoney((payload.items || []).reduce(
+      (sum, i) => sum + (Number(i.unitPrice) || 0) * (Number(i.quantity) || 0), 0
+    ));
+    const refundMethod = payload.refundMethod || 'Cash';
+    const customerId = String(payload.customerId || '').trim();
+    const refundKind = customerTenderKind(refundMethod);
+    if ((refundKind === 'STORE_CREDIT' || refundKind === 'ACCOUNT') && !customerId) {
+      return { success: false, message: 'Store credit / account refunds need a named customer on the original sale.' };
+    }
+
+    // Never refund more than was sold minus what earlier returns already took back.
+    try {
+      masterSqlite.reloadFromDiskSafe();
+      const saleKey = String(payload.originalSaleId || payload.saleId || '');
+      const prior = returnedQtyBySale(saleKey);
+      for (const item of payload.items || []) {
+        const key = returnLineKey(item);
+        const sold = Number(item.soldQuantity);
+        if (Number.isFinite(sold) && sold > 0) {
+          const remaining = sold - (prior.get(key) || 0);
+          if ((Number(item.quantity) || 0) > remaining + 1e-6) {
+            return { success: false, message: `${item.productName || 'Item'}: only ${Math.max(0, remaining)} left to return.` };
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[processReturn] prior-return check skipped:', err.message);
+    }
+
     const enriched = stampScopedPayload(auth, {
       ...payload,
       type: 'RETURN',
       originalSaleId: payload.originalSaleId || payload.saleId,
-      refundMethod: payload.refundMethod || 'Cash',
+      refundMethod,
+      refundAmount,
       reason: payload.reason || 'Customer return',
+      createdAt: new Date().toISOString(),
     });
     const saved = localDb.addReturnToQueue(enriched);
+
+    try {
+      const createdBy = currentUserId(auth.session?.user);
+      const reference = `Return ${saved.id} (inv ${payload.invoiceNumber || enriched.originalSaleId})`;
+      const entries = [];
+      if (refundKind === 'STORE_CREDIT') {
+        entries.push({ customerId, kind: 'CREDIT', type: 'ISSUE', amount: refundAmount, reference, note: 'Refund issued as store credit', createdBy });
+      } else if (refundKind === 'ACCOUNT') {
+        entries.push({ customerId, kind: 'ACCOUNT', type: 'REFUND', amount: -refundAmount, reference, note: 'Return credited to account', createdBy });
+      }
+      const reverse = Math.floor(Number(payload.loyaltyReversed) || 0);
+      if (customerId && reverse > 0) {
+        const bal = masterSqlite.getCustomerBalances(customerId);
+        const take = Math.min(reverse, Math.max(0, Math.floor(bal.points)));
+        if (take > 0) entries.push({ customerId, kind: 'POINTS', type: 'REVERSE', points: -take, reference, note: 'Points reversed for returned items', createdBy });
+      }
+      masterSqlite.addCustomerLedgerEntries(entries);
+    } catch (err) {
+      console.warn('[processReturn] customer ledger write failed', err.message);
+    }
     console.log('[offline] Return queued locally:', saved.id, 'loc=', enriched.locationId);
 
     // Update stock in local SQLite for "local flow only" desktop app parity
     try {
       masterSqlite.reloadFromDisk();
       // Persist the return transaction locally in SQLite
-      masterSqlite.addLocalReturn(enriched);
+      masterSqlite.addLocalReturn(saved);
 
-      for (const item of payload.items || []) {
+      // Defective / damaged goods are refunded but not put back on the shelf.
+      const restockItems = payload.restock === false ? [] : (payload.items || []);
+      for (const item of restockItems) {
         const qty = Number(item.quantity) || 0;
         if (qty > 0 && item.productId) {
           // Adjust stock (returned items are added back to inventory)
@@ -2333,6 +2688,29 @@ function registerIpc() {
     }
 
     return { success: true, data: saved, message: 'Return saved locally. Will sync on next sync.' };
+  });
+
+  /** What earlier returns already took back from one sale (qty per line + points reversed). */
+  ipcMain.handle('pos:getReturnSummary', async (_event, saleId) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      masterSqlite.reloadFromDiskSafe();
+      const qty = Object.fromEntries(returnedQtyBySale(String(saleId || '')));
+      const prior = (masterSqlite.listAllLocalReturns() || [])
+        .filter((r) => String(r.originalSaleId || r.saleId || '') === String(saleId || ''));
+      return {
+        success: true,
+        data: {
+          returnedQty: qty,
+          returnsCount: prior.length,
+          refundedTotal: roundMoney(prior.reduce((n, r) => n + (Number(r.refundAmount) || 0), 0)),
+          loyaltyReversed: prior.reduce((n, r) => n + (Number(r.loyaltyReversed) || 0), 0),
+        },
+      };
+    } catch (err) {
+      return { success: false, message: err.message || 'Could not read earlier returns' };
+    }
   });
 
   ipcMain.handle('pos:listLocalReturns', async () => {
@@ -2451,26 +2829,41 @@ function registerIpc() {
           ? sale.payments
           : [{ paymentMethod: sale.paymentMethod || sale.paymentMode || 'Cash', amount: total }];
 
+        // Change handed back comes out of the cash tendered — count only cash kept.
+        const tendered = pays.reduce((n, p) => n + (Number(p.amount) || 0), 0);
+        let change = Number(sale.changeAmount ?? Math.max(0, tendered - total)) || 0;
+        let saleCredit = 0;
         for (const p of pays) {
           const method = String(p.paymentMethod || 'Cash').trim() || 'Cash';
-          const amt = Number(p.amount ?? 0) || total;
-          paymentsBreakdown[method] = (paymentsBreakdown[method] || 0) + amt;
+          let amt = Number(p.amount ?? 0) || (pays.length === 1 ? total : 0);
           const m = method.toLowerCase();
+          if (m === 'cash' && change > 0) {
+            const fromThis = Math.min(change, amt);
+            amt -= fromThis;
+            change -= fromThis;
+          }
+          paymentsBreakdown[method] = (paymentsBreakdown[method] || 0) + amt;
+          const kind = customerTenderKind(method);
           if (m === 'cash') cashSales += amt;
           else if (m.includes('card')) cardSales += amt;
-          else if (m.includes('credit')) creditSales += amt;
+          else if (kind === 'ACCOUNT') { creditSales += amt; saleCredit += amt; }
           else otherSales += amt;
         }
-        if (String(sale.notes || '').toLowerCase().includes('credit sale') && creditSales === 0) {
+        if (String(sale.notes || '').toLowerCase().includes('credit sale') && saleCredit === 0) {
           creditSales += total;
         }
       }
 
       let returnsTotal = 0;
       let returnsCount = 0;
+      let cashRefunds = 0;
       for (const r of shiftReturns) {
         returnsCount += 1;
-        returnsTotal += Number(r.refundAmount ?? r.total ?? r.grandTotal ?? 0);
+        const amount = Number(r.refundAmount) || (r.items || []).reduce(
+          (n, i) => n + (Number(i.unitPrice) || 0) * (Number(i.quantity) || 0), 0
+        );
+        returnsTotal += amount;
+        if (String(r.refundMethod || 'Cash').toLowerCase() === 'cash') cashRefunds += amount;
       }
 
       let cashIn = 0;
@@ -2481,7 +2874,7 @@ function registerIpc() {
         else if (flow.type === 'out') cashOut += amt;
       }
 
-      const expectedCash = openingCash + cashSales + cashIn - cashOut;
+      const expectedCash = openingCash + cashSales - cashRefunds + cashIn - cashOut;
       const topProducts = [...productTally.values()]
         .sort((a, b) => b.qty - a.qty)
         .slice(0, 8);
@@ -2516,11 +2909,12 @@ function registerIpc() {
         otherSales,
         cashIn,
         cashOut,
+        cashRefunds,
         expectedCash,
         totalSales,
         taxTotal,
         discountTotal,
-        netSales: Math.max(0, totalSales - discountTotal),
+        netSales: Math.max(0, totalSales - returnsTotal),
         salesCount: shiftSales.length,
         itemsSold,
         avgTicket: shiftSales.length ? totalSales / shiftSales.length : 0,
@@ -2645,26 +3039,193 @@ function registerIpc() {
     try {
       masterSqlite.reloadFromDiskSafe();
       const customer = masterSqlite.getCustomerById(customerId);
-      const payload = customer?.payload ? JSON.parse(customer.payload) : {};
+      let payload = {};
+      try { payload = JSON.parse(customer?.payload || '{}'); } catch { payload = {}; }
+      const bal = masterSqlite.getCustomerBalances(customerId);
+      const creditLimit = Number(payload.creditLimit || payload.credit_limit || 0);
       return {
         success: true,
         data: {
-          creditLimit: Number(payload.creditLimit || payload.credit_limit || 5000),
-          outstandingBalance: Number(payload.outstandingBalance || payload.outstanding_balance || payload.balance || 0),
-          availableCredit: Number(payload.availableCredit || payload.available_credit || 5000),
-          loyaltyPoints: Number(payload.loyaltyPoints || payload.loyalty_points || 0),
-        }
+          creditLimit,
+          creditPolicy: String(payload.creditPolicy || 'WARN').toUpperCase(),
+          outstandingBalance: bal.accountBalance,
+          // 0 limit = no limit configured
+          availableCredit: creditLimit > 0 ? roundMoney(creditLimit - bal.accountBalance) : null,
+          loyaltyPoints: bal.points,
+          storeCredit: bal.storeCredit,
+        },
       };
     } catch (err) {
+      return { success: false, message: err.message || 'Could not read customer balances' };
+    }
+  });
+
+  /** Customers screen: every customer with live balances and purchase stats. */
+  ipcMain.handle('customers:listAccounts', async (_event, params) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      masterSqlite.reloadFromDiskSafe();
+      const customers = masterSqlite.searchCustomers({ query: params?.query || '', limit: params?.limit || 5000 });
+      const balances = masterSqlite.getAllCustomerBalances();
+      const sales = masterSqlite.listAllLocalSales();
+      const rows = customers.map((c) => ({
+        ...c,
+        balances: balances[c.id] || { points: 0, storeCredit: 0, accountBalance: 0 },
+        stats: customerSaleStats(c.id, sales),
+      }));
+      return { success: true, data: rows };
+    } catch (err) {
+      return { success: false, message: err.message || 'Failed to load customers' };
+    }
+  });
+
+  ipcMain.handle('customers:getAccount', async (_event, customerId) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      masterSqlite.reloadFromDiskSafe();
+      const customer = masterSqlite.searchCustomers({ query: '', limit: 1000000 }).find((c) => c.id === customerId);
+      if (!customer) return { success: false, message: 'Customer not found' };
+      const sales = masterSqlite.listAllLocalSales();
+      const mySales = sales
+        .filter((s) => String(s.customerId || '') === String(customerId))
+        .map((s) => ({
+          id: s.id,
+          invoiceNumber: s.invoiceNumber || s.id,
+          createdAt: s.createdAt,
+          grandTotal: roundMoney(saleGrandTotal(s)),
+          itemsCount: (s.items || []).reduce((n, i) => n + (Number(i.quantity) || 0), 0),
+          payments: (s.payments || []).map((p) => ({ paymentMethod: p.paymentMethod, amount: Number(p.amount) || 0 })),
+          loyaltyEarned: Number(s.loyaltyEarned) || 0,
+        }));
+      const returns = (masterSqlite.listAllLocalReturns() || [])
+        .filter((r) => String(r.customerId || '') === String(customerId))
+        .map((r) => ({
+          id: r.id,
+          invoiceNumber: r.invoiceNumber || r.originalSaleId || r.saleId,
+          createdAt: r.createdAt,
+          refundAmount: Number(r.refundAmount) || roundMoney((r.items || []).reduce((n, i) => n + (Number(i.unitPrice) || 0) * (Number(i.quantity) || 0), 0)),
+          refundMethod: r.refundMethod || 'Cash',
+        }));
       return {
         success: true,
         data: {
-          creditLimit: 5000,
-          outstandingBalance: 0,
-          availableCredit: 5000,
-          loyaltyPoints: 0
-        }
+          customer,
+          balances: masterSqlite.getCustomerBalances(customerId),
+          stats: customerSaleStats(customerId, sales),
+          ledger: masterSqlite.listCustomerLedger(customerId, 500),
+          sales: mySales,
+          returns,
+        },
       };
+    } catch (err) {
+      return { success: false, message: err.message || 'Failed to load customer account' };
+    }
+  });
+
+  ipcMain.handle('customers:update', async (_event, { id, patch }) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      masterSqlite.reloadFromDiskSafe();
+      const allowed = ['name', 'phone', 'email', 'companyName', 'customerType', 'taxId', 'creditLimit', 'creditPolicy', 'creditTerms', 'notes', 'address'];
+      const clean = {};
+      for (const key of allowed) if (patch && patch[key] !== undefined) clean[key] = patch[key];
+      if (clean.creditLimit !== undefined) clean.creditLimit = Math.max(0, Number(clean.creditLimit) || 0);
+      if (clean.name !== undefined && !String(clean.name).trim()) return { success: false, message: 'Name is required' };
+      const updated = masterSqlite.updateCustomerFields(id, clean);
+      return { success: true, data: updated };
+    } catch (err) {
+      return { success: false, message: err.message || 'Failed to update customer' };
+    }
+  });
+
+  /**
+   * Manual account actions from the Customers screen:
+   *   PAYMENT       — customer pays down their on-account balance (cash/card/…)
+   *   CREDIT_ISSUE  — issue store credit (goodwill / gift) ; CREDIT_ADJUST ± correction
+   *   POINTS_ADJUST — ± points with a reason
+   */
+  ipcMain.handle('customers:postEntry', async (_event, entry) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      masterSqlite.reloadFromDiskSafe();
+      const customerId = String(entry?.customerId || '');
+      if (!masterSqlite.getCustomerById(customerId)) return { success: false, message: 'Customer not found' };
+      const action = String(entry?.action || '').toUpperCase();
+      const amount = roundMoney(entry?.amount);
+      const points = Math.round(Number(entry?.points) || 0);
+      const note = String(entry?.note || '').trim();
+      const createdBy = currentUserId(auth.session?.user);
+      const bal = masterSqlite.getCustomerBalances(customerId);
+      let row;
+      if (action === 'PAYMENT') {
+        if (!(amount > 0)) return { success: false, message: 'Enter the amount received' };
+        if (amount > bal.accountBalance + 0.009) return { success: false, message: `Balance due is only ${bal.accountBalance.toFixed(2)}` };
+        row = { kind: 'ACCOUNT', type: 'PAYMENT', amount: -amount, note: note || `Payment received (${entry.method || 'Cash'})`, reference: entry.method || 'Cash' };
+      } else if (action === 'CREDIT_ISSUE') {
+        if (!(amount > 0)) return { success: false, message: 'Enter the store credit amount' };
+        row = { kind: 'CREDIT', type: 'ISSUE', amount, note: note || 'Store credit issued' };
+      } else if (action === 'CREDIT_ADJUST') {
+        if (!amount) return { success: false, message: 'Enter the adjustment amount' };
+        if (bal.storeCredit + amount < -0.009) return { success: false, message: 'Store credit cannot go below zero' };
+        if (!note) return { success: false, message: 'A reason is required for adjustments' };
+        row = { kind: 'CREDIT', type: 'ADJUST', amount, note };
+      } else if (action === 'POINTS_ADJUST') {
+        if (!points) return { success: false, message: 'Enter the points to add or remove' };
+        if (bal.points + points < 0) return { success: false, message: 'Points cannot go below zero' };
+        if (!note) return { success: false, message: 'A reason is required for adjustments' };
+        row = { kind: 'POINTS', type: 'ADJUST', points, note };
+      } else {
+        return { success: false, message: 'Unknown action' };
+      }
+      masterSqlite.addCustomerLedgerEntries([{
+        ...row,
+        customerId,
+        createdBy,
+        reference: row.reference || `Manual ${new Date().toISOString().slice(0, 10)}`,
+      }]);
+      return { success: true, data: masterSqlite.getCustomerBalances(customerId) };
+    } catch (err) {
+      return { success: false, message: err.message || 'Failed to post entry' };
+    }
+  });
+
+  /** Raw local data for the Reports screen; aggregation happens in the renderer. */
+  ipcMain.handle('reports:getData', async (_event, params) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      masterSqlite.reloadFromDiskSafe();
+      const from = params?.from ? new Date(params.from) : new Date(0);
+      const to = params?.to ? new Date(params.to) : new Date();
+      const inRange = (iso) => {
+        const t = new Date(iso || 0).getTime();
+        return t >= from.getTime() && t <= to.getTime();
+      };
+      const sales = filterRecordsForUser(auth.session.user, masterSqlite.listAllLocalSales())
+        .filter((s) => inRange(s.createdAt))
+        .map((s) => ({ ...s, grandTotal: roundMoney(saleGrandTotal(s)) }));
+      const returns = filterRecordsForUser(auth.session.user, masterSqlite.listAllLocalReturns() || [])
+        .filter((r) => inRange(r.createdAt));
+      const customers = masterSqlite.searchCustomers({ query: '', limit: 1000000 })
+        .map((c) => ({ id: c.id, name: c.name, phone: c.phone }));
+      return {
+        success: true,
+        data: {
+          from: from.toISOString(),
+          to: to.toISOString(),
+          sales,
+          returns,
+          customers,
+          balances: masterSqlite.getAllCustomerBalances(),
+          ledger: masterSqlite.listLedgerBetween(from.toISOString(), to.toISOString()),
+        },
+      };
+    } catch (err) {
+      return { success: false, message: err.message || 'Failed to load report data' };
     }
   });
 
@@ -2897,6 +3458,12 @@ function registerIpc() {
     if (!auth.ok) return auth.result;
     
     try {
+      // Undo the customer's points / store credit / account movements for this sale
+      masterSqlite.reloadFromDiskSafe();
+      const sale = masterSqlite.listAllLocalSales().find((s) => String(s.id) === String(id));
+      if (sale) {
+        masterSqlite.reverseLedgerForReference(sale.invoiceNumber || sale.id, `Voided sale ${sale.invoiceNumber || sale.id}`);
+      }
       // Delete from local SQLite database
       masterSqlite.deleteLocalSale(id);
       return { success: true, message: 'Sale deleted from local database' };
