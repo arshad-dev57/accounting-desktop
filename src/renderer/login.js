@@ -40,11 +40,16 @@ form.addEventListener('submit', async (event) => {
       showError(result?.message || 'Invalid email or password');
       return;
     }
+    // Login IPC returns after session bind; main process navigates away.
+    submitBtn.textContent = 'Opening…';
   } catch (err) {
     showError(err.message || 'Network error');
   } finally {
-    submitBtn.disabled = false;
-    submitBtn.textContent = 'Sign in';
+    // If still on this page, re-enable (navigation may have already replaced it).
+    if (document.getElementById('submit') === submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Sign in';
+    }
   }
 });
 

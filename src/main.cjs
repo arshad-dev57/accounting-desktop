@@ -855,22 +855,20 @@ async function bindCompanyAndOpenPos(token, refreshToken, user, company) {
     console.warn('[desktop] scope cache seed failed:', err.message);
   }
 
-  try {
-    console.log('[scope] refreshing full company catalog for', companyId);
-    await masterSync.refreshCatalog(token, '');
-  } catch (err) {
-    console.warn('[scope] catalog refresh failed:', err.message);
-  }
+  // Catalog sync can take a long time on remote APIs — do not block login UI on it.
+  console.log('[scope] refreshing full company catalog for', companyId);
+  masterSync.refreshCatalog(token, '').catch((err) => {
+    console.warn('[scope] catalog refresh failed:', err?.message || err);
+  });
 
-  try {
-    const taxRes = await posApi.fetchTaxContext(token);
+  posApi.fetchTaxContext(token).then((taxRes) => {
     if (taxRes?.success && taxRes.data) {
       localDb.saveTaxContext(taxRes.data);
       console.log('[desktop] tax context cached · enabled=', Boolean(taxRes.data.enabled));
     }
-  } catch (err) {
-    console.warn('[desktop] tax context fetch failed:', err.message);
-  }
+  }).catch((err) => {
+    console.warn('[desktop] tax context fetch failed:', err?.message || err);
+  });
 
   console.log('[desktop] session ready for company', companyId, boundUser.email || boundUser.id);
   const access = await validateSessionAccess(token);

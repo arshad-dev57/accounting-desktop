@@ -1,9 +1,13 @@
 
 const config = require('./config.cjs');
 
-async function postJson(pathname, body) {
+async function postJson(pathname, body, timeoutMs = 45000) {
   const base = config.resolveApiUrl();
   const url = `${base}${pathname.startsWith('/') ? pathname : `/${pathname}`}`;
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = controller
+    ? setTimeout(() => controller.abort(), Math.max(5000, Number(timeoutMs) || 45000))
+    : null;
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -12,6 +16,7 @@ async function postJson(pathname, body) {
         Accept: 'application/json',
       },
       body: JSON.stringify(body),
+      signal: controller ? controller.signal : undefined,
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.success === false) {
@@ -23,10 +28,15 @@ async function postJson(pathname, body) {
     }
     return { success: true, status: res.status, data };
   } catch (err) {
+    const aborted = err && (err.name === 'AbortError' || /aborted/i.test(String(err.message || '')));
     return {
       success: false,
-      message: err.message || 'Cannot reach the API. Check ELECTRON_API_URL.',
+      message: aborted
+        ? 'Server took too long to respond. Check your internet / API URL.'
+        : (err.message || 'Cannot reach the API. Check ELECTRON_API_URL.'),
     };
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
