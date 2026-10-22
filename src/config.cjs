@@ -10,7 +10,7 @@ dotenv.config({ path: path.join(__dirname, '..', '.env.local'), override: true }
 
 const DEFAULT_LOCAL = 'http://127.0.0.1:3000';
 const DEFAULT_PROD = 'https://app.bisonstechs.com';
-const DEFAULT_API = 'https://bisonstechs.up.railway.app';
+const DEFAULT_API = 'https://accountbackend-production-eaf5.up.railway.app';
 
 function stripSlash(url) {
   return String(url || '').trim().replace(/\/+$/, '');
@@ -55,7 +55,7 @@ function isDesktopAllowedPath(pathname) {
 
 function isDesktopAuthPath(pathname) {
   const p = pathname || '/';
-  return p === '/login' || p.startsWith('/login/') || p === '/login-otp' || p.startsWith('/login-otp');
+  return p === '/login' || p.startsWith('/login/');
 }
 
 module.exports = {

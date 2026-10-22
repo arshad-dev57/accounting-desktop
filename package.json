@@ -10,12 +10,15 @@
     "dev:wait": "env -u ELECTRON_RUN_AS_NODE wait-on http://127.0.0.1:3000 && env -u ELECTRON_RUN_AS_NODE electron .",
     "start": "env -u ELECTRON_RUN_AS_NODE electron .",
     "build": "electron-builder",
-    "build:win": "electron-builder --win nsis",
+    "build:win": "electron-builder --win nsis --x64",
     "build:mac": "electron-builder --mac dmg zip",
+    "build:mac:arm64": "electron-builder --mac dmg zip --arm64",
+    "build:mac:x64": "electron-builder --mac dmg zip --x64",
     "build:linux": "electron-builder --linux AppImage deb",
     "copy-installer:web": "mkdir -p ../accounting-web-app/public/downloads && cp \"dist-electron/Bisonstechs POS-\"*\"-mac-arm64.dmg\" ../accounting-web-app/public/downloads/Bisonstechs-POS-1.0.0-mac-arm64.dmg"
   },
   "dependencies": {
+    "adm-zip": "^0.6.0",
     "dotenv": "^16.6.1",
     "electron-updater": "^6.6.2",
     "qrcode": "^1.5.4",

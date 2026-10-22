@@ -14,9 +14,12 @@ files:
   - "!**/*.map"
 
 asar: true
+# sql.js loads WASM from node_modules at runtime (must not stay inside asar only).
+asarUnpack:
+  - node_modules/sql.js/**/*
 
 win:
-  icon: assets/icon.png
+  icon: assets/icon.ico
   target:
     - target: nsis
       arch:
@@ -29,8 +32,8 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Bisonstechs POS
-  installerIcon: assets/icon.png
-  uninstallerIcon: assets/icon.png
+  installerIcon: assets/icon.ico
+  uninstallerIcon: assets/icon.ico
 
 mac:
   icon: assets/icon.png

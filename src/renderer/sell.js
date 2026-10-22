@@ -39,6 +39,25 @@ function restaurantFmtTime(iso) {
 }
 
 let restaurantReadyPoll = null;
+let isRestaurantPos = false;
+const restaurantOrderVersions = new Map();
+const restaurantReadyFilters = {
+  tableLabel: '',
+  orderType: '',
+  ticketNumber: '',
+};
+
+function restaurantWaiterName(order) {
+  const w = order?.waiter;
+  if (!w) return '';
+  return `${w.firstName || ''} ${w.lastName || ''}`.trim();
+}
+
+function restaurantOrderTypeLabel(type) {
+  if (type === 'takeaway') return 'Takeaway';
+  if (type === 'delivery') return 'Delivery';
+  return 'Dine in';
+}
 
 function showToast(message, type = 'info') {
   console.log('[POS]', message);
@@ -61,109 +80,56 @@ function showToast(message, type = 'info') {
 }
 
 function currentLocationId() {
-  if (window.bisonLocation) {
-    const picked = bisonLocation.effectiveId(bisonLocation.getStoredLocationId());
-    if (picked) return picked;
+  // Optional stamp from active terminal only — catalog is company-wide
+  return currentTerminal?.locationId || currentTerminal?.location?.id || '';
+}
+
+function applyCompanyBranding(profile) {
+  const name =
+    profile?.companyName ||
+    profile?.company?.name ||
+    profile?.organizationName ||
+    profile?.businessDetails?.companyName ||
+    profile?.businessDetails?.businessName ||
+    '';
+  const logo =
+    profile?.logo ||
+    profile?.company?.logo ||
+    profile?.businessDetails?.logo ||
+    '';
+
+  const brandEl = document.getElementById('company-brand-name') || document.querySelector('.top-brand b');
+  if (brandEl && name) {
+    brandEl.textContent = name;
   }
-  return selectedLocation?.id || currentTerminal?.locationId || currentTerminal?.location?.id || '';
+
+  const logoEl = document.getElementById('company-logo');
+  if (logoEl) {
+    if (logo) {
+      logoEl.src = logo;
+      logoEl.alt = name || 'Company';
+      logoEl.classList.remove('hidden');
+    } else {
+      logoEl.removeAttribute('src');
+      logoEl.classList.add('hidden');
+    }
+  }
+
+  try {
+    document.title = name ? `${name} POS` : 'POS';
+  } catch (_) { /* ignore */ }
 }
 
 async function initLocationPicker() {
-  const select = document.getElementById('location-select');
-  if (!select) return;
-
-  let isAdmin = false;
-  try {
-    const session = await api.auth.getSession();
-    isAdmin = !!(session?.isAdmin || isAdminRole(session?.user?.role));
-  } catch (_) { /* ignore */ }
-
-  // Load from local cache (already scoped by main process for non-admins)
-  try {
-    const res = await api.pos.listLocations();
-    locationList = Array.isArray(res?.data) ? res.data : [];
-    if (res?.isAdmin != null) isAdmin = !!res.isAdmin;
-  } catch (err) {
-    locationList = [];
-  }
-
-  const preferred =
-    (window.bisonLocation ? bisonLocation.getStoredLocationId() : '') ||
-    currentTerminal?.locationId ||
-    currentTerminal?.location?.id ||
-    '';
-
-  if (window.bisonLocation) {
-    // Admins can pick "All locations"; normal users only see their assigned ones
-    const chosen = bisonLocation.fillLocationSelect(select, locationList, preferred, {
-      allowAll: isAdmin,
-    });
-    bisonLocation.setStoredLocationId(chosen);
-    applySelectedLocation(chosen);
-  } else {
-    applySelectedLocation(preferred);
-  }
-
-  // Lock picker when non-admin has only one location
-  if (!isAdmin) {
-    if (locationList.length <= 1) {
-      select.disabled = true;
-      select.title = 'Your assigned location';
-    } else {
-      select.disabled = false;
-      select.title = 'Your assigned locations';
-    }
-  } else {
-    select.disabled = false;
-    select.title = '';
-  }
-
-  select.addEventListener('change', () => {
-    void onLocationChanged(select.value);
-  });
+  // Warehouse location picker removed — POS is company-scoped
 }
 
 function applySelectedLocation(id) {
-  const effective = window.bisonLocation ? bisonLocation.effectiveId(id) : String(id || '');
-  selectedLocation =
-    locationList.find((l) => l.id === effective) ||
-    (effective ? { id: effective } : currentTerminal?.location || {});
+  selectedLocation = currentTerminal?.location || (id ? { id } : {});
 }
 
-async function onLocationChanged(id) {
-  if (window.bisonLocation) bisonLocation.setStoredLocationId(id);
-  applySelectedLocation(id);
-
-  const locationId = window.bisonLocation ? bisonLocation.effectiveId(id) : String(id || '');
-
-  try {
-    if (typeof showToast === 'function') {
-      showToast(locationId ? 'Loading catalog for this location…' : 'Loading full catalog…', 'info');
-    }
-    const catalog = await api.pos.syncMasterData({
-      refresh: true,
-      locationId: locationId || undefined,
-      skipReload: true,
-    });
-    if (catalog?.success && typeof applySyncedCatalog === 'function') {
-      await applySyncedCatalog(catalog);
-    }
-    if (window.bisonLocation) bisonLocation.setLastSyncedLocationId(locationId);
-    if (typeof showToast === 'function' && catalog?.success) {
-      const n = catalog.counts?.products || 0;
-      showToast(`Location catalog ready · ${n} products`, 'success');
-    }
-  } catch (err) {
-    console.warn('[location] catalog refresh failed:', err);
-    if (typeof showToast === 'function') {
-      showToast(err?.message || 'Could not refresh location catalog', 'error');
-    }
-  }
-
-  await loadCategories();
-  await loadCategoryProducts(selectedCategoryId || 'All');
-  if (typeof loadLocalCatalog === 'function') loadLocalCatalog();
-  if (typeof loadLocalProducts === 'function') loadLocalProducts();
+async function onLocationChanged() {
+  // no-op: catalog is always company-wide
 }
 
 // State management
@@ -244,6 +210,157 @@ const modalManagerPin = document.getElementById('modal-manager-pin');
 
 let customerSearchTimeout = null;
 
+function receiptTpl() {
+  return window.PosReceipt ? window.PosReceipt.loadReceiptTemplate() : {};
+}
+
+function isAskCashReceived() {
+  return !!receiptTpl().askCashReceived;
+}
+
+function shouldAskCashReceived() {
+  if (!isAskCashReceived()) return false;
+  const method = String(payments[0]?.paymentMethod || 'Cash').toLowerCase();
+  return method === 'cash';
+}
+
+function updateReceiptLogoPreview(logo) {
+  const wrap = document.getElementById('rset-logo-preview-wrap');
+  const img = document.getElementById('rset-logo-preview');
+  const hidden = document.getElementById('rset-store-logo');
+  const urlInp = document.getElementById('rset-logo-url');
+  if (hidden) hidden.value = logo || '';
+  if (urlInp) {
+    urlInp.value = logo && !String(logo).startsWith('data:') ? logo : '';
+  }
+  if (wrap && img) {
+    if (logo) {
+      img.src = logo;
+      wrap.style.display = 'flex';
+    } else {
+      img.removeAttribute('src');
+      wrap.style.display = 'none';
+    }
+  }
+}
+
+function collectReceiptSettingsForm() {
+  const next = { ...receiptTpl() };
+  const map = {
+    'rset-header': 'receiptHeader',
+    'rset-footer': 'receiptFooter',
+    'rset-policy': 'receiptReturnPolicy',
+    'rset-notes': 'receiptNotes',
+    'rset-store-name': 'storeName',
+    'rset-store-address': 'storeAddress',
+    'rset-phone': 'phone',
+  };
+  for (const [id, key] of Object.entries(map)) {
+    const el = document.getElementById(id);
+    if (el) next[key] = el.value;
+  }
+  const hiddenLogo = document.getElementById('rset-store-logo');
+  const urlLogo = document.getElementById('rset-logo-url');
+  const fromHidden = hiddenLogo?.value || '';
+  const fromUrl = (urlLogo?.value || '').trim();
+  next.storeLogo = fromUrl || fromHidden || '';
+  if (next.storeLogo) next.showLogo = true;
+  const width = document.getElementById('rset-paper-width');
+  if (width) next.thermalPaperWidthMm = Number(width.value) === 58 ? 58 : 80;
+  const ask = document.getElementById('rset-ask-cash');
+  if (ask) next.askCashReceived = ask.checked;
+  document.querySelectorAll('[data-rset-toggle]').forEach((cb) => {
+    next[cb.dataset.rsetToggle] = cb.checked;
+  });
+  return next;
+}
+
+function renderReceiptSettingsPreview() {
+  const box = document.getElementById('receipt-settings-preview');
+  if (!box || !window.PosReceipt) return;
+  const next = collectReceiptSettingsForm();
+  const company = window.PosReceipt.resolveReceiptCompany(companyProfile, next);
+  box.innerHTML = window.PosReceipt.buildReceiptHtml(
+    window.PosReceipt.sampleReceiptSale(),
+    company,
+    next
+  );
+}
+
+function fillReceiptSettingsForm() {
+  const tpl = receiptTpl();
+  const setVal = (id, v) => {
+    const el = document.getElementById(id);
+    if (el) el.value = v || '';
+  };
+  setVal('rset-header', tpl.receiptHeader);
+  setVal('rset-footer', tpl.receiptFooter);
+  setVal('rset-policy', tpl.receiptReturnPolicy);
+  setVal('rset-notes', tpl.receiptNotes);
+  setVal('rset-store-name', tpl.storeName);
+  setVal('rset-store-address', tpl.storeAddress);
+  setVal('rset-phone', tpl.phone);
+  updateReceiptLogoPreview(tpl.storeLogo || '');
+  const width = document.getElementById('rset-paper-width');
+  if (width) width.value = Number(tpl.thermalPaperWidthMm) === 58 ? '58' : '80';
+  const ask = document.getElementById('rset-ask-cash');
+  if (ask) ask.checked = !!tpl.askCashReceived;
+  document.querySelectorAll('[data-rset-toggle]').forEach((cb) => {
+    cb.checked = tpl[cb.dataset.rsetToggle] !== false;
+  });
+  const logoFile = document.getElementById('rset-logo-file');
+  if (logoFile && !logoFile.dataset.bound) {
+    logoFile.dataset.bound = '1';
+    logoFile.addEventListener('change', () => {
+      const file = logoFile.files && logoFile.files[0];
+      logoFile.value = '';
+      if (!file) return;
+      if (file.size > 1.5 * 1024 * 1024) {
+        alert('Logo must be under 1.5 MB');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        updateReceiptLogoPreview(String(reader.result || ''));
+        const showLogo = document.querySelector('[data-rset-toggle="showLogo"]');
+        if (showLogo) showLogo.checked = true;
+        renderReceiptSettingsPreview();
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+  const logoRemove = document.getElementById('rset-logo-remove');
+  if (logoRemove && !logoRemove.dataset.bound) {
+    logoRemove.dataset.bound = '1';
+    logoRemove.addEventListener('click', () => {
+      updateReceiptLogoPreview('');
+      const urlInp = document.getElementById('rset-logo-url');
+      if (urlInp) urlInp.value = '';
+      renderReceiptSettingsPreview();
+    });
+  }
+  const logoUrl = document.getElementById('rset-logo-url');
+  if (logoUrl && !logoUrl.dataset.bound) {
+    logoUrl.dataset.bound = '1';
+    logoUrl.addEventListener('input', () => {
+      const v = logoUrl.value.trim();
+      if (v) updateReceiptLogoPreview(v);
+      renderReceiptSettingsPreview();
+    });
+  }
+  renderReceiptSettingsPreview();
+}
+
+function saveReceiptSettings() {
+  if (!window.PosReceipt) {
+    alert('Receipt helper not loaded');
+    return;
+  }
+  window.PosReceipt.saveReceiptTemplate(collectReceiptSettingsForm());
+  renderReceiptSettingsPreview();
+  alert('Receipt settings saved on this computer');
+}
+
 function loadLocalSettings() {
   try {
     const raw = localStorage.getItem('pos_settings');
@@ -258,6 +375,7 @@ function loadLocalSettings() {
   document.getElementById('settings-enable-scanner').checked = posSettings.enableBarcodeScanner;
   document.getElementById('settings-enable-terminal').checked = posSettings.enablePaymentTerminal;
   document.getElementById('settings-enable-thermal').checked = posSettings.autoPrintOnSale;
+  fillReceiptSettingsForm();
 }
 
 function saveLocalSettings() {
@@ -270,6 +388,9 @@ function saveLocalSettings() {
 }
 
 document.getElementById('btn-save-settings').addEventListener('click', saveLocalSettings);
+document.getElementById('btn-save-receipt-settings')?.addEventListener('click', saveReceiptSettings);
+document.getElementById('receipt-settings-card')?.addEventListener('input', renderReceiptSettingsPreview);
+document.getElementById('receipt-settings-card')?.addEventListener('change', renderReceiptSettingsPreview);
 
 function specItem(label, value) {
   return `<div class="spec-item"><span>${label}</span><b>${value || '—'}</b></div>`;
@@ -320,12 +441,185 @@ async function loadMachineInfo() {
   } catch (err) {
     osEl.textContent = err.message || 'Could not read machine details';
   }
+  try { await loadDriveBackupSettings(); } catch (e) { console.warn('backup settings', e); }
 }
+
+function formatBackupWhen(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+
+function renderBackupStatus(data) {
+  const guideEl = document.getElementById('backup-guide');
+  const statusEl = document.getElementById('backup-status-line');
+  if (guideEl && data?.guide?.points) {
+    guideEl.innerHTML = `<b>${data.guide.title || 'Guide'}</b><ol>${data.guide.points.map((p) => `<li>${p}</li>`).join('')}</ol>`;
+  }
+  if (statusEl) {
+    const conn = data.connected
+      ? `Connected as <b>${data.accountEmail || 'Google account'}</b>`
+      : 'Not connected to Google Drive';
+    const oauth = data.hasOAuthConfig ? 'OAuth credentials ready' : 'OAuth Client ID/Secret missing';
+    const last = data.lastBackupAt
+      ? `Last backup: ${formatBackupWhen(data.lastBackupAt)} (${data.lastBackupStatus || '—'})`
+      : 'No backup yet';
+    const err = data.lastBackupError ? `<br><span style="color:#b91c1c;">${data.lastBackupError}</span>` : '';
+    statusEl.innerHTML = `${conn} · ${oauth}<br>${last}${err}<br>Drive folder: <b>${data.folderName || 'Bisonstechs POS Backups'}</b>`;
+  }
+  const en = document.getElementById('backup-enabled');
+  if (en) en.checked = Boolean(data.enabled);
+  const times = data.times || ['08:00', '14:00', '22:00'];
+  ['backup-time-1', 'backup-time-2', 'backup-time-3'].forEach((id, i) => {
+    const el = document.getElementById(id);
+    if (el) el.value = times[i] || '';
+  });
+  const cid = document.getElementById('backup-client-id');
+  if (cid && data.clientId) cid.value = data.clientId;
+}
+
+async function loadDriveBackupSettings() {
+  if (!api?.backup?.getStatus) return;
+  const res = await api.backup.getStatus();
+  if (!res?.success) throw new Error(res?.message || 'Failed to load backup settings');
+  renderBackupStatus(res.data || {});
+}
+
+async function saveDriveBackupSettings() {
+  const times = [
+    document.getElementById('backup-time-1')?.value,
+    document.getElementById('backup-time-2')?.value,
+    document.getElementById('backup-time-3')?.value,
+  ].filter(Boolean);
+  const payload = {
+    enabled: Boolean(document.getElementById('backup-enabled')?.checked),
+    times,
+    clientId: document.getElementById('backup-client-id')?.value || '',
+  };
+  const secret = document.getElementById('backup-client-secret')?.value || '';
+  if (secret.trim()) payload.clientSecret = secret.trim();
+  const res = await api.backup.saveSettings(payload);
+  if (!res?.success) {
+    alert(res?.message || 'Failed to save');
+    return;
+  }
+  if (document.getElementById('backup-client-secret')) {
+    document.getElementById('backup-client-secret').value = '';
+  }
+  renderBackupStatus(res.data || {});
+  alert('Backup settings saved on this computer');
+}
+
+async function connectGoogleDrive() {
+  const statusEl = document.getElementById('backup-status-line');
+  if (statusEl) statusEl.textContent = 'Opening Google sign-in in your browser…';
+  const res = await api.backup.connect();
+  if (!res?.success) {
+    alert(res?.message || 'Google connect failed');
+    await loadDriveBackupSettings();
+    return;
+  }
+  renderBackupStatus(res.data || {});
+  alert('Google Drive connected');
+}
+
+async function disconnectGoogleDrive() {
+  if (!confirm('Disconnect Google Drive from this POS?')) return;
+  const res = await api.backup.disconnect();
+  if (!res?.success) {
+    alert(res?.message || 'Disconnect failed');
+    return;
+  }
+  renderBackupStatus(res.data || {});
+}
+
+async function runBackupNow() {
+  const statusEl = document.getElementById('backup-status-line');
+  if (statusEl) statusEl.textContent = 'Uploading backup to Google Drive…';
+  const res = await api.backup.runNow();
+  if (!res?.success) {
+    alert(res?.message || 'Backup failed');
+    await loadDriveBackupSettings();
+    return;
+  }
+  await loadDriveBackupSettings();
+  alert('Backup uploaded to Google Drive');
+}
+
+async function refreshDriveBackupList() {
+  const select = document.getElementById('backup-restore-select');
+  if (!select) return;
+  select.innerHTML = '<option value="">Loading…</option>';
+  const res = await api.backup.list();
+  if (!res?.success) {
+    select.innerHTML = '<option value="">— Failed to load —</option>';
+    alert(res?.message || 'Could not list backups');
+    return;
+  }
+  const files = res.data || [];
+  if (!files.length) {
+    select.innerHTML = '<option value="">— No backups found —</option>';
+    return;
+  }
+  select.innerHTML = files
+    .map((f) => {
+      const when = formatBackupWhen(f.createdTime || f.modifiedTime);
+      const sizeKb = f.size ? `${Math.round(f.size / 1024)} KB` : '';
+      return `<option value="${f.id}">${when} — ${f.name}${sizeKb ? ` (${sizeKb})` : ''}</option>`;
+    })
+    .join('');
+}
+
+async function restoreSelectedBackup() {
+  const fileId = document.getElementById('backup-restore-select')?.value;
+  if (!fileId) {
+    alert('Select a backup from the list first');
+    return;
+  }
+  const ok = confirm(
+    'Restore this backup?\n\nThis overwrites POS data on THIS computer only.\nYour cloud/Railway server will NOT change.\nA local safety zip is created first when possible.'
+  );
+  if (!ok) return;
+  const statusEl = document.getElementById('backup-status-line');
+  if (statusEl) statusEl.textContent = 'Restoring from Google Drive…';
+  const res = await api.backup.restore(fileId);
+  if (!res?.success) {
+    alert(res?.message || 'Restore failed');
+    await loadDriveBackupSettings();
+    return;
+  }
+  alert(res.data?.message || 'Restore complete. Reloading…');
+  window.location.reload();
+}
+
+document.getElementById('btn-backup-save')?.addEventListener('click', () => {
+  saveDriveBackupSettings().catch((e) => alert(e.message || 'Save failed'));
+});
+document.getElementById('btn-backup-connect')?.addEventListener('click', () => {
+  connectGoogleDrive().catch((e) => alert(e.message || 'Connect failed'));
+});
+document.getElementById('btn-backup-disconnect')?.addEventListener('click', () => {
+  disconnectGoogleDrive().catch((e) => alert(e.message || 'Disconnect failed'));
+});
+document.getElementById('btn-backup-now')?.addEventListener('click', () => {
+  runBackupNow().catch((e) => alert(e.message || 'Backup failed'));
+});
+document.getElementById('btn-backup-refresh-list')?.addEventListener('click', () => {
+  refreshDriveBackupList().catch((e) => alert(e.message || 'List failed'));
+});
+document.getElementById('btn-backup-restore')?.addEventListener('click', () => {
+  restoreSelectedBackup().catch((e) => alert(e.message || 'Restore failed'));
+});
 
 // Boot Check
 async function boot() {
   window.__bootSteps.push('boot start');
   try { loadLocalSettings(); } catch (e) { window.__bootSteps.push('loadLocalSettings err: ' + e.message); }
+
+  await setupRestaurantUi();
 
   // 1. Get shift
   window.__bootSteps.push('calling getCurrentShift');
@@ -341,9 +635,7 @@ async function boot() {
   currentCashier = activeShift.cashier || {};
   currentTerminal = activeShift.terminal || {};
   selectedLocation = currentTerminal.location || {};
-  await initLocationPicker();
-  window.__bootSteps.push('initLocationPicker done');
-  const locId = currentLocationId();
+  window.__bootSteps.push('shift context ready');
 
   // Don't auto-sync on boot - let user manually sync or sync in background
   // This prevents app from getting stuck on slow network
@@ -354,6 +646,7 @@ async function boot() {
   window.__bootSteps.push('getProfile done: ' + profRes?.success);
   if (profRes?.success) {
     companyProfile = profRes.data;
+    applyCompanyBranding(companyProfile);
   }
 
   // Get Tax context (company Tax Compliance from web → local cache)
@@ -370,7 +663,9 @@ async function boot() {
   // Set top information
   cashierMetaEl.textContent = `Cashier: ${[currentCashier.firstName, currentCashier.lastName].filter(Boolean).join(' ') || currentCashier.email || 'Cashier'}`;
 
-  terminalBadgeEl.textContent = `${currentTerminal.name || 'Terminal'}`;
+  terminalBadgeEl.textContent = currentTerminal.location?.name
+    ? `${currentTerminal.name || 'Terminal'} · ${currentTerminal.location.name}`
+    : `${currentTerminal.name || 'Terminal'} · All inventory`;
 
   setInterval(() => {
     const d = new Date();
@@ -383,7 +678,6 @@ async function boot() {
   }, 1000);
 
   setupTabs();
-  await setupRestaurantUi();
 
   const stashed = readStashedCatalog();
   if (stashed && stashed.length) {
@@ -405,12 +699,17 @@ async function setupRestaurantUi() {
   const user = session?.user || {};
   if (resolvePosMode(user) !== 'restaurant') return;
 
+  isRestaurantPos = true;
+  applyRestaurantBranding(user);
+
   if (isKitchenRole(user.role)) {
     await api.pos.enterRestaurantPos('kitchen');
     return;
   }
 
   document.getElementById('tab-btn-ready-orders')?.classList.remove('hidden');
+  const readyTabLabel = document.querySelector('#tab-btn-ready-orders span');
+  if (readyTabLabel) readyTabLabel.textContent = 'Ready orders';
 
   const kitchenBtn = document.getElementById('btn-kitchen-display');
   if (kitchenBtn && isManagerRole(user.role)) {
@@ -418,8 +717,24 @@ async function setupRestaurantUi() {
     kitchenBtn.addEventListener('click', () => api.pos.enterRestaurantPos('kitchen'));
   }
 
+  document.getElementById('btn-send-kitchen')?.addEventListener('click', () => {
+    sendCartToKitchen().catch((err) => showToast(err.message, 'error'));
+  });
+
   document.getElementById('btn-refresh-ready-orders')?.addEventListener('click', () => {
     refreshRestaurantReadyOrders().catch((err) => showToast(err.message, 'error'));
+  });
+
+  ['ready-filter-table', 'ready-filter-type', 'ready-filter-ticket'].forEach((id) => {
+    document.getElementById(id)?.addEventListener('input', () => {
+      restaurantReadyFilters.tableLabel =
+        document.getElementById('ready-filter-table')?.value?.trim() || '';
+      restaurantReadyFilters.orderType =
+        document.getElementById('ready-filter-type')?.value || '';
+      restaurantReadyFilters.ticketNumber =
+        document.getElementById('ready-filter-ticket')?.value?.trim() || '';
+      refreshRestaurantReadyOrders().catch(() => {});
+    });
   });
 
   document.getElementById('ready-orders-list')?.addEventListener('click', async (e) => {
@@ -437,24 +752,125 @@ async function setupRestaurantUi() {
   }, 5000);
 }
 
+function applyRestaurantBranding(user) {
+  document.documentElement.classList.add('pos-mode-restaurant');
+  document.body.classList.add('pos-mode-restaurant');
+  const brand = document.getElementById('company-brand-name') || document.querySelector('.top-brand b');
+  const companyName =
+    companyProfile?.companyName ||
+    companyProfile?.company?.name ||
+    companyProfile?.organizationName ||
+    '';
+  if (brand) brand.textContent = companyName ? `${companyName} · Restaurant` : 'Restaurant POS';
+  document.getElementById('restaurant-mode-badge')?.classList.remove('hidden');
+  document.getElementById('restaurant-order-panel')?.classList.remove('hidden');
+
+  const sellTab = document.querySelector('.tab-btn[data-tab="sell"] span');
+  if (sellTab) sellTab.textContent = 'New order';
+
+  const tableInp = document.getElementById('restaurant-table');
+  if (tableInp && !tableInp.value) tableInp.value = '1';
+}
+
+function newRestaurantClientRequestId() {
+  return `pos-d-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function sendCartToKitchen() {
+  if (!isRestaurantPos) return;
+  if (!cart.length) {
+    showToast('Add at least one item to the cart', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('btn-send-kitchen');
+  const prevLabel = btn?.textContent || 'Send to Kitchen';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Sending to kitchen…';
+  }
+
+  try {
+    const lines = cart.map((item) => ({
+      productId: item.productId || null,
+      productName: item.productName,
+      sku: item.sku || '',
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      notes: item.lineNotes || '',
+    }));
+
+    const res = await api.pos.restaurantCreateOrder({
+      tableLabel: document.getElementById('restaurant-table')?.value?.trim() || '',
+      orderType: document.getElementById('restaurant-order-type')?.value || 'dine_in',
+      notes: document.getElementById('restaurant-notes')?.value?.trim() || '',
+      locationId: currentLocationId() || undefined,
+      shiftId: activeShift?.id || undefined,
+      terminalId: activeShift?.terminalId || undefined,
+      clientRequestId: newRestaurantClientRequestId(),
+      lines,
+    });
+
+    if (!res?.success) {
+      throw new Error(res?.message || 'Could not send order to kitchen');
+    }
+
+    const ticket = res.data?.ticketNumber ?? res.data?.ticket ?? '—';
+    showToast(`Sent to kitchen · Ticket #${ticket}`, 'success');
+    cart.length = 0;
+    renderCartList();
+    const notesEl = document.getElementById('restaurant-notes');
+    if (notesEl) notesEl.value = '';
+  } finally {
+    if (btn) {
+      btn.textContent = prevLabel;
+      btn.disabled = cart.length === 0;
+    }
+  }
+}
+
 function renderRestaurantReadyOrders(orders) {
   const root = document.getElementById('ready-orders-list');
   if (!root) return;
-  if (!orders.length) {
+
+  let list = orders || [];
+  if (restaurantReadyFilters.tableLabel) {
+    const q = restaurantReadyFilters.tableLabel.toLowerCase();
+    list = list.filter((o) => String(o.tableLabel || '').toLowerCase().includes(q));
+  }
+  if (restaurantReadyFilters.orderType) {
+    list = list.filter((o) => o.orderType === restaurantReadyFilters.orderType);
+  }
+  if (restaurantReadyFilters.ticketNumber) {
+    list = list.filter((o) =>
+      String(o.ticketNumber || '').includes(restaurantReadyFilters.ticketNumber)
+    );
+  }
+
+  if (!list.length) {
     root.innerHTML =
-      '<div style="padding:32px;text-align:center;color:var(--muted);">No orders ready for payment yet.</div>';
+      '<div style="padding:32px;text-align:center;color:var(--muted);">No orders ready for payment.</div>';
     return;
   }
-  root.innerHTML = orders
-    .map(
-      (o) => `
-    <div class="ready-order-card" data-id="${o.id}">
+
+  root.innerHTML = list
+    .map((o) => {
+      restaurantOrderVersions.set(o.id, o.version);
+      const t = o.timing || {};
+      const waiter = restaurantWaiterName(o);
+      const served = o.servedAt ? ' · Served' : '';
+      return `
+    <div class="ready-order-card" data-id="${o.id}" data-version="${o.version || ''}">
       <div class="ticket-head">
         <div>
-          <b>Ticket #${o.ticketNumber || '—'} · ${o.tableLabel || 'Table'}</b>
-          <div style="font-size:12px;color:var(--muted);">Ready ${restaurantFmtTime(o.readyAt)}</div>
+          <b>Ticket #${o.ticketNumber || '—'} · ${o.tableLabel ? `Table ${o.tableLabel}` : restaurantOrderTypeLabel(o.orderType)}</b>
+          <div style="font-size:12px;color:var(--muted);">
+            Ready ${restaurantFmtTime(o.readyAt)}
+            ${waiter ? ` · ${waiter}` : ''}${served}
+            ${t.totalMinutes != null ? ` · ${t.totalMinutes} min total` : ''}
+          </div>
         </div>
-        <span class="badge-ready">READY</span>
+        <span class="badge-ready">${o.servedAt ? 'SERVED' : 'READY'}</span>
       </div>
       <div class="lines">${(o.lines || [])
         .map((l) => `<div>${l.quantity}× ${l.productName} — ${restaurantMoney(l.lineTotal)}</div>`)
@@ -462,16 +878,19 @@ function renderRestaurantReadyOrders(orders) {
       <div><strong>Total: ${restaurantMoney(o.grandTotal)}</strong></div>
       <div class="pay-row">
         <label style="font-size:12px;font-weight:600;">Cash received</label>
-        <input type="number" min="0" step="0.01" value="${Number(o.grandTotal || 0).toFixed(2)}" data-cash="${o.id}" />
+        <input type="number" min="0" step="0.01" ${isAskCashReceived() ? 'value="" placeholder="Customer paid"' : `value="${Number(o.grandTotal || 0).toFixed(2)}"`} data-cash="${o.id}" />
         <button type="button" class="btn-pay-ready" data-action="pay-ready" data-id="${o.id}">Take payment</button>
       </div>
-    </div>`
-    )
+    </div>`;
+    })
     .join('');
 }
 
 async function refreshRestaurantReadyOrders() {
-  const res = await api.pos.restaurantReadyQueue();
+  const query = {};
+  if (restaurantReadyFilters.tableLabel) query.tableLabel = restaurantReadyFilters.tableLabel;
+  if (restaurantReadyFilters.orderType) query.orderType = restaurantReadyFilters.orderType;
+  const res = await api.pos.restaurantReadyQueue(query);
   if (res?.success) renderRestaurantReadyOrders(res.data || []);
 }
 
@@ -516,7 +935,7 @@ async function payRestaurantReadyOrder(btn) {
         discount: 0,
         taxRate: 0,
       })),
-      payments: [{ paymentMethod: 'Cash', amount: Number(order.grandTotal), reference: '' }],
+      payments: [{ paymentMethod: 'Cash', amount: paid, reference: '' }],
       discountTotal: 0,
       taxTotal: Number(order.taxTotal || 0),
       notes: `Restaurant ticket #${order.ticketNumber || ''}`,
@@ -528,7 +947,12 @@ async function payRestaurantReadyOrder(btn) {
       return;
     }
 
-    const markRes = await api.pos.restaurantMarkPaid({ orderId, posSaleId: saleId });
+    const markRes = await api.pos.restaurantMarkPaid({
+      orderId,
+      posSaleId: saleId,
+      expectedVersion: restaurantOrderVersions.get(orderId) ?? order.version,
+      paymentIdempotencyKey: saleId,
+    });
     if (!markRes?.success) {
       console.warn('Order paid locally but API mark failed:', markRes?.message);
     }
@@ -615,7 +1039,10 @@ function setupTabs() {
       if (targetTab === 'sales') { try { loadSalesRegister(); } catch (e) { console.warn('loadSalesRegister not defined', e); } }
       if (targetTab === 'categories') { try { loadLocalCatalog(); } catch (e) { console.warn('loadLocalCatalog not defined', e); } }
       if (targetTab === 'products') { try { loadLocalProducts(); } catch (e) { console.warn('loadLocalProducts not defined', e); } }
-      if (targetTab === 'settings') { try { loadMachineInfo(); } catch (e) { console.warn('loadMachineInfo not defined', e); } }
+      if (targetTab === 'settings') {
+        try { loadMachineInfo(); } catch (e) { console.warn('loadMachineInfo not defined', e); }
+        try { fillReceiptSettingsForm(); } catch (e) { console.warn('fillReceiptSettingsForm not defined', e); }
+      }
       if (targetTab === 'stock') { try { loadStockPanel(); } catch (e) { console.warn('loadStockPanel not defined', e); } }
       if (targetTab === 'returns') { try { loadReturnHistory(); } catch (e) { console.warn('loadReturnHistory not defined', e); } }
       if (targetTab === 'ready-orders') { try { refreshRestaurantReadyOrders(); } catch (e) { console.warn('refreshRestaurantReadyOrders not defined', e); } }
@@ -672,7 +1099,6 @@ async function updateOfflineCount() {
       if (msg) msg.textContent = 'Pulling the latest catalog from the cloud…';
       const catalog = await api.pos.syncMasterData({
         refresh: true,
-        locationId: currentLocationId(),
         skipReload: true,
       });
 
@@ -687,7 +1113,6 @@ async function updateOfflineCount() {
         const n = catalog.counts?.products || 0;
         const c = catalog.counts?.categories || 0;
         const u = catalog.counts?.customers || 0;
-        if (window.bisonLocation) bisonLocation.setLastSyncedLocationId(currentLocationId());
 
         // Build sales sync summary for toast
         let salesToast = '';
@@ -1359,6 +1784,8 @@ function calculateTotals() {
   if (btnCreditSale) btnCreditSale.disabled = disabled;
   if (btnHoldSaleTrigger) btnHoldSaleTrigger.disabled = disabled;
   if (btnClearCart) btnClearCart.style.display = disabled ? 'none' : 'block';
+  const btnSendKitchen = document.getElementById('btn-send-kitchen');
+  if (btnSendKitchen && isRestaurantPos) btnSendKitchen.disabled = disabled;
 
   return { subtotal, discountTotal, taxTotal: finalTax, grandTotal };
 }
@@ -1372,23 +1799,82 @@ function resolveTaxRate(raw) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function addProductToCart(p) {
-  const stock = p.currentStock ?? p.availableStock ?? 0;
+function isFractionalUnitName(unit) {
+  const u = String(unit || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!u) return false;
+  if (/^(KG|KGS|G|GS|GRAM|GRAMS|KILOGRAM|KILOGRAMS|LTR|L|LITRE|LITER|LITRES|LITERS|ML|M|MTR|METER|METRE)$/.test(u)) return true;
+  return u.includes('KILO') || u.includes('GRAM') || u.includes('LITR') || u.includes('MILLI') || u.includes('METR');
+}
 
-  // Block adding if stock is 0
-  if (stock <= 0) {
+function weightQuickAmounts(unit) {
+  const u = String(unit || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (u === 'G' || u.includes('GRAM')) return [50, 100, 250, 500, 750, 1000];
+  if (u === 'ML' || u.includes('MILLI')) return [50, 100, 250, 500, 750, 1000];
+  return [0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 5];
+}
+
+function formatSellQty(qty, unit) {
+  const n = Number(qty) || 0;
+  const text = Number.isInteger(n) ? String(n) : String(Math.round(n * 1000) / 1000);
+  const u = String(unit || '').trim();
+  return u ? `${text} ${u}` : text;
+}
+
+function resolveUom(p = {}) {
+  const stockUnit = String(p.stockUnitName || p.stockUnit || 'Pcs').trim() || 'Pcs';
+  const salesUnit = String(p.salesUnitName || p.unitName || stockUnit).trim() || stockUnit;
+  const salesFactor = Number(p.salesConversionFactor) > 0 ? Number(p.salesConversionFactor) : 1;
+  const allowFractional = Boolean(
+    p.allowFractionalQty || isFractionalUnitName(stockUnit) || isFractionalUnitName(salesUnit)
+  );
+  return { stockUnit, salesUnit, salesFactor, allowFractional, step: allowFractional ? 0.1 : 1 };
+}
+
+/** POS keeps 3 decimals so 1.5 KG works even if product was saved as Pcs. */
+function normalizeCartQty(qty) {
+  const n = Number(qty);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.round(n * 1000) / 1000;
+}
+
+function maxSellable(p) {
+  const uom = resolveUom(p);
+  const avail = Number(p.availableStock ?? p.currentStock ?? 0) || 0;
+  if (uom.salesFactor <= 0) return 0;
+  return normalizeCartQty(Math.max(0, avail / uom.salesFactor));
+}
+
+function commitProductQtyToCart(p, rawQty, mode = 'add') {
+  const uom = resolveUom(p);
+  const maxQty = maxSellable(p);
+  const qty = normalizeCartQty(rawQty);
+
+  if (maxQty <= 0) {
     showToast(`⚠️ Cannot add ${p.name} - Out of stock!`, 'error');
-    return;
+    return false;
+  }
+  if (qty <= 0) {
+    showToast(`Enter a valid quantity in ${uom.salesUnit}`, 'error');
+    return false;
+  }
+  if (qty > maxQty + 1e-9) {
+    showToast(`Only ${formatSellQty(maxQty, uom.salesUnit)} available`, 'error');
+    return false;
   }
 
-  const existing = cart.find(item => item.productId === p.id);
+  const fractional = uom.allowFractional || Math.abs(qty - Math.round(qty)) > 1e-9;
+  const existing = cart.find((item) => item.productId === p.id);
   if (existing) {
-    // Only enforce stock ceiling when stock is tracked (> 0).
-    if (stock > 0 && existing.quantity >= stock) {
+    const nextQty = mode === 'edit' ? qty : normalizeCartQty(existing.quantity + qty);
+    if (nextQty > maxQty + 1e-9) {
       showToast(`Cannot add more. Stock limit reached for ${p.name}!`, 'error');
-      return;
+      return false;
     }
-    existing.quantity += 1;
+    existing.quantity = nextQty;
+    existing.unitName = uom.salesUnit;
+    existing.stockUnitName = uom.stockUnit;
+    existing.salesConversionFactor = uom.salesFactor;
+    existing.allowFractionalQty = fractional || Boolean(existing.allowFractionalQty);
     existing.lineTotal = existing.quantity * existing.unitPrice;
   } else {
     const rate = resolveTaxRate(p.taxRate)
@@ -1398,17 +1884,107 @@ function addProductToCart(p) {
       productId: p.id,
       productName: p.name,
       sku: p.sku || '',
-      quantity: 1,
+      quantity: qty,
       unitPrice,
       discount: 0,
       taxRate: taxContext?.enabled ? rate : 0,
       taxAmount: 0,
-      lineTotal: unitPrice,
-      currentStock: stock,
-      isCustom: false
+      lineTotal: unitPrice * qty,
+      currentStock: p.currentStock ?? p.availableStock ?? 0,
+      availableStock: p.availableStock ?? p.currentStock ?? 0,
+      unitName: uom.salesUnit,
+      stockUnitName: uom.stockUnit,
+      salesConversionFactor: uom.salesFactor,
+      allowFractionalQty: fractional,
+      isCustom: false,
     });
   }
   renderCartList();
+  return true;
+}
+
+function promptProductQty(p, mode = 'add') {
+  const uom = resolveUom(p);
+  const maxQty = maxSellable(p);
+  if (maxQty <= 0) {
+    showToast(`⚠️ Cannot add ${p.name} - Out of stock!`, 'error');
+    return;
+  }
+
+  document.getElementById('pos-qty-prompt')?.remove();
+  const existing = cart.find((item) => item.productId === p.id);
+  const quick = uom.allowFractional ? weightQuickAmounts(uom.salesUnit) : [1, 2, 3, 5, 10];
+  const initial = mode === 'edit' && existing ? String(existing.quantity) : (uom.allowFractional ? '' : '1');
+
+  const overlay = document.createElement('div');
+  overlay.id = 'pos-qty-prompt';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;box-shadow:0 20px 50px rgba(0,0,0,0.25);">
+      <h3 style="margin:0 0 4px;font-size:18px;color:#0f172a;">${mode === 'edit' ? 'Edit quantity' : 'Enter quantity'}</h3>
+      <p style="margin:0 0 12px;color:#64748b;font-size:13px;">${p.name || ''}</p>
+      <p style="margin:0 0 12px;color:#94a3b8;font-size:12px;">
+        Price ${pkr(Number(p.sellingPrice || p.price || 0))} / ${uom.salesUnit}
+        · Available ${formatSellQty(maxQty, uom.salesUnit)}
+      </p>
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <input id="pos-qty-input" type="number" min="0.001" step="0.001" inputmode="decimal"
+          value="${initial}" placeholder="${uom.allowFractional ? 'e.g. 1.5' : 'e.g. 1'}"
+          style="flex:1;border:2px solid #014582;border-radius:12px;padding:12px;font-size:24px;font-weight:700;text-align:center;outline:none;" />
+        <div style="min-width:56px;display:flex;align-items:center;justify-content:center;background:#e0f2fe;color:#014582;border-radius:12px;font-weight:700;font-size:13px;">
+          ${uom.salesUnit}
+        </div>
+      </div>
+      <div id="pos-qty-quick" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;"></div>
+      <p id="pos-qty-error" style="display:none;color:#dc2626;font-size:12px;margin:0 0 10px;"></p>
+      <div style="display:flex;gap:8px;">
+        <button type="button" id="pos-qty-cancel" style="flex:1;padding:10px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;font-weight:600;cursor:pointer;">Cancel</button>
+        <button type="button" id="pos-qty-ok" style="flex:1;padding:10px;border:none;border-radius:12px;background:#014582;color:#fff;font-weight:700;cursor:pointer;">
+          ${mode === 'edit' ? 'Update' : 'Add to cart'}
+        </button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const input = overlay.querySelector('#pos-qty-input');
+  const errEl = overlay.querySelector('#pos-qty-error');
+  const quickEl = overlay.querySelector('#pos-qty-quick');
+  quick.forEach((q) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = formatSellQty(q, uom.salesUnit);
+    btn.style.cssText = 'padding:6px 10px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;font-size:12px;font-weight:600;cursor:pointer;';
+    btn.addEventListener('click', () => {
+      input.value = String(q);
+      errEl.style.display = 'none';
+      input.focus();
+    });
+    quickEl.appendChild(btn);
+  });
+
+  const close = () => overlay.remove();
+  const submit = () => {
+    const ok = commitProductQtyToCart(p, parseFloat(input.value), mode);
+    if (ok) close();
+    else {
+      errEl.textContent = `Enter a valid qty in ${uom.salesUnit} (max ${formatSellQty(maxQty, uom.salesUnit)})`;
+      errEl.style.display = 'block';
+    }
+  };
+
+  overlay.querySelector('#pos-qty-cancel').addEventListener('click', close);
+  overlay.querySelector('#pos-qty-ok').addEventListener('click', submit);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    if (e.key === 'Escape') close();
+  });
+  setTimeout(() => { input.focus(); input.select(); }, 30);
+}
+
+function addProductToCart(p) {
+  promptProductQty(p, 'add');
 }
 
 function renderCartList() {
@@ -1421,14 +1997,17 @@ function renderCartList() {
       <div class="cart-item-row-top">
         <div class="cart-item-info">
           <b>${item.productName}</b>
-          <span>${item.quantity} × ${pkr(item.unitPrice)}</span>
+          <span>${formatSellQty(item.quantity, item.unitName || 'Pcs')} × ${pkr(item.unitPrice)}</span>
         </div>
         <div class="cart-item-total">${pkr(Number(item.unitPrice || 0) * Number(item.quantity || 0))}</div>
       </div>
       <div class="cart-item-controls">
         <div class="cart-item-qty">
           <button class="btn-qty btn-minus" data-idx="${index}">-</button>
-          <span style="font-weight:700;">${item.quantity}</span>
+          <button type="button" class="btn-edit-qty" data-idx="${index}" title="Edit quantity"
+            style="min-width:72px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:#fff;font-weight:700;cursor:pointer;font-size:12px;">
+            ${formatSellQty(item.quantity, item.unitName || 'Pcs')}
+          </button>
           <button class="btn-qty btn-plus" data-idx="${index}">+</button>
         </div>
         <div class="cart-item-disc">
@@ -1440,9 +2019,12 @@ function renderCartList() {
     `;
 
     // Wire listeners
+    const step = resolveUom(item).step;
     row.querySelector('.btn-minus').addEventListener('click', () => {
-      if (item.quantity > 1) {
-        item.quantity -= 1;
+      const next = normalizeCartQty(item.quantity - step);
+      if (next > 0) {
+        item.quantity = next;
+        item.lineTotal = item.quantity * item.unitPrice;
       } else {
         cart.splice(index, 1);
       }
@@ -1450,8 +2032,33 @@ function renderCartList() {
     });
 
     row.querySelector('.btn-plus').addEventListener('click', () => {
-      item.quantity += 1;
+      const maxQty = maxSellable(item);
+      const next = normalizeCartQty(item.quantity + step);
+      if (!item.isCustom && next > maxQty + 1e-9) {
+        showToast(`Stock limit for ${item.productName}`, 'error');
+        return;
+      }
+      item.quantity = next;
+      item.allowFractionalQty = Boolean(item.allowFractionalQty) || Math.abs(next - Math.round(next)) > 1e-9;
+      item.lineTotal = item.quantity * item.unitPrice;
       renderCartList();
+    });
+
+    row.querySelector('.btn-edit-qty')?.addEventListener('click', () => {
+      if (item.isCustom) return;
+      promptProductQty({
+        id: item.productId,
+        name: item.productName,
+        sku: item.sku,
+        sellingPrice: item.unitPrice,
+        currentStock: item.currentStock,
+        availableStock: item.availableStock,
+        taxRate: item.taxRate,
+        salesUnitName: item.unitName,
+        stockUnitName: item.stockUnitName,
+        salesConversionFactor: item.salesConversionFactor,
+        allowFractionalQty: item.allowFractionalQty,
+      }, 'edit');
     });
 
     row.querySelector('.inp-item-disc').addEventListener('change', (e) => {
@@ -1478,7 +2085,7 @@ function parseCustomPrice() {
 }
 
 function parseCustomQty() {
-  const qty = parseInt(String(customLineQtyInp?.value || '1'), 10);
+  const qty = Math.max(0.001, parseFloat(String(customLineQtyInp?.value || '1')) || 1);
   return Number.isFinite(qty) && qty > 0 ? qty : 1;
 }
 
@@ -1700,10 +2307,19 @@ function highlightPayQuick(method) {
   });
 }
 
+function cashReceivedStartAmount(method, grandTotal) {
+  if (isAskCashReceived() && String(method || 'Cash').toLowerCase() === 'cash') return 0;
+  return grandTotal;
+}
+
 function setCheckoutMethod(method) {
   const totals = calculateTotals();
   if (isCreditMethod(method) && !canSellOnCredit(totals.grandTotal)) return;
-  payments = [{ paymentMethod: method, amount: totals.grandTotal, reference: '' }];
+  payments = [{
+    paymentMethod: method,
+    amount: cashReceivedStartAmount(method, totals.grandTotal),
+    reference: '',
+  }];
   focusedPaymentIndex = 0;
   renderPaymentSplitRows();
   updateCheckoutChange();
@@ -1717,11 +2333,25 @@ function openCheckout(method) {
   if (custEl) custEl.textContent = selectedCustomer?.name || 'Walk-in Customer';
   document.getElementById('checkout-modal-total').textContent = `${pkr(totals.grandTotal)}`;
 
-  payments = [{ paymentMethod: method || 'Cash', amount: totals.grandTotal, reference: '' }];
+  const payMethod = method || 'Cash';
+  payments = [{
+    paymentMethod: payMethod,
+    amount: cashReceivedStartAmount(payMethod, totals.grandTotal),
+    reference: '',
+  }];
   focusedPaymentIndex = 0;
   renderPaymentSplitRows();
   updateCheckoutChange();
   checkoutModalOverlay.style.display = 'flex';
+  if (shouldAskCashReceived()) {
+    setTimeout(() => {
+      const inp = document.querySelector('.pay-amount-inp');
+      if (inp) {
+        inp.focus();
+        inp.select();
+      }
+    }, 30);
+  }
 }
 
 btnCheckoutTrigger.addEventListener('click', () => openCheckout('Cash'));
@@ -1737,6 +2367,8 @@ function renderPaymentSplitRows() {
   payments.forEach((pmt, idx) => {
     const row = document.createElement('div');
     row.className = 'payment-row';
+    const askCash = shouldAskCashReceived() && idx === 0;
+    const amountVal = askCash && Number(pmt.amount) === 0 ? '' : Number(pmt.amount || 0).toFixed(2);
     row.innerHTML = `
       <select class="pay-method-sel" data-idx="${idx}" style="flex:1;">
         <option value="Cash" ${pmt.paymentMethod === 'Cash' ? 'selected' : ''}>Cash</option>
@@ -1746,7 +2378,7 @@ function renderPaymentSplitRows() {
         <option value="Cheque" ${pmt.paymentMethod === 'Cheque' ? 'selected' : ''}>Cheque</option>
         <option value="Credit" ${pmt.paymentMethod === 'Credit' ? 'selected' : ''}>Credit</option>
       </select>
-      <input type="number" class="pay-amount-inp" data-idx="${idx}" value="${pmt.amount.toFixed(2)}" step="0.01" style="width:100px;" />
+      <input type="number" class="pay-amount-inp" data-idx="${idx}" value="${amountVal}" step="0.01" min="0" style="width:120px;" placeholder="${askCash ? 'Customer paid' : ''}" />
       ${payments.length > 1 ? `<button style="background:transparent;border:none;color:#ef4444;cursor:pointer;" class="btn-remove-pay" data-idx="${idx}">✕</button>` : ''}
     `;
 
@@ -1789,27 +2421,41 @@ function updateCheckoutChange() {
   const paidTotal = payments.reduce((acc, p) => acc + p.amount, 0);
   const diff = paidTotal - totals.grandTotal;
   const credit = saleHasCredit();
+  const askCash = shouldAskCashReceived();
 
   const label = document.getElementById('checkout-change-label');
   const value = document.getElementById('checkout-modal-change');
   const note = document.getElementById('checkout-credit-note');
+  const tenderPanel = document.getElementById('checkout-cash-received-panel');
   const primary = payments[0]?.paymentMethod || 'Cash';
   highlightPayQuick(isCreditMethod(primary) ? 'Credit' : primary === 'Card' ? 'Card' : 'Cash');
   if (note) note.style.display = credit ? 'block' : 'none';
+  if (tenderPanel) tenderPanel.classList.toggle('open', askCash && !credit);
 
   if (credit && diff >= -0.009) {
     label.textContent = 'On account:';
     value.textContent = `${pkr(totals.grandTotal)}`;
     value.style.color = '#0f766e';
   } else if (diff >= 0) {
-    label.textContent = 'Change Due:';
+    label.textContent = askCash ? 'Change / remaining:' : 'Change Due:';
     value.textContent = `${pkr(diff)}`;
     value.style.color = '#10b981';
   } else {
-    label.textContent = 'Still Owed:';
+    label.textContent = askCash ? 'Still needed:' : 'Still Owed:';
     value.textContent = `${pkr(Math.abs(diff))}`;
     value.style.color = '#ef4444';
   }
+
+  const billEl = document.getElementById('checkout-tender-bill');
+  const recEl = document.getElementById('checkout-tender-received');
+  const remainEl = document.getElementById('checkout-tender-remain');
+  const remainLabel = document.getElementById('checkout-tender-remain-label');
+  const remainBox = document.getElementById('checkout-tender-remain-box');
+  if (billEl) billEl.textContent = pkr(totals.grandTotal);
+  if (recEl) recEl.textContent = pkr(paidTotal);
+  if (remainEl) remainEl.textContent = pkr(Math.abs(diff));
+  if (remainLabel) remainLabel.textContent = diff >= 0 ? 'Change' : 'Still needed';
+  if (remainBox) remainBox.classList.toggle('owed', diff < 0);
 }
 
 // Add split payment line
@@ -1868,6 +2514,11 @@ async function submitCompleteSale() {
 
   if (saleHasCredit() && !canSellOnCredit(totals.grandTotal)) return;
 
+  if (shouldAskCashReceived() && paidTotal <= 0) {
+    alert('Enter how much the customer paid.');
+    return;
+  }
+
   if (paidTotal < totals.grandTotal) {
     alert(`Insufficient payment. Need ${pkr(totals.grandTotal)}, got ${pkr(paidTotal)}`);
     return;
@@ -1891,6 +2542,11 @@ async function submitCompleteSale() {
       productName: i.productName,
       sku: i.sku,
       quantity: i.quantity,
+      unitName: i.unitName || 'Pcs',
+      conversionFactor: i.salesConversionFactor ?? 1,
+      salesConversionFactor: i.salesConversionFactor ?? 1,
+      allowFractionalQty: Boolean(i.allowFractionalQty),
+      stockUnitName: i.stockUnitName || i.unitName || 'Pcs',
       unitPrice: i.unitPrice,
       discount: i.discount,
       taxRate: resolveTaxRate(i.taxRate),
@@ -1939,7 +2595,11 @@ async function submitCompleteSale() {
     snapItems.forEach(async (cartItem) => {
       const product = products.find((p) => p.id === cartItem.productId);
       if (product) {
-        product.currentStock = Math.max(0, (product.currentStock || 0) - cartItem.quantity);
+        const factor = Number(cartItem.conversionFactor ?? cartItem.salesConversionFactor ?? 1) || 1;
+        const baseQty = cartItem.baseQuantity != null
+          ? Number(cartItem.baseQuantity)
+          : (Number(cartItem.quantity) || 0) * factor;
+        product.currentStock = Math.max(0, (product.currentStock || 0) - baseQty);
         try {
           await window.bisonDesktop.catalog.saveProduct(product);
         } catch (err) {
@@ -2055,13 +2715,19 @@ function renderReceipt() {
 function legacyRenderReceipt() {
   const box = document.getElementById('receipt-paper-box');
   if (!lastSale) return;
-  const company = companyProfile || { name: 'Bisonstechs POS', email: '', phone: '', address: {} };
-  const addr = company.address || {};
+  const company = companyProfile || {};
+  const companyName =
+    company.companyName ||
+    company.company?.name ||
+    company.organizationName ||
+    company.name ||
+    'POS';
+  const addr = company.address || company.company?.address || company.businessDetails?.address || {};
   const dateStr = new Date(lastSale.createdAt || lastSale.orderDate || Date.now()).toLocaleString();
   let itemsHtml = '';
   lastSale.items.forEach(i => {
     const lineTotal = i.lineTotal || (i.unitPrice * i.quantity);
-    itemsHtml += `<div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>${i.productName || i.name} x ${i.quantity}</span><span>${pkr(lineTotal)}</span></div>`;
+    itemsHtml += `<div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>${i.productName || i.name} x ${formatSellQty(i.quantity, i.unitName || 'Pcs')}</span><span>${pkr(lineTotal)}</span></div>`;
   });
   let paymentsHtml = '';
   lastSale.payments.forEach(p => {
@@ -2071,8 +2737,8 @@ function legacyRenderReceipt() {
   const grandTotal = Number(lastSale.totalAmount || lastSale.grandTotal || 0);
   const change = Number(lastSale.changeAmount || 0);
   box.innerHTML = `
-    <div style="text-align:center;border-bottom:1px dashed #ccc;padding-bottom:12px;margin-bottom:12px;"><h3 style="margin:0;font-size:16px;">${company.name || 'Bisonstechs POS'}</h3>
-      <div style="font-size:11px;color:#555;margin-top:4px;">${addr.street || ''} ${addr.city || ''} ${addr.state || ''}<br/>Phone: ${company.phone || 'N/A'} | Email: ${company.email || 'N/A'}</div></div>
+    <div style="text-align:center;border-bottom:1px dashed #ccc;padding-bottom:12px;margin-bottom:12px;"><h3 style="margin:0;font-size:16px;">${companyName}</h3>
+      <div style="font-size:11px;color:#555;margin-top:4px;">${addr.street || ''} ${addr.city || ''} ${addr.state || ''}<br/>Phone: ${company.phone || company.company?.phone || 'N/A'} | Email: ${company.email || company.company?.email || 'N/A'}</div></div>
     <div style="font-size:11px;border-bottom:1px dashed #ccc;padding-bottom:8px;margin-bottom:8px;"><b>Invoice:</b> ${lastSale.invoiceNumber || lastSale.orderNumber || 'Draft'}<br/><b>Date:</b> ${dateStr}<br/><b>Cashier:</b> ${lastSale.cashierName || 'Staff'}<br/><b>Customer:</b> ${lastSale.customerName || 'Walk-in Customer'}</div>
     <div style="border-bottom:1px dashed #ccc;padding-bottom:8px;margin-bottom:8px;">${itemsHtml}</div>
     <div style="border-bottom:1px dashed #ccc;padding-bottom:8px;margin-bottom:8px;font-size:11px;">
@@ -2081,7 +2747,7 @@ function legacyRenderReceipt() {
       ${finalTax > 0 ? `<div style="display:flex;justify-content:space-between;"><span>GST</span><span>${pkr(finalTax)}</span></div>` : ''}
       <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:bold;margin-top:4px;"><span>Total</span><span>${pkr(grandTotal)}</span></div></div>
     <div style="border-bottom:1px dashed #ccc;padding-bottom:8px;margin-bottom:8px;">${paymentsHtml}<div style="display:flex;justify-content:space-between;font-size:11px;font-weight:bold;margin-top:2px;"><span>Change Return</span><span>${pkr(change)}</span></div></div>
-    <div style="text-align:center;font-size:10px;color:#777;margin-top:8px;">Thank you for shopping with us!<br/>Power by Bisonstechs POS Desktop</div>`;
+    <div style="text-align:center;font-size:10px;color:#777;margin-top:8px;">Thank you for shopping with us!</div>`;
 }
 
 function calculateTotalsFor(sale) {
@@ -2275,7 +2941,7 @@ function renderReturnForm(sale, sourceLabel) {
                 <td>${i.productName || i.name}</td>
                 <td>${i.quantity}</td>
                 <td>${pkr(i.unitPrice)}</td>
-                <td><input type="number" class="return-qty-inp" data-idx="${idx}" value="0" min="0" max="${i.quantity}" style="width:56px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;" /></td>
+                <td><input type="number" class="return-qty-inp" data-idx="${idx}" value="0" min="0" max="${i.quantity}" step="0.001" style="width:72px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;" /> <span style="font-size:11px;color:#64748b;">${i.unitName || 'Pcs'}</span></td>
               </tr>
             `).join('')}
           </tbody>
@@ -2307,7 +2973,7 @@ function renderReturnForm(sale, sourceLabel) {
     const qInps = document.querySelectorAll('.return-qty-inp');
     const refundItems = [];
     qInps.forEach(inp => {
-      const qty = parseInt(inp.value) || 0;
+      const qty = parseFloat(inp.value) || 0;
       if (qty > 0) {
         const idx = parseInt(inp.getAttribute('data-idx'));
         const item = sale.items[idx];
@@ -2858,7 +3524,7 @@ async function printSaleSlip() {
   if (!sale) return;
   const itemsRows = (sale.items || []).map((i) => `
     <tr><td style="text-align:left">${i.productName || i.name || '—'} (${i.sku || ''})</td>
-      <td style="text-align:right">${i.quantity || 1} x ${saleFmt(i.unitPrice)}</td>
+      <td style="text-align:right">${formatSellQty(i.quantity || 1, i.unitName || 'Pcs')} x ${saleFmt(i.unitPrice)}</td>
       <td style="text-align:right">${saleFmt(saleLineTotal(i))}</td></tr>`).join('');
   const paymentsRows = (sale.payments || []).map((p) => `<tr><td>${p.paymentMethod || '—'}</td><td style="text-align:right">${saleFmt(p.amount || 0)}</td></tr>`).join('');
   const html = `
@@ -3861,7 +4527,6 @@ function initProductPanel() {
 initProductPanel();
 
 document.getElementById('logout')?.addEventListener('click', () => api?.auth?.logout());
-if (api?.auth?.onExpired) api.auth.onExpired(() => api.auth.logout());
 // ─── Sales register: search + date range + print/pdf ───────────────────────
 const srSearch = document.getElementById('sales-search');
 const srFrom = document.getElementById('sales-date-from');

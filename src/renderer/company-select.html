@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self' data: blob: http: https:; style-src 'self' 'unsafe-inline'; script-src 'self';"
+    />
+    <title>Select Company</title>
+    <link rel="stylesheet" href="./shared.css" />
+    <style>
+      .wrap { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 32px 16px; }
+      .card { width: 100%; max-width: 520px; background: #fff; border-radius: 16px; box-shadow: 0 12px 40px rgba(1, 69, 130, 0.12); padding: 28px; }
+      .brand { text-align: center; margin-bottom: 20px; }
+      h1 { margin: 10px 0 4px; font-size: 22px; }
+      p.sub { margin: 0; color: var(--muted); font-size: 13px; }
+      .list { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow: auto; margin-top: 16px; }
+      .co {
+        border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; text-align: left; background: #fff;
+        display: flex; align-items: center; gap: 12px; cursor: pointer; width: 100%;
+      }
+      .co:hover, .co.active { border-color: var(--brand); background: #f0f7fc; }
+      .co img { width: 40px; height: 40px; border-radius: 8px; object-fit: contain; background: #f1f5f9; }
+      .co .meta { flex: 1; min-width: 0; }
+      .co b { display: block; font-size: 14px; }
+      .co span { font-size: 12px; color: var(--muted); }
+      .actions { display: flex; gap: 8px; margin-top: 18px; }
+      .actions button { flex: 1; height: 46px; border: 0; border-radius: 10px; font-weight: 700; }
+      .primary { background: var(--brand); color: #fff; }
+      .primary:disabled { opacity: 0.5; }
+      .ghost { background: #e8eef4; color: var(--navy); }
+      .error { color: #dc2626; font-size: 13px; margin-top: 10px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <div class="brand">
+          <h1>Select company</h1>
+          <p class="sub">POS inventory, sales and sync will use this company only</p>
+        </div>
+        <div class="list" id="companies"></div>
+        <div class="error hidden" id="error"></div>
+        <div class="actions">
+          <button class="ghost" id="logout" type="button">Sign out</button>
+          <button class="primary" id="continue" type="button" disabled>Continue</button>
+        </div>
+      </div>
+    </div>
+    <script src="./company-select.js"></script>
+  </body>
+</html>

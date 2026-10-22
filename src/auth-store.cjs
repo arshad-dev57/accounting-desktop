@@ -40,6 +40,7 @@ function writeSession(userData, session) {
     refreshToken: session.refreshToken || '',
     expiresAt: session.expiresAt || decodeJwtExpMs(session.accessToken),
     user: session.user || null,
+    activeCompanyId: session.activeCompanyId || session.user?.companyId || '',
     savedAt: Date.now(),
   });
 

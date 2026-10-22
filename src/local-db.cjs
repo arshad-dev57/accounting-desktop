@@ -323,7 +323,7 @@ function saveLocations(locationsList) {
 
 // ─── TERMINALS CACHE ──────────────────────────────────────────────────────────
 function getTerminals() {
-  return readJson('cache_terminals.json', [{ id: 'default-terminal', name: 'Main Terminal', code: 'TERM01', locationId: 'default', location: { id: 'default', name: 'Main Location' } }]);
+  return readJson('cache_terminals.json', []);
 }
 
 function saveTerminals(terminalsList) {
@@ -370,6 +370,8 @@ module.exports = {
   initialize,
   setCompanyScope,
   getActiveCompanyId,
+  getCompanyDataPath: () => dbPath,
+  getBasePath: () => basePath,
   getProducts,
   saveProducts,
   getCategories,

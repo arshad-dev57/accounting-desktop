@@ -1,6 +1,6 @@
 /**
  * Injected into the Next.js POS after login.
- * Skipped on native file:// login/OTP screens.
+ * Skipped on native file:// login screens.
  */
 (function () {
   if (window.location.protocol === 'file:') return;

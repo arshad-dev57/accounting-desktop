@@ -99,18 +99,19 @@ function defaultSettings() {
     receiptFooter: 'Thank you for shopping with us! Please visit again.',
     receiptReturnPolicy: 'Returns accepted within 7 days with original receipt.',
     receiptNotes: 'This is a computer-generated receipt.',
-    thermalPaperWidthMm: 80,
-    thermalPrintMode: 'browser',
-    autoPrintOnSale: true,
-    enableBarcodeScanner: true,
-    soundOnScan: true,
-    autoAddOnScan: true,
-    enablePaymentTerminal: false,
-    paymentTerminalModel: 'CS30G',
-    paymentTerminalConnection: 'serial',
-    paymentTerminalHost: '192.168.1.100',
-    paymentTerminalPort: 8080,
-  };
+      thermalPaperWidthMm: 80,
+      thermalPrintMode: 'browser',
+      autoPrintOnSale: true,
+      enableBarcodeScanner: true,
+      soundOnScan: true,
+      autoAddOnScan: true,
+      enablePaymentTerminal: false,
+      paymentTerminalModel: 'CS30G',
+      paymentTerminalConnection: 'serial',
+      paymentTerminalHost: '192.168.1.100',
+      paymentTerminalPort: 8080,
+      askCashReceived: false,
+    };
 }
 
 function openModal(html) {
@@ -262,12 +263,12 @@ async function loadTerminals() {
       <button class="btn btn-brand" id="btn-new-terminal" type="button">+ New Terminal</button>
     </div>
     <div class="card hidden" id="create-terminal">
-      <p class="muted" style="margin:0 0 12px">Optionally assign a cashier to this terminal when creating it.</p>
+      <p class="muted" style="margin:0 0 12px">Warehouse is optional. Leave it blank for company-wide inventory; assign a warehouse to scope this terminal. You can also assign a cashier.</p>
       <div class="form-grid">
         <input id="t-name" placeholder="Terminal name (e.g. Main Counter)" />
         <input id="t-code" placeholder="Code (e.g. TERM-01)" />
         <select id="t-location">
-          <option value="">Select location…</option>
+          <option value="">— No warehouse (all inventory) —</option>
           ${locations.map((l) => `<option value="${l.id}">${l.name} (${l.code || l.type || ''})</option>`).join('')}
         </select>
         <select id="t-user">
@@ -286,7 +287,7 @@ async function loadTerminals() {
           <tr>
             <td><b>${t.name || ''}</b></td>
             <td>${t.code || ''}</td>
-            <td>${t.location?.name || '—'}</td>
+            <td>${t.location?.name || '<span class="muted">All inventory</span>'}</td>
             <td>${assigned
               ? `<strong>${userDisplayName(assigned)}</strong><div class="muted">${assigned.email || ''}</div>`
               : '<span class="muted">—</span>'}</td>
@@ -317,11 +318,13 @@ async function loadTerminals() {
     const code = wrap.querySelector('#t-code').value.trim().toUpperCase();
     const locationId = wrap.querySelector('#t-location').value;
     const userId = wrap.querySelector('#t-user').value;
-    if (!name || !code || !locationId) return showError('Name, code and location are required');
+    if (!name || !code) return showError('Name and code are required');
     const saveBtn = wrap.querySelector('#t-save');
     saveBtn.disabled = true;
     saveBtn.textContent = 'Creating…';
-    const res = await api.pos.createTerminal({ name, code, locationId });
+    const createBody = { name, code };
+    if (locationId) createBody.locationId = locationId;
+    const res = await api.pos.createTerminal(createBody);
     if (!res?.success) {
       saveBtn.disabled = false;
       saveBtn.textContent = 'Create';
@@ -594,6 +597,17 @@ async function loadReceipt() {
             ${field('r-website', 'Website', 'website')}
             ${field('r-tax-id', 'NTN / Tax ID', 'taxId')}
           </div>
+          <div style="margin-top:10px;">
+            <label class="muted">Receipt logo</label>
+            <p class="muted" style="margin:4px 0 8px;font-size:12px;">Upload a logo for receipts. If empty, company profile logo is used.</p>
+            <div id="r-logo-preview-wrap" style="display:${template.storeLogo ? 'flex' : 'none'};align-items:center;gap:10px;margin-bottom:8px;">
+              <img id="r-logo-preview" src="${receiptEsc(template.storeLogo || '')}" alt="Logo" style="height:52px;max-width:140px;object-fit:contain;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#fff;" />
+              <button type="button" class="btn" id="r-logo-remove">Remove</button>
+            </div>
+            <input type="file" id="r-logo-file" accept="image/png,image/jpeg,image/webp,image/svg+xml" />
+            <input type="hidden" id="r-store-logo" value="${receiptEsc(template.storeLogo || '')}" />
+            <input id="r-logo-url" placeholder="Or paste logo URL" value="${template.storeLogo && !String(template.storeLogo).startsWith('data:') ? receiptEsc(template.storeLogo) : ''}" style="margin-top:8px;" />
+          </div>
         </div>
         <div class="card">
           <h3 style="margin:0 0 10px;">Receipt text</h3>
@@ -611,6 +625,14 @@ async function loadReceipt() {
               <option value="80" ${Number(template.thermalPaperWidthMm) !== 58 ? 'selected' : ''}>80mm</option>
             </select>
           </div>
+        </div>
+        <div class="card">
+          <h3 style="margin:0 0 6px;">Cash received at sale</h3>
+          <div class="toggle" style="gap:10px;border-bottom:0;">
+            <span>Ask cashier how much customer paid</span>
+            <input type="checkbox" id="r-ask-cash" ${template.askCashReceived ? 'checked' : ''} />
+          </div>
+          <p class="muted" style="margin:8px 0 0;font-size:12px;">If enabled, checkout starts empty. Cashier types cash received; remaining change prints on the receipt.</p>
         </div>
         <div class="card">
           <h3 style="margin:0 0 6px;">Show / hide sections</h3>
@@ -637,10 +659,36 @@ async function loadReceipt() {
       const el = wrap.querySelector('#' + id);
       if (el) next[key] = el.value;
     }
+    const hiddenLogo = wrap.querySelector('#r-store-logo');
+    const urlLogo = wrap.querySelector('#r-logo-url');
+    const fromUrl = (urlLogo?.value || '').trim();
+    const fromHidden = hiddenLogo?.value || '';
+    next.storeLogo = fromUrl || fromHidden || '';
+    if (next.storeLogo) next.showLogo = true;
     const width = wrap.querySelector('#r-paper-width');
     if (width) next.thermalPaperWidthMm = Number(width.value) === 58 ? 58 : 80;
+    const askCash = wrap.querySelector('#r-ask-cash');
+    if (askCash) next.askCashReceived = askCash.checked;
     wrap.querySelectorAll('[data-toggle]').forEach((cb) => { next[cb.dataset.toggle] = cb.checked; });
     return next;
+  };
+
+  const setMgmtLogoPreview = (logo) => {
+    const hidden = wrap.querySelector('#r-store-logo');
+    const img = wrap.querySelector('#r-logo-preview');
+    const wrapEl = wrap.querySelector('#r-logo-preview-wrap');
+    const urlInp = wrap.querySelector('#r-logo-url');
+    if (hidden) hidden.value = logo || '';
+    if (urlInp) urlInp.value = logo && !String(logo).startsWith('data:') ? logo : '';
+    if (img && wrapEl) {
+      if (logo) {
+        img.src = logo;
+        wrapEl.style.display = 'flex';
+      } else {
+        img.removeAttribute('src');
+        wrapEl.style.display = 'none';
+      }
+    }
   };
 
   const renderPreview = () => {
@@ -650,6 +698,33 @@ async function loadReceipt() {
       window.PosReceipt.sampleReceiptSale(), comp, next
     );
   };
+
+  wrap.querySelector('#r-logo-file')?.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    if (file.size > 1.5 * 1024 * 1024) {
+      alert('Logo must be under 1.5 MB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setMgmtLogoPreview(String(reader.result || ''));
+      const showLogo = wrap.querySelector('[data-toggle="showLogo"]');
+      if (showLogo) showLogo.checked = true;
+      renderPreview();
+    };
+    reader.readAsDataURL(file);
+  });
+  wrap.querySelector('#r-logo-remove')?.addEventListener('click', () => {
+    setMgmtLogoPreview('');
+    renderPreview();
+  });
+  wrap.querySelector('#r-logo-url')?.addEventListener('input', () => {
+    const v = (wrap.querySelector('#r-logo-url')?.value || '').trim();
+    if (v) setMgmtLogoPreview(v);
+    renderPreview();
+  });
 
   wrap.querySelectorAll('input, select, textarea').forEach((el) => {
     el.addEventListener('input', renderPreview);
@@ -804,7 +879,6 @@ async function boot() {
   tabs.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
   document.getElementById('btn-open-pos').onclick = () => api.pos.enterShift();
   document.getElementById('btn-logout').onclick = () => api.auth.logout();
-  api.auth.onExpired(() => api.auth.logout());
   await loadLocations();
   await loadTab();
 }

@@ -4,9 +4,9 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; img-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';"
+      content="default-src 'none'; img-src 'self' data: blob: http: https:; style-src 'self' 'unsafe-inline'; script-src 'self';"
     />
-    <title>Open Shift — Bisonstechs POS</title>
+    <title>Open Shift</title>
     <link rel="stylesheet" href="./shared.css" />
     <style>
       .wrap { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 32px 16px; }
@@ -38,8 +38,8 @@
     <div class="wrap">
       <div class="card">
         <div class="brand">
-          <img src="../../assets/icon.png" alt="Bisonstechs" />
-          <h1>Open Shift</h1>
+          <img id="company-logo" src="../../assets/icon.png" alt="Company" />
+          <h1 id="company-title">Open Shift</h1>
           <p class="sub">Select a terminal, then enter opening cash in the drawer (required)</p>
         </div>
         <div class="user" id="user"></div>
@@ -63,6 +63,7 @@
         <button class="logout" id="logout" type="button">Sign out</button>
       </div>
     </div>
+    <script src="./session-guard.js"></script>
     <script src="./location.js"></script>
     <script src="./shift.js"></script>
   </body>
