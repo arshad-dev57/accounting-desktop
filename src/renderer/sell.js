@@ -1520,6 +1520,7 @@ function isPosOverlayOpen() {
     'cat-overlay',
     'prod-overlay',
     'prod-quick-overlay',
+    'pos-qty-prompt',
   ].some((id) => {
     const el = document.getElementById(id);
     if (!el) return false;
@@ -1582,6 +1583,24 @@ function routeScannedCode(code) {
   void applyScannedCode(trimmed);
 }
 
+function findProductByScanCodeLocal(code) {
+  const needle = normalizeScanInput(code).toLowerCase();
+  if (!needle) return null;
+  const pools = [];
+  if (Array.isArray(products) && products.length) pools.push(products);
+  if (typeof localProducts !== 'undefined' && Array.isArray(localProducts) && localProducts.length) {
+    pools.push(localProducts);
+  }
+  for (const pool of pools) {
+    const hit = pool.find((p) =>
+      [p.barcode, p.barcodeNumber, p.sku, p.qrCode, p.qr_code]
+        .some((v) => String(v || '').trim().toLowerCase() === needle)
+    );
+    if (hit) return hit;
+  }
+  return null;
+}
+
 async function applyScannedCode(code) {
   const trimmed = normalizeScanInput(code);
   if (!trimmed) return;
@@ -1592,30 +1611,32 @@ async function applyScannedCode(code) {
   try {
     const locationId = currentLocationId() || '';
     const res = await api.pos.byBarcode(trimmed, locationId);
-    const product = res?.success ? res.data : null;
+    let product = res?.success ? res.data : null;
+    if (!product) product = findProductByScanCodeLocal(trimmed);
     if (!product) {
       playScanBeep(false);
       setScanStatus(`No product found for ${trimmed}`, 'error');
       barcodeScanInp?.focus();
       return;
     }
-    addProductToCart(product);
+    // Qty modal owns focus until closed — do not steal focus back to scan box here
     playScanBeep(true);
-    setScanStatus(`Added ${product.name}`, 'ok');
-    barcodeScanInp?.focus();
+    setScanStatus(`Found ${product.name} — enter quantity`, 'ok');
+    addProductToCart(product);
   } catch (err) {
     playScanBeep(false);
     setScanStatus(err.message || 'Scan failed', 'error');
+    barcodeScanInp?.focus();
   }
 }
 
 function attachHidBarcodeScanner() {
   let buffer = '';
-  let lastAt = 0;
   let timer = null;
   const MIN_LEN = 3;
   // Fallback for wedge scanners that do not send Enter; must be long enough for full code
   const IDLE_MS = 450;
+  const scanFieldIdleTimers = new WeakMap();
 
   const clearBuffer = () => {
     buffer = '';
@@ -1635,6 +1656,32 @@ function attachHidBarcodeScanner() {
     if (code.length < MIN_LEN) return;
     routeScannedCode(code);
   };
+
+  const submitScanField = (el) => {
+    if (!el) return;
+    const typed = normalizeScanInput(el.value);
+    if (typed.length < MIN_LEN) return;
+    el.value = '';
+    clearBuffer();
+    const pending = scanFieldIdleTimers.get(el);
+    if (pending) {
+      clearTimeout(pending);
+      scanFieldIdleTimers.delete(el);
+    }
+    routeScannedCode(typed);
+  };
+
+  // Scanners that dump into the focused scan box but omit Enter/suffix
+  document.querySelectorAll('[data-pos-scan="1"], #barcode-scan-box').forEach((el) => {
+    el.addEventListener('input', () => {
+      if (posSettings.enableBarcodeScanner === false) return;
+      const pending = scanFieldIdleTimers.get(el);
+      if (pending) clearTimeout(pending);
+      const value = String(el.value || '').trim();
+      if (value.length < MIN_LEN) return;
+      scanFieldIdleTimers.set(el, setTimeout(() => submitScanField(el), IDLE_MS));
+    });
+  });
 
   document.addEventListener('keydown', (e) => {
     if (posSettings.enableBarcodeScanner === false) return;
@@ -1657,9 +1704,7 @@ function attachHidBarcodeScanner() {
         if (!typed) return;
         e.preventDefault();
         e.stopPropagation();
-        target.value = '';
-        clearBuffer();
-        routeScannedCode(typed);
+        submitScanField(target);
       }
       return;
     }
@@ -1683,9 +1728,7 @@ function attachHidBarcodeScanner() {
 
     if (e.key.length !== 1) return;
 
-    const now = Date.now();
     buffer += e.key;
-    lastAt = now;
     if (timer) clearTimeout(timer);
     timer = setTimeout(flushBuffer, IDLE_MS);
   }, true);
@@ -1915,6 +1958,8 @@ function promptProductQty(p, mode = 'add') {
   const maxQty = maxSellable(p);
   if (maxQty <= 0) {
     showToast(`⚠️ Cannot add ${p.name} - Out of stock!`, 'error');
+    setScanStatus(`${p.name} is out of stock`, 'error');
+    setTimeout(() => barcodeScanInp?.focus(), 40);
     return;
   }
 
@@ -1970,7 +2015,15 @@ function promptProductQty(p, mode = 'add') {
     quickEl.appendChild(btn);
   });
 
-  const close = () => overlay.remove();
+  // USB scanners often send a trailing Enter after the barcode; ignore it briefly
+  // so the qty modal does not auto-submit/close before the cashier can type.
+  const openedAt = Date.now();
+  const ENTER_GUARD_MS = 280;
+
+  const close = () => {
+    overlay.remove();
+    setTimeout(() => barcodeScanInp?.focus(), 40);
+  };
   const submit = () => {
     const ok = commitProductQtyToCart(p, parseFloat(input.value), mode);
     if (ok) close();
@@ -1984,7 +2037,11 @@ function promptProductQty(p, mode = 'add') {
   overlay.querySelector('#pos-qty-ok').addEventListener('click', submit);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    if (e.key === 'Enter' || e.key === 'NumpadEnter') {
+      e.preventDefault();
+      if (Date.now() - openedAt < ENTER_GUARD_MS) return;
+      submit();
+    }
     if (e.key === 'Escape') close();
   });
   setTimeout(() => { input.focus(); input.select(); }, 30);
