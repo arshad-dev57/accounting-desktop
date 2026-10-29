@@ -16,6 +16,24 @@ function stripSlash(url) {
   return String(url || '').trim().replace(/\/+$/, '');
 }
 
+/** Local backend is plain HTTP — https://localhost causes ERR_SSL_WRONG_VERSION_NUMBER. */
+function normalizeLocalApiUrl(url) {
+  const raw = stripSlash(url);
+  if (!raw) return raw;
+  try {
+    const u = new URL(raw);
+    const host = String(u.hostname || '').toLowerCase();
+    const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+    if (isLocal && u.protocol === 'https:') {
+      u.protocol = 'http:';
+      return stripSlash(u.toString());
+    }
+  } catch {
+    /* keep as-is */
+  }
+  return raw;
+}
+
 function resolveAppUrl(isPackaged) {
   const fromEnv = stripSlash(process.env.ELECTRON_APP_URL);
   if (fromEnv) return fromEnv;
@@ -23,7 +41,7 @@ function resolveAppUrl(isPackaged) {
 }
 
 function resolveApiUrl() {
-  const fromEnv = stripSlash(process.env.ELECTRON_API_URL);
+  const fromEnv = normalizeLocalApiUrl(process.env.ELECTRON_API_URL);
   if (fromEnv) return fromEnv;
   return DEFAULT_API;
 }

@@ -1,8 +1,7 @@
 /* global window, document, api, pkr, money, showToast, activeShift, saleCashier, custEsc, printHtmlDocument, custCompanyName */
-/* Reports tab: period-based retail reports (sales summary, items, time,
-   tenders, cashiers, customers & loyalty, returns, shift X-report).
-   Raw rows come from the local DB via reports:getData; everything is
-   aggregated here. Loaded after sell.js and pos-customers.js. */
+/* Reports tab: Loyverse-style multi-page retail reports (sales summary,
+   by item, by category, by payment type + More). Raw rows come from the
+   local DB via reports:getData; everything is aggregated here. */
 
 'use strict';
 
@@ -16,7 +15,20 @@ const rptState = {
   csv: null,
   title: '',
   itemQuery: '',
+  chartType: 'bar',
+  chartGroup: 'auto',
+  metric: 'netSales',
 };
+
+const RPT_PRIMARY = new Set(['summary', 'items', 'categories', 'payments']);
+
+const RPT_METRICS = [
+  { key: 'gross', label: 'Gross sales' },
+  { key: 'refunds', label: 'Refunds' },
+  { key: 'discounts', label: 'Discounts' },
+  { key: 'netSales', label: 'Net sales' },
+  { key: 'grossProfit', label: 'Gross profit' },
+];
 
 // ─── Periods ──────────────────────────────────────────────────────────────────
 function rptStartOfDay(d) {
@@ -74,6 +86,16 @@ function rptDateInput(d) {
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
 }
 
+// ─── Catalog lookup ───────────────────────────────────────────────────────────
+function rptProductMap(data) {
+  return data?.products || {};
+}
+
+function rptProductInfo(data, productId) {
+  if (!productId) return null;
+  return rptProductMap(data)[productId] || rptProductMap(data)[String(productId)] || null;
+}
+
 // ─── Normalisation ────────────────────────────────────────────────────────────
 function rptTenderGroup(method) {
   const m = String(method || 'Cash').toLowerCase();
@@ -87,19 +109,27 @@ function rptTenderGroup(method) {
   return m === 'cash' ? 'Cash' : (String(method || 'Other').trim() || 'Other');
 }
 
-function rptNormalizeSale(s) {
+function rptNormalizeSale(s, data) {
   const lines = (s.items || []).map((i) => {
     const qty = money(i.quantity);
     const unitPrice = money(i.unitPrice);
+    const productId = i.productId || i.product_id || '';
+    const info = rptProductInfo(data, productId);
+    const unitCost = money(i.costPrice ?? i.cost ?? info?.costPrice ?? 0);
     return {
-      key: String(i.productId || i.productName || i.name || 'item').toLowerCase(),
-      name: i.productName || i.name || 'Item',
-      sku: i.sku || '',
+      key: String(productId || i.productName || i.name || 'item').toLowerCase(),
+      productId: productId ? String(productId) : '',
+      name: i.productName || i.name || info?.name || 'Item',
+      sku: i.sku || info?.sku || '',
+      categoryId: info?.categoryId || '',
+      categoryName: info?.categoryName || 'Uncategorized',
       qty,
       gross: qty * unitPrice,
+      cost: qty * unitCost,
     };
   });
   const gross = lines.reduce((n, l) => n + l.gross, 0);
+  const cost = lines.reduce((n, l) => n + l.cost, 0);
   const total = money(s.grandTotal);
   const pays = Array.isArray(s.payments) && s.payments.length
     ? s.payments
@@ -124,6 +154,7 @@ function rptNormalizeSale(s) {
     customerName: s.customerName || 'Walk-in Customer',
     lines,
     gross,
+    cost,
     discount: money(s.discountTotal),
     tax: money(s.taxTotal),
     total,
@@ -146,6 +177,7 @@ function rptNormalizeReturn(r) {
     cashier: r.cashierName || '',
     items: items.map((i) => ({
       key: String(i.productId || i.productName || i.name || 'item').toLowerCase(),
+      productId: i.productId ? String(i.productId) : '',
       name: i.productName || i.name || 'Item',
       qty: money(i.quantity),
       amount: money(i.unitPrice) * money(i.quantity),
@@ -155,13 +187,15 @@ function rptNormalizeReturn(r) {
 }
 
 function rptAggregate(data) {
-  const sales = (data?.sales || []).map(rptNormalizeSale);
+  const sales = (data?.sales || []).map((s) => rptNormalizeSale(s, data));
   const returns = (data?.returns || []).map(rptNormalizeReturn);
   const gross = sales.reduce((n, s) => n + s.gross, 0);
   const discounts = sales.reduce((n, s) => n + s.discount, 0);
   const tax = sales.reduce((n, s) => n + s.tax, 0);
   const totals = sales.reduce((n, s) => n + s.total, 0);
   const refunds = returns.reduce((n, r) => n + r.amount, 0);
+  const cogs = sales.reduce((n, s) => n + s.cost, 0);
+  const netSales = gross - discounts - refunds;
   const itemsSold = sales.reduce((n, s) => n + s.lines.reduce((m, l) => m + l.qty, 0), 0);
   return {
     sales,
@@ -170,7 +204,9 @@ function rptAggregate(data) {
     discounts,
     tax,
     refunds,
-    netSales: gross - discounts - refunds,
+    cogs,
+    netSales,
+    grossProfit: netSales - cogs,
     collected: totals - refunds,
     count: sales.length,
     avgSale: sales.length ? totals / sales.length : 0,
@@ -204,6 +240,10 @@ function rptTable(headers, rows, opts = {}) {
   return `<table class="cust-table rpt-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody>${foot}</table>`;
 }
 
+function rptPct(part, whole) {
+  return whole ? `${((part / whole) * 100).toFixed(1)}%` : '—';
+}
+
 /** Vertical bar chart as inline SVG (values ≥ 0). */
 function rptBarChart(points, opts = {}) {
   const w = 720;
@@ -224,62 +264,314 @@ function rptBarChart(points, opts = {}) {
     <line x1="${pad.l}" x2="${w - pad.r}" y1="${h - pad.b}" y2="${h - pad.b}" class="rpt-baseline"/>${bars}</svg>`;
 }
 
-function rptPct(part, whole) {
-  return whole ? `${((part / whole) * 100).toFixed(1)}%` : '—';
+/** Line chart as inline SVG. */
+function rptLineChart(points, opts = {}) {
+  const w = 720;
+  const h = 200;
+  const pad = { l: 8, r: 8, t: 14, b: 26 };
+  const max = Math.max(1, ...points.map((p) => p.value));
+  const n = Math.max(1, points.length);
+  const step = (w - pad.l - pad.r) / Math.max(1, n - 1);
+  const coords = points.map((p, i) => {
+    const x = pad.l + (n === 1 ? (w - pad.l - pad.r) / 2 : i * step);
+    const y = h - pad.b - ((h - pad.t - pad.b) * p.value) / max;
+    return { x, y, p };
+  });
+  const path = coords.map((c, i) => `${i ? 'L' : 'M'}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
+  const area = coords.length
+    ? `${path} L${coords[coords.length - 1].x.toFixed(1)},${(h - pad.b).toFixed(1)} L${coords[0].x.toFixed(1)},${(h - pad.b).toFixed(1)} Z`
+    : '';
+  const dots = coords.map((c) => {
+    const showLabel = points.length <= 16 || coords.indexOf(c) % Math.ceil(points.length / 12) === 0;
+    return `<g><title>${custEsc(c.p.label)}: ${custEsc(opts.format ? opts.format(c.p.value) : c.p.value)}</title>
+      <circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="3.5" class="rpt-dot"/>
+      ${showLabel ? `<text x="${c.x.toFixed(1)}" y="${h - 8}" class="rpt-axis">${custEsc(c.p.short || c.p.label)}</text>` : ''}</g>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" class="rpt-chart" role="img" aria-label="${custEsc(opts.title || 'chart')}">
+    <line x1="${pad.l}" x2="${w - pad.r}" y1="${h - pad.b}" y2="${h - pad.b}" class="rpt-baseline"/>
+    <path d="${area}" class="rpt-area"/>
+    <path d="${path}" class="rpt-line" fill="none"/>
+    ${dots}</svg>`;
 }
 
-// ─── Reports ──────────────────────────────────────────────────────────────────
-function rptSummary(agg, prevAgg) {
-  const p = prevAgg || {};
-  const tender = rptTenderTotals(agg);
-  const kpis = `
-    <div class="mod-kpis">
-      ${rptKpi('Net sales', pkr(agg.netSales), rptDelta(agg.netSales, p.netSales))}
-      ${rptKpi('Transactions', agg.count, rptDelta(agg.count, p.count))}
-      ${rptKpi('Average sale', pkr(agg.avgSale), rptDelta(agg.avgSale, p.avgSale))}
-      ${rptKpi('Items sold', Math.round(agg.itemsSold * 100) / 100, rptDelta(agg.itemsSold, p.itemsSold))}
-      ${rptKpi('Returns', pkr(agg.refunds), `<small>${agg.returns.length} refund(s)</small>`)}
-      ${rptKpi('Discounts given', pkr(agg.discounts), `<small>${rptPct(agg.discounts, agg.gross)} of gross</small>`)}
-    </div>`;
-  const statement = `
-    <table class="cust-table rpt-statement">
-      <tbody>
-        <tr><td>Gross sales</td><td class="num">${pkr(agg.gross)}</td></tr>
-        <tr><td>Returns</td><td class="num neg">−${pkr(agg.refunds)}</td></tr>
-        <tr><td>Discounts &amp; comps</td><td class="num neg">−${pkr(agg.discounts)}</td></tr>
-        <tr class="strong"><td>Net sales</td><td class="num">${pkr(agg.netSales)}</td></tr>
-        <tr><td>Tax</td><td class="num">${pkr(agg.tax)}</td></tr>
-        <tr class="strong"><td>Total collected</td><td class="num">${pkr(agg.collected)}</td></tr>
-      </tbody>
-    </table>`;
-  const tenders = rptTable(
-    [{ label: 'Tender' }, { label: 'Collected', num: true }, { label: 'Refunded', num: true }, { label: 'Net', num: true }],
-    tender.map((t) => ({ cells: [custEsc(t.group), pkr(t.collected), t.refunded ? `−${pkr(t.refunded)}` : '—', pkr(t.collected - t.refunded)] }))
-  );
-  const days = rptByDay(agg);
-  const chart = days.length > 1
-    ? rptBarChart(days.map((d) => ({ label: d.label, short: d.short, value: d.total })), { format: pkr, title: 'Sales by day' })
-    : rptBarChart(rptByHour(agg).map((hr) => ({ label: hr.label, short: hr.short, value: hr.total })), { format: pkr, title: 'Sales by hour' });
+function rptRenderChart(points, opts = {}) {
+  if (!points.length) return '<p class="cust-hint">No chart data for this period.</p>';
+  return rptState.chartType === 'line'
+    ? rptLineChart(points, opts)
+    : rptBarChart(points, opts);
+}
 
-  const top = rptItems(agg).slice(0, 5);
-  rptState.csv = [
-    ['Metric', 'Amount'],
-    ['Gross sales', agg.gross], ['Returns', -agg.refunds], ['Discounts', -agg.discounts],
-    ['Net sales', agg.netSales], ['Tax', agg.tax], ['Total collected', agg.collected],
-    ['Transactions', agg.count], ['Average sale', agg.avgSale], ['Items sold', agg.itemsSold],
-    [], ['Tender', 'Collected', 'Refunded', 'Net'],
-    ...tender.map((t) => [t.group, t.collected, t.refunded, t.collected - t.refunded]),
+// ─── Time buckets ─────────────────────────────────────────────────────────────
+function rptByHour(agg, metricKey = 'total') {
+  const hours = Array.from({ length: 24 }, (_, h) => ({
+    label: `${String(h).padStart(2, '0')}:00–${String(h).padStart(2, '0')}:59`,
+    short: `${h}`,
+    value: 0,
+    total: 0,
+    count: 0,
+  }));
+  agg.sales.forEach((s) => {
+    const h = s.at.getHours();
+    hours[h].total += s.total;
+    hours[h].count += 1;
+    hours[h].value += metricKey === 'count' ? 1 : s.total;
+  });
+  return hours;
+}
+
+function rptByDay(agg) {
+  const [from, to] = [rptState.from, rptState.to];
+  const out = [];
+  const idx = new Map();
+  for (let d = rptStartOfDay(from); d <= to; d.setDate(d.getDate() + 1)) {
+    const key = rptDateInput(d);
+    idx.set(key, out.length);
+    out.push({
+      key,
+      label: d.toLocaleDateString(undefined, { weekday: 'short', day: '2-digit', month: 'short' }),
+      short: d.toLocaleDateString(undefined, { day: '2-digit', month: 'short' }),
+      total: 0,
+      count: 0,
+      refunds: 0,
+      gross: 0,
+      discounts: 0,
+      value: 0,
+    });
+    if (out.length > 400) break;
+  }
+  agg.sales.forEach((s) => {
+    const i = idx.get(rptDateInput(s.at));
+    if (i != null) {
+      out[i].total += s.total;
+      out[i].gross += s.gross;
+      out[i].discounts += s.discount;
+      out[i].count += 1;
+      out[i].value += s.total;
+    }
+  });
+  agg.returns.forEach((r) => {
+    const i = idx.get(rptDateInput(r.at));
+    if (i != null) out[i].refunds += r.amount;
+  });
+  return out;
+}
+
+function rptIsoWeekKey(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  x.setDate(x.getDate() + 3 - ((x.getDay() + 6) % 7));
+  const week1 = new Date(x.getFullYear(), 0, 4);
+  const week = 1 + Math.round(((x - week1) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7);
+  return `${x.getFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+function rptByWeek(agg) {
+  const map = new Map();
+  agg.sales.forEach((s) => {
+    const key = rptIsoWeekKey(s.at);
+    if (!map.has(key)) map.set(key, { key, label: key, short: key.replace(/^\d{4}-/, ''), total: 0, count: 0, value: 0 });
+    const row = map.get(key);
+    row.total += s.total;
+    row.count += 1;
+    row.value += s.total;
+  });
+  return [...map.values()].sort((a, b) => a.key.localeCompare(b.key));
+}
+
+function rptByMonth(agg) {
+  const map = new Map();
+  agg.sales.forEach((s) => {
+    const key = `${s.at.getFullYear()}-${String(s.at.getMonth() + 1).padStart(2, '0')}`;
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        label: s.at.toLocaleDateString(undefined, { month: 'short', year: 'numeric' }),
+        short: s.at.toLocaleDateString(undefined, { month: 'short' }),
+        total: 0,
+        count: 0,
+        value: 0,
+      });
+    }
+    const row = map.get(key);
+    row.total += s.total;
+    row.count += 1;
+    row.value += s.total;
+  });
+  return [...map.values()].sort((a, b) => a.key.localeCompare(b.key));
+}
+
+function rptResolveGroup() {
+  if (rptState.chartGroup !== 'auto') return rptState.chartGroup;
+  const days = Math.max(1, Math.round((rptState.to - rptState.from) / 86400000) + 1);
+  if (days <= 1) return 'hour';
+  if (days <= 45) return 'day';
+  if (days <= 180) return 'week';
+  return 'month';
+}
+
+function rptSeriesForGroup(agg) {
+  const group = rptResolveGroup();
+  if (group === 'hour') return { group, points: rptByHour(agg).map((h) => ({ label: h.label, short: h.short, value: h.total })) };
+  if (group === 'week') return { group, points: rptByWeek(agg).map((w) => ({ label: w.label, short: w.short, value: w.total })) };
+  if (group === 'month') return { group, points: rptByMonth(agg).map((m) => ({ label: m.label, short: m.short, value: m.total })) };
+  return { group: 'day', points: rptByDay(agg).map((d) => ({ label: d.label, short: d.short, value: d.total - d.refunds })) };
+}
+
+function rptMetricValue(agg, key) {
+  if (key === 'grossProfit') return agg.grossProfit;
+  if (key === 'gross') return agg.gross;
+  if (key === 'refunds') return agg.refunds;
+  if (key === 'discounts') return agg.discounts;
+  return agg.netSales;
+}
+
+function rptMetricStrip(agg, prevAgg) {
+  const p = prevAgg || {};
+  return `
+    <div class="rpt-metrics" id="rpt-metrics">
+      ${RPT_METRICS.map((m) => {
+        const val = rptMetricValue(agg, m.key);
+        const prev = rptMetricValue(p, m.key);
+        const active = rptState.metric === m.key ? ' active' : '';
+        return `<button type="button" class="rpt-metric${active}" data-metric="${m.key}">
+          <span>${m.label}</span>
+          <b>${pkr(val)}</b>
+          ${rptDelta(val, prev)}
+        </button>`;
+      }).join('')}
+    </div>`;
+}
+
+function rptChartToolbar(title) {
+  const groups = [
+    { key: 'auto', label: 'Auto' },
+    { key: 'hour', label: 'Hours' },
+    { key: 'day', label: 'Days' },
+    { key: 'week', label: 'Weeks' },
+    { key: 'month', label: 'Months' },
   ];
-  return `${kpis}
-    <div class="rpt-grid-2">
-      <div class="rpt-card"><h4>Sales summary</h4>${statement}</div>
-      <div class="rpt-card"><h4>Payments</h4>${tenders}</div>
+  return `
+    <div class="rpt-chart-toolbar">
+      <h4>${custEsc(title)}</h4>
+      <div class="rpt-chart-controls">
+        <div class="rpt-seg" data-role="chart-type">
+          <button type="button" data-chart-type="bar" class="${rptState.chartType === 'bar' ? 'active' : ''}">Bars</button>
+          <button type="button" data-chart-type="line" class="${rptState.chartType === 'line' ? 'active' : ''}">Line</button>
+        </div>
+        <div class="rpt-seg" data-role="chart-group">
+          ${groups.map((g) => `<button type="button" data-chart-group="${g.key}" class="${rptState.chartGroup === g.key ? 'active' : ''}">${g.label}</button>`).join('')}
+        </div>
+      </div>
+    </div>`;
+}
+
+function rptChartCard(agg, title) {
+  const { points } = rptSeriesForGroup(agg);
+  return `
+    <div class="rpt-card rpt-chart-card">
+      ${rptChartToolbar(title)}
+      ${rptRenderChart(points, { format: pkr, title })}
+    </div>`;
+}
+
+function rptPageShell(agg, prevAgg, opts = {}) {
+  const metricLabel = RPT_METRICS.find((m) => m.key === rptState.metric)?.label || 'Net sales';
+  return `
+    ${rptMetricStrip(agg, prevAgg)}
+    ${rptChartCard(agg, opts.chartTitle || metricLabel)}
+    <div class="rpt-card">
+      <h4>${custEsc(opts.tableTitle || 'Details')}</h4>
+      ${opts.tableHtml || ''}
     </div>
-    <div class="rpt-card"><h4>${days.length > 1 ? 'Sales by day' : 'Sales by hour'}</h4>${chart}</div>
-    <div class="rpt-card"><h4>Top items</h4>${rptTable(
-      [{ label: 'Item' }, { label: 'Qty', num: true }, { label: 'Net sales', num: true }, { label: 'Share', num: true }],
-      top.map((i) => ({ cells: [custEsc(i.name), i.netQty, pkr(i.net), rptPct(i.net, agg.gross - agg.refunds)] }))
-    )}</div>`;
+    ${opts.extraHtml || ''}`;
+}
+
+function wireRptShellEvents() {
+  document.querySelectorAll('#rpt-metrics [data-metric]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      rptState.metric = btn.dataset.metric;
+      renderReport();
+    });
+  });
+  document.querySelectorAll('[data-chart-type]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      rptState.chartType = btn.dataset.chartType;
+      renderReport();
+    });
+  });
+  document.querySelectorAll('[data-chart-group]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      rptState.chartGroup = btn.dataset.chartGroup;
+      renderReport();
+    });
+  });
+}
+
+// ─── Item / category aggregations ─────────────────────────────────────────────
+function rptItems(agg) {
+  const map = new Map();
+  const get = (key, name, sku) => {
+    if (!map.has(key)) map.set(key, { key, name, sku, qty: 0, gross: 0, cost: 0, retQty: 0, retAmount: 0, tx: 0, disc: 0 });
+    return map.get(key);
+  };
+  agg.sales.forEach((s) => {
+    const share = s.gross > 0 ? s.discount / s.gross : 0;
+    s.lines.forEach((l) => {
+      const row = get(l.key, l.name, l.sku);
+      row.qty += l.qty;
+      row.gross += l.gross;
+      row.cost += l.cost || 0;
+      row.disc += l.gross * share;
+      row.tx += 1;
+      row.categoryName = l.categoryName || row.categoryName || 'Uncategorized';
+    });
+  });
+  agg.returns.forEach((r) => r.items.forEach((i) => {
+    const row = get(i.key, i.name, '');
+    row.retQty += i.qty;
+    row.retAmount += i.amount;
+  }));
+  return [...map.values()].map((r) => ({
+    ...r,
+    disc: r.disc || 0,
+    netQty: Math.round((r.qty - r.retQty) * 1000) / 1000,
+    net: r.gross - (r.disc || 0) - r.retAmount,
+    profit: (r.gross - (r.disc || 0) - r.retAmount) - (r.cost || 0),
+  })).sort((a, b) => b.net - a.net);
+}
+
+function rptCategories(agg) {
+  const map = new Map();
+  const get = (name) => {
+    const key = String(name || 'Uncategorized');
+    if (!map.has(key)) map.set(key, { name: key, qty: 0, gross: 0, cost: 0, disc: 0, retQty: 0, retAmount: 0, tx: 0 });
+    return map.get(key);
+  };
+  agg.sales.forEach((s) => {
+    const share = s.gross > 0 ? s.discount / s.gross : 0;
+    s.lines.forEach((l) => {
+      const row = get(l.categoryName || 'Uncategorized');
+      row.qty += l.qty;
+      row.gross += l.gross;
+      row.cost += l.cost || 0;
+      row.disc += l.gross * share;
+      row.tx += 1;
+    });
+  });
+  agg.returns.forEach((r) => {
+    r.items.forEach((i) => {
+      const info = rptProductInfo(rptState.data, i.productId);
+      const row = get(info?.categoryName || 'Uncategorized');
+      row.retQty += i.qty;
+      row.retAmount += i.amount;
+    });
+  });
+  return [...map.values()].map((r) => ({
+    ...r,
+    netQty: Math.round((r.qty - r.retQty) * 1000) / 1000,
+    net: r.gross - r.disc - r.retAmount,
+    profit: r.gross - r.disc - r.retAmount - r.cost,
+  })).sort((a, b) => b.net - a.net);
 }
 
 function rptTenderTotals(agg) {
@@ -300,103 +592,171 @@ function rptTenderTotals(agg) {
   return [...map.values()].sort((a, b) => b.collected - a.collected);
 }
 
-function rptItems(agg) {
-  const map = new Map();
-  const get = (key, name, sku) => {
-    if (!map.has(key)) map.set(key, { key, name, sku, qty: 0, gross: 0, retQty: 0, retAmount: 0, tx: 0 });
-    return map.get(key);
-  };
-  agg.sales.forEach((s) => {
-    // spread the sale discount over its lines so item net sales add up to the summary
-    const share = s.gross > 0 ? s.discount / s.gross : 0;
-    s.lines.forEach((l) => {
-      const row = get(l.key, l.name, l.sku);
-      row.qty += l.qty;
-      row.gross += l.gross;
-      row.disc = (row.disc || 0) + l.gross * share;
-      row.tx += 1;
-    });
+// ─── Primary reports ──────────────────────────────────────────────────────────
+function rptSummary(agg, prevAgg) {
+  const days = rptByDay(agg);
+  const statement = rptTable(
+    [{ label: 'Date' }, { label: 'Transactions', num: true }, { label: 'Gross sales', num: true }, { label: 'Refunds', num: true }, { label: 'Discounts', num: true }, { label: 'Net sales', num: true }, { label: 'Avg sale', num: true }],
+    days.slice().reverse().map((d) => {
+      const net = d.gross - d.discounts - d.refunds;
+      return {
+        cells: [
+          d.label,
+          d.count,
+          pkr(d.gross),
+          d.refunds ? `−${pkr(d.refunds)}` : '—',
+          d.discounts ? `−${pkr(d.discounts)}` : '—',
+          `<b>${pkr(net)}</b>`,
+          d.count ? pkr(d.total / d.count) : '—',
+        ],
+      };
+    })
+  );
+  const top = rptItems(agg).slice(0, 5);
+  const tender = rptTenderTotals(agg);
+  rptState.csv = [
+    ['Metric', 'Amount'],
+    ['Gross sales', agg.gross], ['Returns', -agg.refunds], ['Discounts', -agg.discounts],
+    ['Net sales', agg.netSales], ['Cost of goods', agg.cogs], ['Gross profit', agg.grossProfit],
+    ['Tax', agg.tax], ['Total collected', agg.collected],
+    ['Transactions', agg.count], ['Average sale', agg.avgSale], ['Items sold', agg.itemsSold],
+    [], ['Date', 'Transactions', 'Gross', 'Refunds', 'Discounts', 'Net'],
+    ...days.map((d) => [d.key, d.count, d.gross, d.refunds, d.discounts, d.gross - d.discounts - d.refunds]),
+  ];
+  return rptPageShell(agg, prevAgg, {
+    chartTitle: 'Sales over time',
+    tableTitle: 'Sales summary by day',
+    tableHtml: statement,
+    extraHtml: `
+      <div class="rpt-grid-2">
+        <div class="rpt-card"><h4>Top items</h4>${rptTable(
+          [{ label: 'Item' }, { label: 'Qty', num: true }, { label: 'Net sales', num: true }, { label: 'Share', num: true }],
+          top.map((i) => ({ cells: [custEsc(i.name), i.netQty, pkr(i.net), rptPct(i.net, agg.netSales)] }))
+        )}</div>
+        <div class="rpt-card"><h4>Payments</h4>${rptTable(
+          [{ label: 'Tender' }, { label: 'Collected', num: true }, { label: 'Refunded', num: true }, { label: 'Net', num: true }],
+          tender.map((t) => ({ cells: [custEsc(t.group), pkr(t.collected), t.refunded ? `−${pkr(t.refunded)}` : '—', pkr(t.collected - t.refunded)] }))
+        )}</div>
+      </div>`,
   });
-  agg.returns.forEach((r) => r.items.forEach((i) => {
-    const row = get(i.key, i.name, '');
-    row.retQty += i.qty;
-    row.retAmount += i.amount;
-  }));
-  return [...map.values()].map((r) => ({
-    ...r,
-    disc: r.disc || 0,
-    netQty: Math.round((r.qty - r.retQty) * 1000) / 1000,
-    net: r.gross - (r.disc || 0) - r.retAmount,
-  })).sort((a, b) => b.net - a.net);
 }
 
-function rptItemsReport(agg) {
+function rptItemsReport(agg, prevAgg) {
   const q = rptState.itemQuery.trim().toLowerCase();
   const all = rptItems(agg);
   const rows = all.filter((i) => !q || i.name.toLowerCase().includes(q) || String(i.sku).toLowerCase().includes(q));
   const totalNet = all.reduce((n, i) => n + i.net, 0);
+  const topChart = all.slice(0, 12).map((i) => ({
+    label: i.name,
+    short: i.name.length > 10 ? `${i.name.slice(0, 9)}…` : i.name,
+    value: Math.max(0, i.net),
+  }));
   rptState.csv = [
-    ['Item', 'SKU', 'Qty sold', 'Qty returned', 'Net qty', 'Gross sales', 'Discounts', 'Returns', 'Net sales', 'Share %'],
-    ...rows.map((i) => [i.name, i.sku, i.qty, i.retQty, i.netQty, i.gross, i.disc, i.retAmount, i.net, totalNet ? (i.net / totalNet) * 100 : 0]),
+    ['Item', 'SKU', 'Category', 'Qty sold', 'Qty returned', 'Net qty', 'Gross sales', 'Discounts', 'Returns', 'Net sales', 'Cost', 'Gross profit', 'Share %'],
+    ...rows.map((i) => [i.name, i.sku, i.categoryName || '', i.qty, i.retQty, i.netQty, i.gross, i.disc, i.retAmount, i.net, i.cost || 0, i.profit, totalNet ? (i.net / totalNet) * 100 : 0]),
   ];
-  return `
+  const table = `
     <div class="rpt-toolbar"><input type="search" class="inp-search" id="rpt-item-search" placeholder="Filter items…" value="${custEsc(rptState.itemQuery)}" /><span class="cust-count">${rows.length} item(s)</span></div>
-    <div class="rpt-card">${rptTable(
-      [{ label: 'Item' }, { label: 'Sold', num: true }, { label: 'Returned', num: true }, { label: 'Gross sales', num: true }, { label: 'Discounts', num: true }, { label: 'Returns', num: true }, { label: 'Net sales', num: true }, { label: 'Share', num: true }],
+    ${rptTable(
+      [{ label: 'Item' }, { label: 'Category' }, { label: 'Sold', num: true }, { label: 'Returned', num: true }, { label: 'Gross sales', num: true }, { label: 'Discounts', num: true }, { label: 'Returns', num: true }, { label: 'Net sales', num: true }, { label: 'Gross profit', num: true }, { label: 'Share', num: true }],
       rows.map((i) => ({ cells: [
         `<b>${custEsc(i.name)}</b>${i.sku ? `<small>${custEsc(i.sku)}</small>` : ''}`,
+        custEsc(i.categoryName || 'Uncategorized'),
         Math.round(i.qty * 1000) / 1000, i.retQty || '—', pkr(i.gross), i.disc ? `−${pkr(i.disc)}` : '—',
-        i.retAmount ? `−${pkr(i.retAmount)}` : '—', `<b>${pkr(i.net)}</b>`, rptPct(i.net, totalNet),
+        i.retAmount ? `−${pkr(i.retAmount)}` : '—', `<b>${pkr(i.net)}</b>`, pkr(i.profit), rptPct(i.net, totalNet),
       ] })),
-      { foot: ['<b>Total</b>', Math.round(rows.reduce((n, i) => n + i.qty, 0) * 1000) / 1000, rows.reduce((n, i) => n + i.retQty, 0) || '—',
+      { foot: ['<b>Total</b>', '', Math.round(rows.reduce((n, i) => n + i.qty, 0) * 1000) / 1000, rows.reduce((n, i) => n + i.retQty, 0) || '—',
         pkr(rows.reduce((n, i) => n + i.gross, 0)), `−${pkr(rows.reduce((n, i) => n + i.disc, 0))}`,
-        `−${pkr(rows.reduce((n, i) => n + i.retAmount, 0))}`, `<b>${pkr(rows.reduce((n, i) => n + i.net, 0))}</b>`, ''] }
-    )}</div>`;
+        `−${pkr(rows.reduce((n, i) => n + i.retAmount, 0))}`, `<b>${pkr(rows.reduce((n, i) => n + i.net, 0))}</b>`,
+        pkr(rows.reduce((n, i) => n + i.profit, 0)), ''] }
+    )}`;
+  return `
+    ${rptMetricStrip(agg, prevAgg)}
+    <div class="rpt-card rpt-chart-card">
+      ${rptChartToolbar('Top items by net sales')}
+      ${rptRenderChart(topChart, { format: pkr, title: 'Sales by item' })}
+    </div>
+    <div class="rpt-card"><h4>Sales by item</h4>${table}</div>`;
 }
 
-function rptByHour(agg) {
-  const hours = Array.from({ length: 24 }, (_, h) => ({
-    label: `${String(h).padStart(2, '0')}:00–${String(h).padStart(2, '0')}:59`,
-    short: `${h}`,
-    total: 0,
-    count: 0,
+function rptCategoriesReport(agg, prevAgg) {
+  const rows = rptCategories(agg);
+  const totalNet = rows.reduce((n, r) => n + r.net, 0);
+  const chartPoints = rows.slice(0, 12).map((r) => ({
+    label: r.name,
+    short: r.name.length > 10 ? `${r.name.slice(0, 9)}…` : r.name,
+    value: Math.max(0, r.net),
   }));
-  agg.sales.forEach((s) => {
-    const h = s.at.getHours();
-    hours[h].total += s.total;
-    hours[h].count += 1;
-  });
-  return hours;
+  rptState.csv = [
+    ['Category', 'Items sold', 'Items refunded', 'Gross sales', 'Discounts', 'Refunds', 'Net sales', 'Cost', 'Gross profit', 'Share %'],
+    ...rows.map((r) => [r.name, r.qty, r.retQty, r.gross, r.disc, r.retAmount, r.net, r.cost, r.profit, totalNet ? (r.net / totalNet) * 100 : 0]),
+  ];
+  const table = rptTable(
+    [{ label: 'Category' }, { label: 'Sold', num: true }, { label: 'Returned', num: true }, { label: 'Gross sales', num: true }, { label: 'Discounts', num: true }, { label: 'Refunds', num: true }, { label: 'Net sales', num: true }, { label: 'Gross profit', num: true }, { label: 'Share', num: true }],
+    rows.map((r) => ({ cells: [
+      `<b>${custEsc(r.name)}</b>`,
+      Math.round(r.qty * 1000) / 1000,
+      r.retQty || '—',
+      pkr(r.gross),
+      r.disc ? `−${pkr(r.disc)}` : '—',
+      r.retAmount ? `−${pkr(r.retAmount)}` : '—',
+      `<b>${pkr(r.net)}</b>`,
+      pkr(r.profit),
+      rptPct(r.net, totalNet),
+    ] })),
+    {
+      foot: [
+        '<b>Total</b>',
+        Math.round(rows.reduce((n, r) => n + r.qty, 0) * 1000) / 1000,
+        rows.reduce((n, r) => n + r.retQty, 0) || '—',
+        pkr(rows.reduce((n, r) => n + r.gross, 0)),
+        `−${pkr(rows.reduce((n, r) => n + r.disc, 0))}`,
+        `−${pkr(rows.reduce((n, r) => n + r.retAmount, 0))}`,
+        `<b>${pkr(totalNet)}</b>`,
+        pkr(rows.reduce((n, r) => n + r.profit, 0)),
+        '',
+      ],
+      empty: 'No category sales in this period.',
+    }
+  );
+  return `
+    ${rptMetricStrip(agg, prevAgg)}
+    <div class="rpt-card rpt-chart-card">
+      ${rptChartToolbar('Sales by category')}
+      ${rptRenderChart(chartPoints, { format: pkr, title: 'Sales by category' })}
+    </div>
+    <div class="rpt-card"><h4>Sales by category</h4>${table}</div>`;
 }
 
-function rptByDay(agg) {
-  const [from, to] = [rptState.from, rptState.to];
-  const out = [];
-  const idx = new Map();
-  for (let d = rptStartOfDay(from); d <= to; d.setDate(d.getDate() + 1)) {
-    const key = rptDateInput(d);
-    idx.set(key, out.length);
-    out.push({
-      key,
-      label: d.toLocaleDateString(undefined, { weekday: 'short', day: '2-digit', month: 'short' }),
-      short: d.toLocaleDateString(undefined, { day: '2-digit', month: 'short' }),
-      total: 0,
-      count: 0,
-      refunds: 0,
-    });
-    if (out.length > 400) break;
-  }
-  agg.sales.forEach((s) => {
-    const i = idx.get(rptDateInput(s.at));
-    if (i != null) { out[i].total += s.total; out[i].count += 1; }
-  });
-  agg.returns.forEach((r) => {
-    const i = idx.get(rptDateInput(r.at));
-    if (i != null) out[i].refunds += r.amount;
-  });
-  return out;
+function rptPaymentsReport(agg, prevAgg) {
+  const rows = rptTenderTotals(agg);
+  const totalNet = rows.reduce((n, r) => n + r.collected - r.refunded, 0);
+  const chartPoints = rows.map((r) => ({
+    label: r.group,
+    short: r.group.length > 10 ? `${r.group.slice(0, 9)}…` : r.group,
+    value: Math.max(0, r.collected - r.refunded),
+  }));
+  rptState.csv = [['Payment type', 'Transactions', 'Collected', 'Refunded', 'Net', 'Share %'],
+    ...rows.map((r) => [r.group, r.count, r.collected, r.refunded, r.collected - r.refunded, totalNet ? ((r.collected - r.refunded) / totalNet) * 100 : 0])];
+  const table = rptTable(
+    [{ label: 'Payment type' }, { label: 'Transactions', num: true }, { label: 'Collected', num: true }, { label: 'Refunded', num: true }, { label: 'Net', num: true }, { label: 'Share', num: true }],
+    rows.map((r) => ({ cells: [custEsc(r.group), r.count, pkr(r.collected), r.refunded ? `−${pkr(r.refunded)}` : '—', `<b>${pkr(r.collected - r.refunded)}</b>`, rptPct(r.collected - r.refunded, totalNet)] })),
+    { foot: ['<b>Total</b>', '', pkr(rows.reduce((n, r) => n + r.collected, 0)), `−${pkr(rows.reduce((n, r) => n + r.refunded, 0))}`, `<b>${pkr(totalNet)}</b>`, ''] }
+  );
+  return `
+    ${rptMetricStrip(agg, prevAgg)}
+    <div class="rpt-card rpt-chart-card">
+      ${rptChartToolbar('Sales by payment type')}
+      ${rptRenderChart(chartPoints, { format: pkr, title: 'Sales by payment type' })}
+    </div>
+    <div class="rpt-card">
+      <h4>Sales by payment type</h4>
+      ${table}
+      <p class="cust-hint">Cash is shown net of change given. <b>Store Credit</b> and <b>Loyalty Points</b> are redemptions of customer balances, not new money in. <b>On Account</b> is still owed by the customer.</p>
+    </div>`;
 }
 
+// ─── Secondary reports ────────────────────────────────────────────────────────
 function rptTimeReport(agg) {
   const hours = rptByHour(agg);
   const days = rptByDay(agg);
@@ -416,20 +776,6 @@ function rptTimeReport(agg) {
       [{ label: 'Date' }, { label: 'Transactions', num: true }, { label: 'Sales', num: true }, { label: 'Refunds', num: true }, { label: 'Net', num: true }, { label: 'Avg sale', num: true }],
       days.slice().reverse().map((d) => ({ cells: [d.label, d.count, pkr(d.total), d.refunds ? `−${pkr(d.refunds)}` : '—', `<b>${pkr(d.total - d.refunds)}</b>`, d.count ? pkr(d.total / d.count) : '—'] }))
     )}</div>`;
-}
-
-function rptPaymentsReport(agg) {
-  const rows = rptTenderTotals(agg);
-  const totalNet = rows.reduce((n, r) => n + r.collected - r.refunded, 0);
-  rptState.csv = [['Tender', 'Transactions', 'Collected', 'Refunded', 'Net', 'Share %'],
-    ...rows.map((r) => [r.group, r.count, r.collected, r.refunded, r.collected - r.refunded, totalNet ? ((r.collected - r.refunded) / totalNet) * 100 : 0])];
-  return `
-    <div class="rpt-card"><h4>Payment methods</h4>${rptTable(
-      [{ label: 'Tender' }, { label: 'Transactions', num: true }, { label: 'Collected', num: true }, { label: 'Refunded', num: true }, { label: 'Net', num: true }, { label: 'Share', num: true }],
-      rows.map((r) => ({ cells: [custEsc(r.group), r.count, pkr(r.collected), r.refunded ? `−${pkr(r.refunded)}` : '—', `<b>${pkr(r.collected - r.refunded)}</b>`, rptPct(r.collected - r.refunded, totalNet)] })),
-      { foot: ['<b>Total</b>', '', pkr(rows.reduce((n, r) => n + r.collected, 0)), `−${pkr(rows.reduce((n, r) => n + r.refunded, 0))}`, `<b>${pkr(totalNet)}</b>`, ''] }
-    )}
-    <p class="cust-hint">Cash is shown net of change given. <b>Store Credit</b> and <b>Loyalty Points</b> are redemptions of customer balances, not new money in. <b>On Account</b> is still owed by the customer.</p></div>`;
 }
 
 function rptCashiersReport(agg) {
@@ -610,8 +956,9 @@ async function rptShiftReport() {
 const RPT_TITLES = {
   summary: 'Sales summary',
   items: 'Sales by item',
+  categories: 'Sales by category',
+  payments: 'Sales by payment type',
   time: 'Sales by time',
-  payments: 'Payment methods',
   cashiers: 'Sales by cashier',
   customers: 'Customers & loyalty',
   returns: 'Returns & refunds',
@@ -630,6 +977,8 @@ async function loadReportsTab() {
     const same = rptDateInput(from) === rptDateInput(to);
     rangeEl.textContent = same ? rptFmtDate(from) : `${rptFmtDate(from)} – ${rptFmtDate(to)}`;
   }
+  const sub = document.getElementById('rpt-subtitle');
+  if (sub) sub.textContent = RPT_TITLES[rptState.report] || 'Sales performance for the selected period';
   const body = document.getElementById('rpt-body');
   if (body && !rptState.data) body.innerHTML = '<div class="cust-empty">Loading report…</div>';
   const [cur, prev] = await Promise.all([
@@ -651,11 +1000,14 @@ async function renderReport() {
   const agg = rptAggregate(rptState.data);
   const prevAgg = rptState.prev ? rptAggregate(rptState.prev) : null;
   rptState.title = RPT_TITLES[rptState.report] || 'Report';
+  const sub = document.getElementById('rpt-subtitle');
+  if (sub) sub.textContent = rptState.title;
   let html;
   switch (rptState.report) {
-    case 'items': html = rptItemsReport(agg); break;
+    case 'items': html = rptItemsReport(agg, prevAgg); break;
+    case 'categories': html = rptCategoriesReport(agg, prevAgg); break;
     case 'time': html = rptTimeReport(agg); break;
-    case 'payments': html = rptPaymentsReport(agg); break;
+    case 'payments': html = rptPaymentsReport(agg, prevAgg); break;
     case 'cashiers': html = rptCashiersReport(agg); break;
     case 'customers': html = rptCustomersReport(agg, rptState.data); break;
     case 'returns': html = rptReturnsReport(agg); break;
@@ -663,6 +1015,7 @@ async function renderReport() {
     default: html = rptSummary(agg, prevAgg);
   }
   body.innerHTML = `<h3 class="rpt-title">${custEsc(rptState.title)}</h3>${html}`;
+  if (RPT_PRIMARY.has(rptState.report)) wireRptShellEvents();
   const search = document.getElementById('rpt-item-search');
   if (search) {
     search.addEventListener('input', () => {
@@ -702,18 +1055,25 @@ function printReport() {
   const body = document.getElementById('rpt-body');
   if (!body) return;
   const clone = body.cloneNode(true);
-  clone.querySelectorAll('input, .rpt-toolbar').forEach((el) => el.remove());
+  clone.querySelectorAll('.rpt-metric').forEach((el) => {
+    const div = document.createElement('div');
+    div.className = 'kpi';
+    div.innerHTML = el.innerHTML;
+    el.replaceWith(div);
+  });
+  clone.querySelectorAll('input, .rpt-toolbar, .rpt-chart-controls').forEach((el) => el.remove());
   const range = document.getElementById('rpt-range')?.textContent || '';
   printHtmlDocument(`${rptState.title} — ${range}`, `
     <style>
-      .mod-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0;}
-      .kpi{border:1px solid #e2e8f0;border-radius:6px;padding:8px;} .kpi span{display:block;color:#64748b;font-size:11px;}
-      .kpi b{display:block;font-size:15px;} .kpi small{color:#64748b;font-size:10px;}
+      .mod-kpis,.rpt-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0;}
+      .kpi,.rpt-metric{border:1px solid #e2e8f0;border-radius:6px;padding:8px;} .kpi span,.rpt-metric span{display:block;color:#64748b;font-size:11px;}
+      .kpi b,.rpt-metric b{display:block;font-size:15px;} .kpi small,.rpt-metric small{color:#64748b;font-size:10px;}
       .rpt-card{margin-top:12px;break-inside:avoid;} .rpt-card h4{margin:0 0 4px;font-size:13px;}
       .rpt-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
       .rpt-chart{width:100%;height:150px;} .rpt-bar{fill:#014582;} .rpt-axis{font-size:10px;fill:#64748b;text-anchor:middle;} .rpt-baseline{stroke:#cbd5e1;}
+      .rpt-line{stroke:#014582;stroke-width:2;} .rpt-area{fill:rgba(1,69,130,.12);} .rpt-dot{fill:#014582;}
       .strong td{font-weight:700;border-top:1px solid #94a3b8;} small{display:block;color:#64748b;} .neg{color:#b91c1c;}
-      .cust-hint{color:#64748b;font-size:11px;} .rpt-title{display:none;}
+      .cust-hint{color:#64748b;font-size:11px;} .rpt-title{display:none;} .rpt-chart-toolbar h4{margin:0 0 8px;}
     </style>
     <h1>${custEsc(custCompanyName())}</h1>
     <div class="muted">${custEsc(rptState.title)} · ${custEsc(range)} · printed ${new Date().toLocaleString()}</div>

@@ -70,6 +70,71 @@
     return merged;
   }
 
+  /** Write cloud template as the local source of truth (do not keep stale local fields). */
+  function replaceReceiptTemplate(cloud, localAsk) {
+    var next = Object.assign({}, DEFAULT_RECEIPT_TEMPLATE(), cloud || {}, {
+      askCashReceived: !!localAsk,
+    });
+    try {
+      localStorage.setItem(RECEIPT_KEY, JSON.stringify(next));
+    } catch (e) {
+      /* ignore quota */
+    }
+    try {
+      global.dispatchEvent(new CustomEvent('pos:receipt-template-changed', { detail: next }));
+    } catch (e) {
+      /* ignore */
+    }
+    return next;
+  }
+
+  /**
+   * Pull company receipt template from web/cloud admin (logo, header, footer…).
+   * Only replaces local template when live API data is returned (keeps askCashReceived).
+   * Offline/cache responses must NOT overwrite a previously synced template.
+   */
+  async function syncReceiptTemplateFromCloud() {
+    var localAsk = !!loadReceiptTemplate().askCashReceived;
+    try {
+      var desk = global.bisonDesktop || global.api || null;
+      var getter = desk && desk.pos && desk.pos.getReceiptSettings;
+      if (typeof getter !== 'function') {
+        return { success: false, message: 'POS API unavailable', fromCache: true, data: loadReceiptTemplate() };
+      }
+      var res = await getter();
+      if (res && res.success && res.data && typeof res.data === 'object') {
+        // Stale local-db fallback — do not clobber localStorage with old defaults.
+        if (res.fromCache) {
+          return {
+            success: false,
+            message:
+              res.message ||
+              'Could not fetch latest receipt from web (offline/cache). Using last local template.',
+            fromCache: true,
+            data: loadReceiptTemplate(),
+          };
+        }
+        var cloud = Object.assign({}, res.data);
+        delete cloud.askCashReceived;
+        var merged = replaceReceiptTemplate(cloud, localAsk);
+        return { success: true, data: merged, fromCache: false };
+      }
+      return {
+        success: false,
+        message: (res && res.message) || 'Could not load receipt settings',
+        fromCache: !!(res && res.fromCache),
+        data: loadReceiptTemplate(),
+      };
+    } catch (err) {
+      return {
+        success: false,
+        message: (err && err.message) || 'Could not sync receipt settings',
+        fromCache: true,
+        data: loadReceiptTemplate(),
+      };
+    }
+  }
+
   // Main app brand logo (Bisonstechs). Embedded as base64 data URI so it renders
   // everywhere: page DOM, print windows (about:blank), and the packaged app.
   var APP_LOGO_FILE = '../../assets/icon.png'; // relative fallback
@@ -79,22 +144,25 @@
     var bd = (profile && profile.businessDetails) || {};
     var comp = (profile && profile.company) || {};
     var tpl = template || loadReceiptTemplate();
+    // Store title can fall back to company name. Logo / address / contact come ONLY
+    // from the web receipt template so clearing them in POS admin actually clears print.
+    var name =
+      tpl.storeName ||
+      (profile && profile.companyName) ||
+      bd.businessName ||
+      bd.companyName ||
+      comp.name ||
+      (profile && profile.organizationName) ||
+      (profile && profile.name) ||
+      'POS';
     return {
-      name:
-        tpl.storeName ||
-        (profile && profile.companyName) ||
-        bd.businessName ||
-        bd.companyName ||
-        comp.name ||
-        (profile && profile.organizationName) ||
-        (profile && profile.name) ||
-        'POS',
-      logo: tpl.storeLogo || (profile && profile.logo) || bd.logo || comp.logo || '',
-      address: tpl.storeAddress || bd.address || comp.address || '',
-      phone: tpl.phone || tpl.storePhone || bd.phone || comp.phone || (profile && profile.phone) || '',
-      email: tpl.email || tpl.storeEmail || bd.email || comp.email || (profile && profile.email) || '',
-      website: tpl.website || tpl.storeWebsite || bd.website || comp.website || (profile && profile.website) || '',
-      taxId: tpl.taxId || bd.taxId || comp.taxId || '',
+      name: name,
+      logo: tpl.showLogo === false ? '' : String(tpl.storeLogo || ''),
+      address: tpl.showAddress === false ? '' : String(tpl.storeAddress || ''),
+      phone: tpl.showPhone === false ? '' : String(tpl.phone || tpl.storePhone || ''),
+      email: tpl.showEmail === false ? '' : String(tpl.email || tpl.storeEmail || ''),
+      website: tpl.showWebsite === false ? '' : String(tpl.website || tpl.storeWebsite || ''),
+      taxId: tpl.showTaxId === false ? '' : String(tpl.taxId || ''),
     };
   }
 
@@ -714,6 +782,7 @@
     DEFAULT_RECEIPT_TEMPLATE: DEFAULT_RECEIPT_TEMPLATE,
     loadReceiptTemplate: loadReceiptTemplate,
     saveReceiptTemplate: saveReceiptTemplate,
+    syncReceiptTemplateFromCloud: syncReceiptTemplateFromCloud,
     resolveReceiptCompany: resolveReceiptCompany,
     buildReceiptHtml: buildReceiptHtml,
     sampleReceiptSale: sampleReceiptSale,

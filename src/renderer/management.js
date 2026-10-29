@@ -538,215 +538,54 @@ async function loadReturns() {
   });
 }
 
-function receiptEsc(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-const RECEIPT_TOGGLES = [
-  ['showLogo', 'Logo'], ['showAddress', 'Address'], ['showPhone', 'Phone'],
-  ['showEmail', 'Email'], ['showWebsite', 'Website'], ['showTaxId', 'Tax ID'],
-  ['showBarcode', 'Barcode'], ['showSku', 'SKU'], ['showCashier', 'Cashier'],
-  ['showTerminal', 'Terminal'], ['showLoyalty', 'Loyalty points'],
-];
-
 async function loadReceipt() {
   const wrap = document.getElementById('panel-receipt');
-  // LOCAL-ONLY: receipt template lives in localStorage only — never synced
-  // to/from the cloud, so each device keeps its own design.
-  const local = loadSettings();
-  let template = { ...window.PosReceipt.loadReceiptTemplate(), ...local };
-
-  let profile = null;
-  try { profile = (await api.pos.getProfile())?.data || null; } catch { /* ignore */ }
-
-  const field = (id, label, key, textarea) => `
-    <div style="margin-bottom:10px;">
-      <label class="muted">${label}</label>
-      ${textarea
-        ? `<textarea id="${id}" rows="3">${receiptEsc(template[key] || '')}</textarea>`
-        : `<input id="${id}" value="${receiptEsc(template[key] || '')}" />`}
-    </div>`;
-
-  const toggles = RECEIPT_TOGGLES.map(([key, label]) => `
-    <div class="toggle" style="gap:10px;">
-      <span>${label}</span>
-      <input type="checkbox" data-toggle="${key}" ${template[key] !== false ? 'checked' : ''} />
-    </div>`).join('');
-
   wrap.innerHTML = `
     <div class="row">
-      <h2>POS receipt designer</h2>
-      <div style="display:flex;gap:8px;">
-        <button class="btn" id="receipt-reset">Reset defaults</button>
-        <button class="btn btn-brand" id="receipt-save">Save</button>
-      </div>
+      <h2>Receipt template</h2>
+      <button class="btn btn-brand" id="receipt-sync">↻ Sync from web</button>
     </div>
-    <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:16px;align-items:start;">
-      <div style="display:grid;gap:14px;">
-        <div class="card">
-          <h3 style="margin:0 0 10px;">Store details</h3>
-          ${field('r-store-name', 'Store name (blank = company name)', 'storeName')}
-          ${field('r-store-address', 'Address', 'storeAddress')}
-          <div class="form-grid">
-            ${field('r-phone', 'Phone', 'phone')}
-            ${field('r-email', 'Email', 'email')}
-            ${field('r-website', 'Website', 'website')}
-            ${field('r-tax-id', 'NTN / Tax ID', 'taxId')}
-          </div>
-          <div style="margin-top:10px;">
-            <label class="muted">Receipt logo</label>
-            <p class="muted" style="margin:4px 0 8px;font-size:12px;">Upload a logo for receipts. If empty, company profile logo is used.</p>
-            <div id="r-logo-preview-wrap" style="display:${template.storeLogo ? 'flex' : 'none'};align-items:center;gap:10px;margin-bottom:8px;">
-              <img id="r-logo-preview" src="${receiptEsc(template.storeLogo || '')}" alt="Logo" style="height:52px;max-width:140px;object-fit:contain;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#fff;" />
-              <button type="button" class="btn" id="r-logo-remove">Remove</button>
-            </div>
-            <input type="file" id="r-logo-file" accept="image/png,image/jpeg,image/webp,image/svg+xml" />
-            <input type="hidden" id="r-store-logo" value="${receiptEsc(template.storeLogo || '')}" />
-            <input id="r-logo-url" placeholder="Or paste logo URL" value="${template.storeLogo && !String(template.storeLogo).startsWith('data:') ? receiptEsc(template.storeLogo) : ''}" style="margin-top:8px;" />
-          </div>
-        </div>
-        <div class="card">
-          <h3 style="margin:0 0 10px;">Receipt text</h3>
-          ${field('r-header', 'Header', 'receiptHeader')}
-          ${field('r-copy-label', 'Copy label', 'copyLabel')}
-          ${field('r-footer', 'Footer', 'receiptFooter')}
-          ${field('r-policy', 'Return / exchange policy', 'receiptReturnPolicy', true)}
-          ${field('r-notes', 'Extra notes', 'receiptNotes', true)}
-          ${field('r-served-by', 'Served by prefix', 'servedByPrefix')}
-          ${field('r-powered-by', 'Bottom line', 'poweredBy')}
-          <div style="margin-bottom:10px;">
-            <label class="muted">Thermal paper width</label>
-            <select id="r-paper-width">
-              <option value="58" ${Number(template.thermalPaperWidthMm) === 58 ? 'selected' : ''}>58mm</option>
-              <option value="80" ${Number(template.thermalPaperWidthMm) !== 58 ? 'selected' : ''}>80mm</option>
-            </select>
-          </div>
-        </div>
-        <div class="card">
-          <h3 style="margin:0 0 6px;">Cash received at sale</h3>
-          <div class="toggle" style="gap:10px;border-bottom:0;">
-            <span>Ask cashier how much customer paid</span>
-            <input type="checkbox" id="r-ask-cash" ${template.askCashReceived ? 'checked' : ''} />
-          </div>
-          <p class="muted" style="margin:8px 0 0;font-size:12px;">If enabled, checkout starts empty. Cashier types cash received; remaining change prints on the receipt.</p>
-        </div>
-        <div class="card">
-          <h3 style="margin:0 0 6px;">Show / hide sections</h3>
-          ${toggles}
-        </div>
-      </div>
-      <div style="position:sticky;top:16px;">
-        <div class="muted" style="font-size:12px;font-weight:700;margin-bottom:8px;letter-spacing:.6px;">LIVE PREVIEW</div>
-        <div style="background:#e5e7eb;border-radius:14px;padding:12px;max-height:78vh;overflow:auto;">
-          <div id="receipt-preview"></div>
-        </div>
-      </div>
+    <div class="card" style="margin-bottom:16px;">
+      <p style="margin:0;line-height:1.5;">
+        Logo, store details, header/footer, and show/hide options are edited in
+        <b>Web app → POS → POS admin → Receipt</b>. This screen only syncs and previews
+        the company template. Sell-page print size and format stay unchanged.
+      </p>
+      <p class="muted" id="receipt-sync-status" style="margin:10px 0 0;font-size:12px;">Loading…</p>
+    </div>
+    <div class="muted" style="font-size:12px;font-weight:700;margin-bottom:8px;letter-spacing:.6px;">PREVIEW</div>
+    <div style="background:#e5e7eb;border-radius:14px;padding:12px;max-width:420px;">
+      <div id="receipt-preview"></div>
     </div>`;
-  const collect = () => {
-    const next = { ...template };
-    const map = {
-      'r-store-name': 'storeName', 'r-store-address': 'storeAddress', 'r-phone': 'phone',
-      'r-email': 'email', 'r-website': 'website', 'r-tax-id': 'taxId',
-      'r-header': 'receiptHeader', 'r-copy-label': 'copyLabel', 'r-footer': 'receiptFooter',
-      'r-policy': 'receiptReturnPolicy', 'r-notes': 'receiptNotes',
-      'r-served-by': 'servedByPrefix', 'r-powered-by': 'poweredBy',
-    };
-    for (const [id, key] of Object.entries(map)) {
-      const el = wrap.querySelector('#' + id);
-      if (el) next[key] = el.value;
-    }
-    const hiddenLogo = wrap.querySelector('#r-store-logo');
-    const urlLogo = wrap.querySelector('#r-logo-url');
-    const fromUrl = (urlLogo?.value || '').trim();
-    const fromHidden = hiddenLogo?.value || '';
-    next.storeLogo = fromUrl || fromHidden || '';
-    if (next.storeLogo) next.showLogo = true;
-    const width = wrap.querySelector('#r-paper-width');
-    if (width) next.thermalPaperWidthMm = Number(width.value) === 58 ? 58 : 80;
-    const askCash = wrap.querySelector('#r-ask-cash');
-    if (askCash) next.askCashReceived = askCash.checked;
-    wrap.querySelectorAll('[data-toggle]').forEach((cb) => { next[cb.dataset.toggle] = cb.checked; });
-    return next;
-  };
 
-  const setMgmtLogoPreview = (logo) => {
-    const hidden = wrap.querySelector('#r-store-logo');
-    const img = wrap.querySelector('#r-logo-preview');
-    const wrapEl = wrap.querySelector('#r-logo-preview-wrap');
-    const urlInp = wrap.querySelector('#r-logo-url');
-    if (hidden) hidden.value = logo || '';
-    if (urlInp) urlInp.value = logo && !String(logo).startsWith('data:') ? logo : '';
-    if (img && wrapEl) {
-      if (logo) {
-        img.src = logo;
-        wrapEl.style.display = 'flex';
-      } else {
-        img.removeAttribute('src');
-        wrapEl.style.display = 'none';
-      }
-    }
-  };
-
-  const renderPreview = () => {
-    const next = collect();
-    const comp = window.PosReceipt.resolveReceiptCompany(profile, next);
+  const status = wrap.querySelector('#receipt-sync-status');
+  const renderPreview = async () => {
+    let profile = null;
+    try { profile = (await api.pos.getProfile())?.data || null; } catch { /* ignore */ }
+    const template = window.PosReceipt.loadReceiptTemplate();
+    const comp = window.PosReceipt.resolveReceiptCompany(profile, template);
     wrap.querySelector('#receipt-preview').innerHTML = window.PosReceipt.buildReceiptHtml(
-      window.PosReceipt.sampleReceiptSale(), comp, next
+      window.PosReceipt.sampleReceiptSale(),
+      comp,
+      template
     );
   };
 
-  wrap.querySelector('#r-logo-file')?.addEventListener('change', (e) => {
-    const file = e.target.files && e.target.files[0];
-    e.target.value = '';
-    if (!file) return;
-    if (file.size > 1.5 * 1024 * 1024) {
-      alert('Logo must be under 1.5 MB');
-      return;
+  const sync = async () => {
+    status.textContent = 'Syncing…';
+    const res = await window.PosReceipt.syncReceiptTemplateFromCloud();
+    if (res?.success) {
+      status.textContent = res.fromCache
+        ? 'Using cached template (offline / last sync).'
+        : 'Synced from web POS admin.';
+    } else {
+      status.textContent = res?.message || 'Could not sync receipt template.';
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      setMgmtLogoPreview(String(reader.result || ''));
-      const showLogo = wrap.querySelector('[data-toggle="showLogo"]');
-      if (showLogo) showLogo.checked = true;
-      renderPreview();
-    };
-    reader.readAsDataURL(file);
-  });
-  wrap.querySelector('#r-logo-remove')?.addEventListener('click', () => {
-    setMgmtLogoPreview('');
-    renderPreview();
-  });
-  wrap.querySelector('#r-logo-url')?.addEventListener('input', () => {
-    const v = (wrap.querySelector('#r-logo-url')?.value || '').trim();
-    if (v) setMgmtLogoPreview(v);
-    renderPreview();
-  });
-
-  wrap.querySelectorAll('input, select, textarea').forEach((el) => {
-    el.addEventListener('input', renderPreview);
-    el.addEventListener('change', renderPreview);
-  });
-  renderPreview();
-
-  wrap.querySelector('#receipt-save').onclick = () => {
-    const body = collect();
-    // LOCAL-ONLY: save to localStorage (per-device). No cloud round-trip.
-    window.PosReceipt.saveReceiptTemplate(body);
-    saveSettings({ ...loadSettings(), ...body });
-    alert('Receipt template saved locally');
-    renderPreview();
+    await renderPreview();
   };
 
-  wrap.querySelector('#receipt-reset').onclick = () => {
-    const defaults = window.PosReceipt.DEFAULT_RECEIPT_TEMPLATE();
-    window.PosReceipt.saveReceiptTemplate(defaults);
-    saveSettings({ ...loadSettings(), ...defaults });
-    loadReceipt();
-  };
+  wrap.querySelector('#receipt-sync').onclick = () => { void sync(); };
+  await sync();
 }
 
 function loadDevice(tab) {

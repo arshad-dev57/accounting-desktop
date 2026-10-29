@@ -762,9 +762,23 @@ async function refreshScopedCatalogCaches(token, user) {
 }
 
 function requireAuth() {
-  const sessionData = authStore.getValidSession(userData());
+  // Prefer non-expired session; if disk read glitches, fall back to any readable session.
+  let sessionData = authStore.getValidSession(userData());
+  if (!sessionData?.accessToken) {
+    sessionData = authStore.readSession(userData());
+  }
   if (!sessionData?.accessToken) {
     return { ok: false, result: { success: false, message: 'Please sign in again' } };
+  }
+  if (authStore.isExpired(sessionData)) {
+    return {
+      ok: false,
+      result: {
+        success: false,
+        message: 'Session expired. Please sign in again.',
+        code: 'SESSION_EXPIRED',
+      },
+    };
   }
   const companyId = resolveCompanyId(sessionData.user, sessionData);
   if (companyId) applyApiCompanyContext(companyId);
@@ -3210,6 +3224,17 @@ function registerIpc() {
         .filter((r) => inRange(r.createdAt));
       const customers = masterSqlite.searchCustomers({ query: '', limit: 1000000 })
         .map((c) => ({ id: c.id, name: c.name, phone: c.phone }));
+      const products = {};
+      for (const p of masterSqlite.listProducts() || []) {
+        if (!p?.id) continue;
+        products[p.id] = {
+          categoryId: p.categoryId || p.category_id || '',
+          categoryName: p.categoryName || p.category_name || p.subcategoryName || 'Uncategorized',
+          costPrice: Number(p.costPrice ?? p.cost_price ?? 0) || 0,
+          name: p.name || '',
+          sku: p.sku || '',
+        };
+      }
       return {
         success: true,
         data: {
@@ -3218,6 +3243,7 @@ function registerIpc() {
           sales,
           returns,
           customers,
+          products,
           balances: masterSqlite.getAllCustomerBalances(),
           ledger: masterSqlite.listLedgerBetween(from.toISOString(), to.toISOString()),
         },
@@ -3227,23 +3253,54 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle('pos:getReceiptSettings', async () => {
+  handle('pos:getReceiptSettings', async () => {
     const auth = requireAuth();
-    if (!auth.ok) return auth.result;
+    if (!auth.ok) {
+      console.warn('[pos:getReceiptSettings] auth failed:', auth.result?.message);
+      return auth.result;
+    }
+    // Prefer company template from web/cloud admin; fall back to local cache.
+    let lastError = '';
+    try {
+      const live = await posApi.getReceiptSettings(auth.session.accessToken);
+      if (live?.success && live.data && typeof live.data === 'object') {
+        try {
+          localDb.saveReceiptSettings(live.data);
+        } catch {
+          /* ignore local cache write */
+        }
+        return { success: true, data: live.data, fromCache: false };
+      }
+      lastError = (live && live.message) || 'Receipt settings response was empty';
+      if (live?.status === 401) {
+        return {
+          success: false,
+          fromCache: false,
+          message: lastError || 'API rejected the session token. Please sign out and sign in again.',
+          data: null,
+        };
+      }
+      console.warn('[pos:getReceiptSettings] live fetch failed:', lastError, 'status=', live?.status);
+    } catch (err) {
+      lastError = err.message || 'cloud fetch failed';
+      console.warn('[pos:getReceiptSettings] cloud fetch failed', lastError);
+    }
     try {
       const settings = localDb.getReceiptSettings();
-      return { success: true, data: settings };
-    } catch (err) {
       return {
         success: true,
-        data: {
-          storeName: 'Bison POS',
-          address: 'Main St',
-          phone: '000-000-0000',
-          email: 'info@bison.com',
-          website: 'www.bison.com',
-          footer: 'Thank you for shopping with us!',
-        }
+        data: settings,
+        fromCache: true,
+        message: lastError
+          ? `Could not reach receipt API (${lastError}). Using last cached template.`
+          : 'Showing cached receipt settings.',
+      };
+    } catch (err) {
+      return {
+        success: false,
+        fromCache: true,
+        message: lastError || err.message || 'Could not load receipt settings',
+        data: null,
       };
     }
   });
@@ -3974,7 +4031,13 @@ function watchSessionExpiry() {
     try {
       const check = await validateSessionAccess(sessionData.accessToken);
       if (!check.ok) {
-        await forceLogoutWithReason(check.code, check.message);
+        // Never force-logout on transient/network noise. Only hard auth failures.
+        const hard = ['USER_INACTIVE', 'COMPANY_INACTIVE', 'SUBSCRIPTION_EXPIRED', 'SESSION_EXPIRED'];
+        if (hard.includes(String(check.code || '')) || check.code === 'USER_INACTIVE') {
+          await forceLogoutWithReason(check.code, check.message);
+        } else {
+          console.warn('[desktop] session check soft-fail:', check.code, check.message);
+        }
       }
     } catch (_) { /* network error — ignore, will retry next cycle */ }
   }, 20_000);

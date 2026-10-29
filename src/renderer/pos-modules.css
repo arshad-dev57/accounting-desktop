@@ -333,12 +333,12 @@
 .checkout-wallet-earn { font-size: 12px; color: #047857; font-weight: 600; margin-top: 6px; }
 .checkout-wallet-earn:empty { display: none; }
 
-/* ── Reports ──────────────────────────────────────────────────────────── */
+/* ── Reports (Loyverse-style layout, Bison tokens) ─────────────────────── */
 .rpt-period { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
 .rpt-custom { display: none; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 .rpt-custom.open { display: flex; }
 .rpt-range { margin-left: auto; font-size: 13px; font-weight: 700; color: var(--text); }
-.rpt-layout { display: grid; grid-template-columns: 200px 1fr; gap: 16px; align-items: start; }
+.rpt-layout { display: grid; grid-template-columns: 210px 1fr; gap: 16px; align-items: start; }
 .rpt-nav {
   position: sticky;
   top: 0;
@@ -350,6 +350,15 @@
   border-radius: 12px;
   padding: 6px;
 }
+.rpt-nav-group {
+  margin: 8px 8px 4px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.rpt-nav-group:first-child { margin-top: 4px; }
 .rpt-nav button {
   text-align: left;
   border: none;
@@ -359,6 +368,7 @@
   font-size: 13px;
   font-weight: 600;
   color: var(--muted);
+  cursor: pointer;
 }
 .rpt-nav button:hover { background: #f1f5f9; color: var(--text); }
 .rpt-nav button.active { background: #eaf2fc; color: var(--brand); }
@@ -376,14 +386,93 @@
 .rpt-bar { fill: var(--brand); }
 .rpt-bar.zero { fill: #cbd5e1; }
 .rpt-bar:hover { fill: #0369a1; }
+.rpt-line { stroke: var(--brand); stroke-width: 2.5; fill: none; }
+.rpt-area { fill: color-mix(in srgb, var(--brand) 14%, transparent); }
+.rpt-dot { fill: var(--brand); }
 .rpt-axis { font-size: 10px; fill: var(--muted); text-anchor: middle; }
 .rpt-baseline { stroke: var(--line); }
 .rpt-toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
 .rpt-toolbar .inp-search { max-width: 320px; height: 36px; }
 
+.rpt-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.rpt-metric {
+  text-align: left;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.rpt-metric:hover { border-color: #cbd5e1; }
+.rpt-metric.active {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 18%, transparent);
+}
+.rpt-metric span {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: 4px;
+}
+.rpt-metric b {
+  display: block;
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1.2;
+}
+.rpt-metric small { display: block; margin-top: 4px; font-size: 11px; }
+.rpt-metric small.up { color: #047857; }
+.rpt-metric small.down { color: #b91c1c; }
+
+.rpt-chart-card { padding-top: 12px; }
+.rpt-chart-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.rpt-chart-toolbar h4 { margin: 0; }
+.rpt-chart-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+.rpt-seg {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f8fafc;
+}
+.rpt-seg button {
+  border: none;
+  background: transparent;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+}
+.rpt-seg button + button { border-left: 1px solid var(--line); }
+.rpt-seg button:hover { background: #eef2f7; color: var(--text); }
+.rpt-seg button.active { background: #fff; color: var(--brand); }
+
 @media (max-width: 1100px) {
   .cust-layout { flex-direction: column; }
   .cust-detail { width: 100%; max-height: none; }
   .rpt-layout { grid-template-columns: 1fr; }
-  .rpt-nav { position: static; flex-direction: row; flex-wrap: wrap; }
+  .rpt-nav { position: static; flex-direction: row; flex-wrap: wrap; align-items: center; }
+  .rpt-nav-group { width: 100%; margin: 8px 4px 0; }
+  .rpt-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+  .rpt-metrics { grid-template-columns: 1fr; }
 }

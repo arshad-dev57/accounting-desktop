@@ -224,131 +224,15 @@ function shouldAskCashReceived() {
   return method === 'cash';
 }
 
-function updateReceiptLogoPreview(logo) {
-  const wrap = document.getElementById('rset-logo-preview-wrap');
-  const img = document.getElementById('rset-logo-preview');
-  const hidden = document.getElementById('rset-store-logo');
-  const urlInp = document.getElementById('rset-logo-url');
-  if (hidden) hidden.value = logo || '';
-  if (urlInp) {
-    urlInp.value = logo && !String(logo).startsWith('data:') ? logo : '';
-  }
-  if (wrap && img) {
-    if (logo) {
-      img.src = logo;
-      wrap.style.display = 'flex';
-    } else {
-      img.removeAttribute('src');
-      wrap.style.display = 'none';
-    }
-  }
-}
-
-function collectReceiptSettingsForm() {
-  const next = { ...receiptTpl() };
-  const map = {
-    'rset-header': 'receiptHeader',
-    'rset-footer': 'receiptFooter',
-    'rset-policy': 'receiptReturnPolicy',
-    'rset-notes': 'receiptNotes',
-    'rset-store-name': 'storeName',
-    'rset-store-address': 'storeAddress',
-    'rset-phone': 'phone',
-  };
-  for (const [id, key] of Object.entries(map)) {
-    const el = document.getElementById(id);
-    if (el) next[key] = el.value;
-  }
-  const hiddenLogo = document.getElementById('rset-store-logo');
-  const urlLogo = document.getElementById('rset-logo-url');
-  const fromHidden = hiddenLogo?.value || '';
-  const fromUrl = (urlLogo?.value || '').trim();
-  next.storeLogo = fromUrl || fromHidden || '';
-  if (next.storeLogo) next.showLogo = true;
-  const width = document.getElementById('rset-paper-width');
-  if (width) next.thermalPaperWidthMm = Number(width.value) === 58 ? 58 : 80;
-  const ask = document.getElementById('rset-ask-cash');
-  if (ask) next.askCashReceived = ask.checked;
-  document.querySelectorAll('[data-rset-toggle]').forEach((cb) => {
-    next[cb.dataset.rsetToggle] = cb.checked;
-  });
-  return next;
-}
-
-function renderReceiptSettingsPreview() {
-  const box = document.getElementById('receipt-settings-preview');
-  if (!box || !window.PosReceipt) return;
-  const next = collectReceiptSettingsForm();
-  const company = window.PosReceipt.resolveReceiptCompany(companyProfile, next);
-  box.innerHTML = window.PosReceipt.buildReceiptHtml(
-    window.PosReceipt.sampleReceiptSale(),
-    company,
-    next
-  );
+function setReceiptSyncStatus(text) {
+  const el = document.getElementById('receipt-sync-status');
+  if (el) el.textContent = text || '';
 }
 
 function fillReceiptSettingsForm() {
   const tpl = receiptTpl();
-  const setVal = (id, v) => {
-    const el = document.getElementById(id);
-    if (el) el.value = v || '';
-  };
-  setVal('rset-header', tpl.receiptHeader);
-  setVal('rset-footer', tpl.receiptFooter);
-  setVal('rset-policy', tpl.receiptReturnPolicy);
-  setVal('rset-notes', tpl.receiptNotes);
-  setVal('rset-store-name', tpl.storeName);
-  setVal('rset-store-address', tpl.storeAddress);
-  setVal('rset-phone', tpl.phone);
-  updateReceiptLogoPreview(tpl.storeLogo || '');
-  const width = document.getElementById('rset-paper-width');
-  if (width) width.value = Number(tpl.thermalPaperWidthMm) === 58 ? '58' : '80';
   const ask = document.getElementById('rset-ask-cash');
   if (ask) ask.checked = !!tpl.askCashReceived;
-  document.querySelectorAll('[data-rset-toggle]').forEach((cb) => {
-    cb.checked = tpl[cb.dataset.rsetToggle] !== false;
-  });
-  const logoFile = document.getElementById('rset-logo-file');
-  if (logoFile && !logoFile.dataset.bound) {
-    logoFile.dataset.bound = '1';
-    logoFile.addEventListener('change', () => {
-      const file = logoFile.files && logoFile.files[0];
-      logoFile.value = '';
-      if (!file) return;
-      if (file.size > 1.5 * 1024 * 1024) {
-        alert('Logo must be under 1.5 MB');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = () => {
-        updateReceiptLogoPreview(String(reader.result || ''));
-        const showLogo = document.querySelector('[data-rset-toggle="showLogo"]');
-        if (showLogo) showLogo.checked = true;
-        renderReceiptSettingsPreview();
-      };
-      reader.readAsDataURL(file);
-    });
-  }
-  const logoRemove = document.getElementById('rset-logo-remove');
-  if (logoRemove && !logoRemove.dataset.bound) {
-    logoRemove.dataset.bound = '1';
-    logoRemove.addEventListener('click', () => {
-      updateReceiptLogoPreview('');
-      const urlInp = document.getElementById('rset-logo-url');
-      if (urlInp) urlInp.value = '';
-      renderReceiptSettingsPreview();
-    });
-  }
-  const logoUrl = document.getElementById('rset-logo-url');
-  if (logoUrl && !logoUrl.dataset.bound) {
-    logoUrl.dataset.bound = '1';
-    logoUrl.addEventListener('input', () => {
-      const v = logoUrl.value.trim();
-      if (v) updateReceiptLogoPreview(v);
-      renderReceiptSettingsPreview();
-    });
-  }
-  renderReceiptSettingsPreview();
 }
 
 function saveReceiptSettings() {
@@ -356,9 +240,34 @@ function saveReceiptSettings() {
     alert('Receipt helper not loaded');
     return;
   }
-  window.PosReceipt.saveReceiptTemplate(collectReceiptSettingsForm());
-  renderReceiptSettingsPreview();
-  alert('Receipt settings saved on this computer');
+  const ask = document.getElementById('rset-ask-cash');
+  window.PosReceipt.saveReceiptTemplate({ askCashReceived: !!ask?.checked });
+  alert('Local checkout option saved');
+}
+
+async function syncReceiptSettingsFromWeb(opts = {}) {
+  const quiet = !!opts.quiet;
+  if (!window.PosReceipt?.syncReceiptTemplateFromCloud) {
+    if (!quiet) alert('Receipt sync is unavailable');
+    return false;
+  }
+  setReceiptSyncStatus('Syncing…');
+  try {
+    const res = await window.PosReceipt.syncReceiptTemplateFromCloud();
+    fillReceiptSettingsForm();
+    if (res?.success && !res.fromCache) {
+      setReceiptSyncStatus('Synced from web admin');
+      if (!quiet) showToast('Receipt template synced from web', 'success');
+      return true;
+    }
+    setReceiptSyncStatus(res?.message || 'Sync failed — check API connection');
+    if (!quiet) showToast(res?.message || 'Could not sync receipt template from web', 'error');
+    return false;
+  } catch (err) {
+    setReceiptSyncStatus(err?.message || 'Sync failed');
+    if (!quiet) showToast(err?.message || 'Could not sync receipt template', 'error');
+    return false;
+  }
 }
 
 function loadLocalSettings() {
@@ -376,6 +285,7 @@ function loadLocalSettings() {
   document.getElementById('settings-enable-terminal').checked = posSettings.enablePaymentTerminal;
   document.getElementById('settings-enable-thermal').checked = posSettings.autoPrintOnSale;
   fillReceiptSettingsForm();
+  void syncReceiptSettingsFromWeb({ quiet: true });
 }
 
 function saveLocalSettings() {
@@ -389,8 +299,9 @@ function saveLocalSettings() {
 
 document.getElementById('btn-save-settings').addEventListener('click', saveLocalSettings);
 document.getElementById('btn-save-receipt-settings')?.addEventListener('click', saveReceiptSettings);
-document.getElementById('receipt-settings-card')?.addEventListener('input', renderReceiptSettingsPreview);
-document.getElementById('receipt-settings-card')?.addEventListener('change', renderReceiptSettingsPreview);
+document.getElementById('btn-sync-receipt-settings')?.addEventListener('click', () => {
+  void syncReceiptSettingsFromWeb({ quiet: false });
+});
 
 function specItem(label, value) {
   return `<div class="spec-item"><span>${label}</span><b>${value || '—'}</b></div>`;
@@ -1561,22 +1472,26 @@ function routeScannedCode(code) {
     return;
   }
   if (isStockTabActive()) {
-    const scanInp = document.getElementById('stock-barcode-scan');
-    if (scanInp) {
-      scanInp.value = trimmed;
-      const matched = localProducts.find((p) =>
-        [p.barcode, p.barcodeNumber, p.sku, p.qrCode, p.qr_code]
-          .some((v) => String(v || '').trim() === trimmed)
-      );
-      if (matched) {
-        applyStockProductSelection(matched);
-        showStockFormAlert('Product matched successfully!', 'success');
-      } else {
-        showStockFormAlert(`No local product found for barcode/SKU: ${trimmed}`, 'error');
-      }
-      scanInp.style.borderColor = '#22c55e';
-      scanInp.style.background = '#f0fdf4';
-      setTimeout(() => { scanInp.style.borderColor = ''; scanInp.style.background = '#fff'; }, 800);
+    const pickerScan = document.getElementById('stock-picker-scan');
+    const matched = findStockProductByCode(trimmed);
+    if (isStockProductPickerOpen() && pickerScan) {
+      pickerScan.value = trimmed;
+      pickerScan.style.borderColor = '#22c55e';
+      pickerScan.style.background = '#f0fdf4';
+      setTimeout(() => { pickerScan.style.borderColor = ''; pickerScan.style.background = '#fff'; }, 800);
+    }
+    if (matched) {
+      applyStockProductSelection(matched);
+      closeStockProductPicker();
+      showStockFormAlert('Product matched successfully!', 'success');
+    } else {
+      if (!isStockProductPickerOpen()) openStockProductPicker();
+      stockPickerQuery = trimmed;
+      stockPickerPage = 1;
+      const searchInp = document.getElementById('stock-picker-search');
+      if (searchInp) searchInp.value = trimmed;
+      renderStockProductList(stockPickerQuery);
+      showStockFormAlert(`No local product found for barcode/SKU: ${trimmed}`, 'error');
     }
     return;
   }
@@ -2917,8 +2832,13 @@ function buildLastSaleFromRecord(saleData, extras = {}) {
   };
 }
 
-function openSaleReceipt(saleData, extras = {}) {
+async function openSaleReceipt(saleData, extras = {}) {
   lastSale = buildLastSaleFromRecord(saleData, extras);
+  try {
+    await syncReceiptSettingsFromWeb({ quiet: true });
+  } catch {
+    /* keep cached template */
+  }
   renderReceipt();
   modalReceipt.style.display = 'flex';
   if (posSettings.autoPrintOnSale) {
@@ -4837,16 +4757,76 @@ window.addEventListener('DOMContentLoaded', () => {
 
 let stockSelectedProduct = null;
 let stockMovementsList = [];
+let stockPickerPage = 1;
+const STOCK_PICKER_PAGE_SIZE = 20;
+let stockPickerQuery = '';
+
+function isStockProductPickerOpen() {
+  const modal = document.getElementById('modal-stock-product-picker');
+  return !!(modal && modal.style.display === 'flex');
+}
+
+function openStockProductPicker() {
+  const modal = document.getElementById('modal-stock-product-picker');
+  if (!modal) return;
+  stockPickerPage = 1;
+  stockPickerQuery = '';
+  const searchInp = document.getElementById('stock-picker-search');
+  const scanInp = document.getElementById('stock-picker-scan');
+  if (searchInp) searchInp.value = '';
+  if (scanInp) scanInp.value = '';
+  modal.style.display = 'flex';
+  renderStockProductList();
+  setTimeout(() => {
+    (scanInp || searchInp)?.focus();
+  }, 50);
+}
+
+function closeStockProductPicker() {
+  const modal = document.getElementById('modal-stock-product-picker');
+  if (modal) modal.style.display = 'none';
+}
+
+function findStockProductByCode(code) {
+  const needle = normalizeScanInput(code);
+  if (!needle) return null;
+  return (localProducts || []).find((p) =>
+    [p.barcode, p.barcodeNumber, p.sku, p.qrCode, p.qr_code]
+      .some((v) => String(v || '').trim() === needle)
+  ) || null;
+}
+
+function filterStockProducts(query = '') {
+  const q = String(query || '').toLowerCase().trim();
+  return (localProducts || []).filter((p) => {
+    if (!q) return true;
+    const hay = [
+      p.name,
+      p.sku,
+      p.barcode,
+      p.barcodeNumber,
+      p.qrCode,
+      p.qr_code,
+    ]
+      .map((v) => String(v || '').toLowerCase())
+      .join(' ');
+    return hay.includes(q);
+  });
+}
 
 // Initialize Stock In listeners & setup
 function initStockPanel() {
   const form = document.getElementById('stock-movement-form');
   if (!form) return;
 
-  const barcodeInp = document.getElementById('stock-barcode-scan');
-  const searchInp = document.getElementById('stock-product-search');
+  const openPickerBtn = document.getElementById('btn-open-stock-product-picker');
+  const closePickerBtn = document.getElementById('btn-close-stock-product-picker');
+  const pickerModal = document.getElementById('modal-stock-product-picker');
+  const searchInp = document.getElementById('stock-picker-search');
+  const scanInp = document.getElementById('stock-picker-scan');
   const productList = document.getElementById('stock-product-list');
-  const productSelect = document.getElementById('stock-product-select');
+  const prevBtn = document.getElementById('stock-picker-prev');
+  const nextBtn = document.getElementById('stock-picker-next');
   const typeSelect = document.getElementById('stock-type-select');
   const bulkQtyInp = document.getElementById('stock-qty-input');
   const boxCountInp = document.getElementById('stock-box-count-input');
@@ -4858,25 +4838,74 @@ function initStockPanel() {
   const notesInp = document.getElementById('stock-notes-input');
   const submitBtn = document.getElementById('btn-submit-stock');
 
-  // 1. Search filter for product list
-  searchInp?.addEventListener('input', () => {
-    renderStockProductList(searchInp.value);
+  openPickerBtn?.addEventListener('click', () => openStockProductPicker());
+  closePickerBtn?.addEventListener('click', () => closeStockProductPicker());
+  pickerModal?.addEventListener('click', (e) => {
+    if (e.target === pickerModal) closeStockProductPicker();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isStockProductPickerOpen()) {
+      e.preventDefault();
+      closeStockProductPicker();
+    }
   });
 
-  // 2. Clickable product list (replaces flaky <select size> listbox)
+  // Search across ALL products; list still pages 20 at a time
+  searchInp?.addEventListener('input', () => {
+    stockPickerQuery = searchInp.value || '';
+    stockPickerPage = 1;
+    renderStockProductList(stockPickerQuery);
+  });
+
+  // Hardware scanner / Enter on scan field → match in ALL products
+  scanInp?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const code = normalizeScanInput(scanInp.value);
+    scanInp.value = '';
+    if (!code) return;
+    const matched = findStockProductByCode(code);
+    if (matched) {
+      applyStockProductSelection(matched);
+      closeStockProductPicker();
+      showStockFormAlert('Product matched successfully!', 'success');
+      return;
+    }
+    // Fall back to text search so partial codes still filter the full catalog
+    stockPickerQuery = code;
+    stockPickerPage = 1;
+    if (searchInp) searchInp.value = code;
+    renderStockProductList(stockPickerQuery);
+    showStockFormAlert(`No exact barcode/SKU match for: ${code}`, 'error');
+  });
+
   productList?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-product-id]');
     if (!btn) return;
     const id = String(btn.getAttribute('data-product-id') || '');
-    const prod = localProducts.find((p) => String(p.id) === id || String(p._id || '') === id);
+    const prod = (localProducts || []).find((p) => String(p.id) === id || String(p._id || '') === id);
     if (!prod) {
       showStockFormAlert('Product not found in local catalog', 'error');
       return;
     }
     applyStockProductSelection(prod);
+    closeStockProductPicker();
   });
 
-  // 3. Stock Type format switch (Bulk vs Box)
+  prevBtn?.addEventListener('click', () => {
+    if (stockPickerPage <= 1) return;
+    stockPickerPage -= 1;
+    renderStockProductList(stockPickerQuery);
+  });
+  nextBtn?.addEventListener('click', () => {
+    const total = filterStockProducts(stockPickerQuery).length;
+    const pages = Math.max(1, Math.ceil(total / STOCK_PICKER_PAGE_SIZE));
+    if (stockPickerPage >= pages) return;
+    stockPickerPage += 1;
+    renderStockProductList(stockPickerQuery);
+  });
+
+  // Stock Type format switch (Bulk vs Box)
   typeSelect.addEventListener('change', () => {
     const format = typeSelect.value;
     const bulkGroup = document.getElementById('stock-bulk-qty-group');
@@ -4895,29 +4924,7 @@ function initStockPanel() {
     recalculateStockFormTotal();
   });
 
-  // 4. Barcode scanning handler
-  barcodeInp.addEventListener('keydown', async (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const code = normalizeScanInput(barcodeInp.value);
-      if (!code) return;
-      barcodeInp.value = '';
-
-      // Match barcode / QR / SKU in localProducts
-      const matched = localProducts.find((p) =>
-        [p.barcode, p.barcodeNumber, p.sku, p.qrCode, p.qr_code]
-          .some((v) => String(v || '').trim() === code)
-      );
-      if (matched) {
-        applyStockProductSelection(matched);
-        showStockFormAlert('Product matched successfully!', 'success');
-      } else {
-        showStockFormAlert(`No local product found for barcode/SKU: ${code}`, 'error');
-      }
-    }
-  });
-
-  // 5. Quantity and cost change listeners
+  // Quantity and cost change listeners
   bulkQtyInp.addEventListener('input', recalculateStockFormTotal);
   boxCountInp.addEventListener('input', recalculateStockFormTotal);
   pcsPerBoxInp.addEventListener('input', recalculateStockFormTotal);
@@ -5030,6 +5037,11 @@ function applyStockProductSelection(prod) {
     el.classList.toggle('active', String(el.getAttribute('data-product-id') || '') === id);
   });
 
+  const label = document.getElementById('stock-product-picker-label');
+  if (label) {
+    label.textContent = prod.name || 'Product';
+  }
+
   const banner = document.getElementById('stock-selected-banner');
   if (banner) {
     banner.style.display = 'block';
@@ -5095,18 +5107,35 @@ function escapeHtmlAttr(value) {
     .replace(/>/g, '&gt;');
 }
 
-function renderStockProductList(query = '') {
+function renderStockProductList(query = stockPickerQuery) {
   const list = document.getElementById('stock-product-list');
   const select = document.getElementById('stock-product-select');
+  const countEl = document.getElementById('stock-picker-count');
+  const pageLabel = document.getElementById('stock-picker-page-label');
+  const prevBtn = document.getElementById('stock-picker-prev');
+  const nextBtn = document.getElementById('stock-picker-next');
   if (!list) return;
 
+  stockPickerQuery = query;
   const prevId = stockSelectedProduct
     ? String(stockSelectedProduct.id || stockSelectedProduct._id || '')
     : '';
-  const q = String(query).toLowerCase().trim();
-  const filtered = (localProducts || []).filter((p) =>
-    !q || `${p.name || ''} ${p.sku || ''} ${p.barcode || ''}`.toLowerCase().includes(q)
-  );
+  const filtered = filterStockProducts(query);
+  const total = filtered.length;
+  const pages = Math.max(1, Math.ceil(total / STOCK_PICKER_PAGE_SIZE) || 1);
+  if (stockPickerPage > pages) stockPickerPage = pages;
+  if (stockPickerPage < 1) stockPickerPage = 1;
+  const start = (stockPickerPage - 1) * STOCK_PICKER_PAGE_SIZE;
+  const shown = filtered.slice(start, start + STOCK_PICKER_PAGE_SIZE);
+
+  if (countEl) {
+    countEl.textContent = total
+      ? `${total} product${total === 1 ? '' : 's'} · showing ${shown.length}`
+      : '0 products';
+  }
+  if (pageLabel) pageLabel.textContent = `Page ${stockPickerPage} / ${pages}`;
+  if (prevBtn) prevBtn.disabled = stockPickerPage <= 1;
+  if (nextBtn) nextBtn.disabled = stockPickerPage >= pages;
 
   if (!filtered.length) {
     list.innerHTML = `<button type="button" class="stock-product-item" disabled>No matching products</button>`;
@@ -5114,8 +5143,6 @@ function renderStockProductList(query = '') {
     return;
   }
 
-  const maxShow = 80;
-  const shown = filtered.slice(0, maxShow);
   list.innerHTML = shown.map((p) => {
     const id = String(p.id || p._id || '');
     const unit = p.stockUnitName || p.stockUnit || 'Pcs';
@@ -5125,22 +5152,14 @@ function renderStockProductList(query = '') {
       ${escapeHtmlAttr(p.name || 'Unnamed')}
       <span class="meta">SKU: ${escapeHtmlAttr(p.sku || 'N/A')} · Stock: ${escapeHtmlAttr(stockStr)} · Cost: ${escapeHtmlAttr(pkr(resolveProductUnitCost(p)))}</span>
     </button>`;
-  }).join('') + (filtered.length > maxShow
-    ? `<button type="button" class="stock-product-item" disabled>…and ${filtered.length - maxShow} more — refine search</button>`
-    : '');
+  }).join('');
 
   if (select) {
     select.innerHTML = shown.map((p) => {
       const id = String(p.id || p._id || '');
       return `<option value="${escapeHtmlAttr(id)}">${escapeHtmlAttr(p.name || '')}</option>`;
     }).join('');
-  }
-
-  // Auto-pick when only one match
-  if (filtered.length === 1) {
-    applyStockProductSelection(filtered[0]);
-  } else if (prevId && filtered.some((p) => String(p.id || p._id) === prevId)) {
-    if (select) select.value = prevId;
+    if (prevId) select.value = prevId;
   }
 }
 
@@ -5173,8 +5192,8 @@ async function loadStockPanel() {
       await loadLocalProducts();
     }
 
-    // Fill product list
-    renderStockProductList(document.getElementById('stock-product-search')?.value || '');
+    // Refresh picker list from full local catalog (keeps current search/page)
+    renderStockProductList(stockPickerQuery || document.getElementById('stock-picker-search')?.value || '');
 
     // Fill suppliers dropdown
     const supSelect = document.getElementById('stock-supplier-select');
