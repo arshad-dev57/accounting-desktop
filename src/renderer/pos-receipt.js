@@ -686,13 +686,20 @@
 
     var printed = false;
     var printId = iframe.getAttribute('data-print-id');
+    var finished = false;
+    var markFinished = function () {
+      if (finished) return;
+      finished = true;
+      finishPrintJob();
+    };
     var cleanup = function () {
+      // Free print queue quickly so customer token / next slip is not stuck ~8s
+      setTimeout(markFinished, 1200);
       setTimeout(function () {
         try {
           var currentIframe = document.querySelector('iframe[data-print-id="' + printId + '"]');
           if (currentIframe) document.body.removeChild(currentIframe);
         } catch (e) { /* ignore */ }
-        finishPrintJob();
       }, 8000);
     };
 
@@ -705,7 +712,7 @@
         cleanup();
       } catch (e) {
         console.error('[POS] Print error', e);
-        finishPrintJob();
+        markFinished();
         window.print();
       }
     };

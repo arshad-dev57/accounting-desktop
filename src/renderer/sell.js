@@ -419,10 +419,15 @@ function tokenDesignFromForm() {
 }
 
 function tokenSettingsPayloadFromForm() {
+  const printCustomer = !!document.getElementById('token-print-customer')?.checked;
+  const printKitchen = !!document.getElementById('token-print-kitchen')?.checked;
+  // If either print option is on, treat token flow as enabled (avoids "I checked print customer but nothing prints")
+  const enabled =
+    !!document.getElementById('token-enabled')?.checked || printCustomer || printKitchen;
   return {
-    enabled: !!document.getElementById('token-enabled')?.checked,
-    printCustomer: !!document.getElementById('token-print-customer')?.checked,
-    printKitchen: !!document.getElementById('token-print-kitchen')?.checked,
+    enabled,
+    printCustomer,
+    printKitchen,
     prefix: document.getElementById('token-prefix')?.value || 'T',
     nextNumber: Number(document.getElementById('token-next')?.value || 1),
     padLength: Number(document.getElementById('token-pad')?.value || 3),
@@ -468,6 +473,8 @@ function applyRestaurantTokenSettingsToForm(d) {
 }
 
 let cachedTokenDesign = null;
+/** Last checkout token payload — reprint from receipt Print button if needed */
+let lastSaleTokenPrint = null;
 
 async function loadRestaurantTokenSettings() {
   try {
@@ -540,25 +547,82 @@ function printRestaurantTokens(tokenPayload) {
   }
   const { tpl, design, company, widthMm } = buildTokenPrintParts(tokenPayload);
   const cashierName = (cashierMetaEl?.textContent || '').replace(/^Cashier:\s*/i, '').trim();
+  const jobs = [];
 
-  if (tokenPayload.printKitchen) {
-    const kitchenHtml = window.PosReceipt.buildTokenHtml(
-      { ...tokenPayload, kind: 'kitchen', cashierName },
-      company,
-      tpl,
-      design
-    );
-    window.PosReceipt.printHtmlAsReceipt(kitchenHtml, widthMm);
-  }
+  // Customer first — cashiers expect the guest slip; kitchen follows via print queue
   if (tokenPayload.printCustomer) {
-    const customerHtml = window.PosReceipt.buildTokenHtml(
-      { ...tokenPayload, kind: 'customer', cashierName },
-      company,
-      tpl,
-      design
+    jobs.push(
+      window.PosReceipt.buildTokenHtml(
+        { ...tokenPayload, kind: 'customer', cashierName },
+        company,
+        tpl,
+        design
+      )
     );
-    // Same printer queue as receipts — customer slip after kitchen
-    setTimeout(() => window.PosReceipt.printHtmlAsReceipt(customerHtml, widthMm), tokenPayload.printKitchen ? 700 : 0);
+  }
+  if (tokenPayload.printKitchen) {
+    jobs.push(
+      window.PosReceipt.buildTokenHtml(
+        { ...tokenPayload, kind: 'kitchen', cashierName },
+        company,
+        tpl,
+        design
+      )
+    );
+  }
+
+  jobs.forEach((html, idx) => {
+    // Stagger only the *start* — PosReceipt queue also serializes overlapping jobs
+    setTimeout(() => window.PosReceipt.printHtmlAsReceipt(html, widthMm), idx * 900);
+  });
+}
+
+/**
+ * Allocate + print restaurant tokens when settings allow.
+ * Used by Send to Kitchen and by direct restaurant checkout (takeaway / pay-now).
+ * Returns token number string or '' if disabled / failed.
+ */
+async function allocateAndPrintRestaurantTokens({
+  ticketNumber = '',
+  tableLabel = '',
+  orderType = 'dine_in',
+  notes = '',
+  lines = [],
+  printKitchen,
+  printCustomer,
+} = {}) {
+  try {
+    const tokenRes = await api.pos.allocateRestaurantToken();
+    if (!tokenRes?.success || !tokenRes.data?.tokenNumber) {
+      if (tokenRes?.code === 'TOKEN_DISABLED') return '';
+      console.warn('[token] allocate failed', tokenRes?.message || tokenRes);
+      return '';
+    }
+    const tokenLabel = tokenRes.data.tokenNumber;
+    if (tokenRes.data.settings) cachedTokenDesign = { ...tokenRes.data.settings };
+    const wantCustomer =
+      printCustomer !== undefined ? !!printCustomer : tokenRes.data.printCustomer !== false;
+    const wantKitchen =
+      printKitchen !== undefined ? !!printKitchen : tokenRes.data.printKitchen !== false;
+    printRestaurantTokens({
+      tokenNumber: tokenLabel,
+      ticketNumber,
+      tableLabel,
+      orderType,
+      notes,
+      lines,
+      itemCount: lines.reduce((n, l) => n + Number(l.quantity || 0), 0),
+      at: Date.now(),
+      printCustomer: wantCustomer,
+      printKitchen: wantKitchen,
+      design: tokenRes.data.settings || cachedTokenDesign,
+    });
+    return tokenLabel;
+  } catch (tokenErr) {
+    if (tokenErr?.code !== 'TOKEN_DISABLED') {
+      console.warn('[token] print skipped', tokenErr);
+    }
+    return '';
   }
 }
 
@@ -619,6 +683,20 @@ document.getElementById('btn-reset-token-now')?.addEventListener('click', () => 
 });
 ['token-prefix', 'token-next', 'token-pad'].forEach((id) => {
   document.getElementById(id)?.addEventListener('input', refreshTokenPreview);
+});
+// Keep master "Enable token flow" in sync when print options are toggled
+['token-print-customer', 'token-print-kitchen'].forEach((id) => {
+  document.getElementById(id)?.addEventListener('change', (e) => {
+    const master = document.getElementById('token-enabled');
+    if (!master) return;
+    if (e.target?.checked) master.checked = true;
+    else if (
+      !document.getElementById('token-print-customer')?.checked &&
+      !document.getElementById('token-print-kitchen')?.checked
+    ) {
+      master.checked = false;
+    }
+  });
 });
 
 function specItem(label, value) {
@@ -1083,33 +1161,14 @@ async function sendCartToKitchen() {
     const notes = document.getElementById('restaurant-notes')?.value?.trim() || '';
     const orderLines = lines.map((l) => ({ ...l }));
 
-    // Restaurant token flow (optional — Settings)
-    let tokenLabel = '';
-    try {
-      const tokenRes = await api.pos.allocateRestaurantToken();
-      if (tokenRes?.success && tokenRes.data?.tokenNumber) {
-        tokenLabel = tokenRes.data.tokenNumber;
-        if (tokenRes.data.settings) cachedTokenDesign = { ...tokenRes.data.settings };
-        printRestaurantTokens({
-          tokenNumber: tokenLabel,
-          ticketNumber: ticket,
-          tableLabel,
-          orderType,
-          notes,
-          lines: orderLines,
-          itemCount: orderLines.reduce((n, l) => n + Number(l.quantity || 0), 0),
-          at: Date.now(),
-          printCustomer: tokenRes.data.printCustomer !== false,
-          printKitchen: tokenRes.data.printKitchen !== false,
-          design: tokenRes.data.settings || cachedTokenDesign,
-        });
-      }
-    } catch (tokenErr) {
-      // Token disabled or print failed — order already sent
-      if (tokenErr?.code !== 'TOKEN_DISABLED') {
-        console.warn('[token] print skipped', tokenErr);
-      }
-    }
+    // Restaurant token flow (optional — Settings → Restaurant token)
+    const tokenLabel = await allocateAndPrintRestaurantTokens({
+      ticketNumber: ticket,
+      tableLabel,
+      orderType,
+      notes,
+      lines: orderLines,
+    });
 
     showToast(
       tokenLabel
@@ -3307,6 +3366,50 @@ async function submitCompleteSale() {
       lineTotal: Number(i.lineTotal) || ((Number(i.quantity) || 0) * (Number(i.unitPrice) || 0)),
     }));
 
+    // Restaurant takeaway / pay-now: allocate + print customer token with the sale.
+    // Skip if sale already came from a kitchen ticket (token printed on Send to Kitchen).
+    let checkoutTokenLabel = '';
+    let pendingTokenPrint = null;
+    if (isRestaurantPos && !payload.restaurantOrderId) {
+      try {
+        const tokenRes = await api.pos.allocateRestaurantToken();
+        console.log('[token] checkout allocate', tokenRes);
+        if (tokenRes?.success && tokenRes.data?.tokenNumber) {
+          checkoutTokenLabel = tokenRes.data.tokenNumber;
+          if (tokenRes.data.settings) cachedTokenDesign = { ...tokenRes.data.settings };
+          const tokenLines = snapItems.map((i) => ({
+            productId: i.productId || null,
+            productName: i.productName,
+            sku: i.sku || '',
+            quantity: i.quantity,
+            unitPrice: i.unitPrice,
+            notes: i.lineNotes || '',
+          }));
+          pendingTokenPrint = {
+            tokenNumber: checkoutTokenLabel,
+            ticketNumber: saleData.invoiceNumber || saleData.orderNumber || '',
+            tableLabel: document.getElementById('restaurant-table')?.value?.trim() || '',
+            orderType: document.getElementById('restaurant-order-type')?.value || 'dine_in',
+            notes: document.getElementById('restaurant-notes')?.value?.trim() || payload.notes || '',
+            lines: tokenLines,
+            itemCount: tokenLines.reduce((n, l) => n + Number(l.quantity || 0), 0),
+            at: Date.now(),
+            printCustomer: tokenRes.data.printCustomer !== false,
+            // Sale checkout: customer token ONLY (once). Kitchen/KOT prints on Send to Kitchen.
+            printKitchen: false,
+            design: tokenRes.data.settings || cachedTokenDesign,
+          };
+        } else if (tokenRes?.code === 'TOKEN_DISABLED') {
+          showToast('Token flow is OFF in Settings — enable & save token settings', 'error');
+        } else if (tokenRes && !tokenRes.success) {
+          showToast(tokenRes.message || 'Could not allocate token', 'error');
+        }
+      } catch (tokenErr) {
+        console.warn('[token] checkout allocate skipped', tokenErr);
+        showToast(tokenErr?.message || 'Token allocate failed', 'error');
+      }
+    }
+
     checkoutModalOverlay.style.display = 'none';
 
     // Clear cart immediately
@@ -3346,7 +3449,18 @@ async function submitCompleteSale() {
       grandTotal: totals.grandTotal,
       paidAmount: paidTotal,
       changeAmount: paidTotal - totals.grandTotal,
+      tokenNumber: checkoutTokenLabel || undefined,
+      notes: checkoutTokenLabel
+        ? `${payload.notes ? `${payload.notes} · ` : ''}Token ${checkoutTokenLabel}`
+        : payload.notes,
     });
+
+    if (pendingTokenPrint) {
+      lastSaleTokenPrint = pendingTokenPrint;
+      // Print customer token right away (customer first). Print queue serializes with receipt.
+      printRestaurantTokens(pendingTokenPrint);
+      showToast(`Customer token ${checkoutTokenLabel} — printing…`, 'success');
+    }
   } else {
     alert(res?.message || 'Completed sale API error');
   }
@@ -3396,6 +3510,7 @@ function buildLastSaleFromRecord(saleData, extras = {}) {
     receiptTitle: extras.receiptTitle,
     customerName: extras.customerName ?? saleData.customerName,
     loyaltyPoints: extras.loyaltyPoints ?? saleData.loyaltyEarned ?? saleData.loyaltyPoints ?? 0,
+    tokenNumber: extras.tokenNumber ?? saleData.tokenNumber ?? '',
   };
 }
 
@@ -3407,11 +3522,35 @@ async function openSaleReceipt(saleData, extras = {}) {
     /* keep cached template */
   }
   renderReceipt();
+  updateReceiptTokenBanner(lastSale?.tokenNumber);
   modalReceipt.style.display = 'flex';
   if (posSettings.autoPrintOnSale) {
     setTimeout(() => {
       document.getElementById('btn-receipt-print')?.click();
     }, 350);
+  }
+}
+
+function updateReceiptTokenBanner(tokenNumber) {
+  const banner = document.getElementById('receipt-token-banner');
+  if (!banner) return;
+  if (tokenNumber) {
+    banner.classList.remove('hidden');
+    banner.style.display = 'flex';
+    banner.innerHTML = `<span>Customer token</span><b style="font-size:22px;letter-spacing:1px;">${escapeHtmlAttr(String(tokenNumber))}</b>
+      <button type="button" class="btn-add-custom" id="btn-reprint-token" style="margin-left:auto;padding:6px 10px;font-size:12px;">Print token again</button>`;
+    banner.querySelector('#btn-reprint-token')?.addEventListener('click', () => {
+      if (lastSaleTokenPrint) {
+        printRestaurantTokens({ ...lastSaleTokenPrint, printKitchen: false, printCustomer: true });
+        showToast(`Printing token ${tokenNumber}`, 'success');
+      } else {
+        showToast('No token payload to reprint', 'error');
+      }
+    });
+  } else {
+    banner.classList.add('hidden');
+    banner.style.display = 'none';
+    banner.innerHTML = '';
   }
 }
 

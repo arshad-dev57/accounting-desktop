@@ -1961,8 +1961,7 @@
         background: #fff;
         box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
       }
-      body.pos-mode-restaurant .category-card:hover,
-      body.pos-mode-restaurant .category-tab-btn.selected {
+      body.pos-mode-restaurant .category-card:hover {
         border-color: var(--rest-green);
         background: var(--rest-green-soft);
       }
@@ -1970,8 +1969,17 @@
         border-radius: 999px;
         border: 1px solid #e2e8f0;
         background: #fff;
+        color: var(--text);
         padding: 8px 14px;
         font-weight: 700;
+      }
+      body.pos-mode-restaurant .category-tab-btn.selected {
+        border-color: var(--rest-green);
+        background: var(--rest-green);
+        color: #ffffff;
+      }
+      body.pos-mode-restaurant .category-tab-btn.selected span {
+        color: #ffffff;
       }
       body.pos-mode-restaurant .products-grid {
         grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
@@ -2562,9 +2570,10 @@
                 <div class="settings-card" id="restaurant-token-card">
                   <h3>Restaurant token flow</h3>
                   <p class="settings-muted">
-                    When enabled, <b>Send to Kitchen</b> prints a short customer token and kitchen slip
-                    on the <b>same thermal printer as receipts</b>. Paper length matches slip content only.
-                    Layout/text style matches the receipt template (store logo, name, dashed rows).
+                    Turn on <b>Enable token flow</b> (or Print customer / kitchen), then click
+                    <b>Save token settings</b>.
+                    Tokens print on <b>Send to Kitchen</b> and also on restaurant <b>checkout / sale print</b>
+                    (same thermal printer as receipts). Paper length matches slip content only.
                   </p>
                   <div class="receipt-feature" style="margin-top:10px;">
                     <label class="receipt-toggle" style="border:0;padding:0;">
@@ -3233,6 +3242,8 @@
           <h3>Sale Complete</h3>
           <button class="modal-close-btn" id="btn-receipt-close">✕</button>
         </div>
+
+        <div id="receipt-token-banner" class="hidden" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px;padding:10px 12px;background:#ecfdf5;border:1px solid #6ee7b7;border-radius:10px;font-size:13px;color:#065f46;"></div>
         
         <div class="receipt-paper" id="receipt-paper-box">
           <!-- Receipt layout dynamically formatted -->
