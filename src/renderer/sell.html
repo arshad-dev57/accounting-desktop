@@ -267,6 +267,7 @@
         grid-template-columns: 1.3fr 380px;
         height: 100%;
         min-height: 0;
+        overflow: hidden;
       }
             .product-browser {
         display: flex;
@@ -414,15 +415,41 @@
         transition: all 0.2s;
         text-align: center;
         padding: 12px;
+        overflow: hidden;
       }
       .category-card:hover {
         border-color: var(--brand);
         background-color: #f0f7ff;
       }
-      .category-card span {
+      .category-card-img {
+        width: 100%;
+        height: 72px;
+        border-radius: 10px;
+        background: #f1f5f9;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        flex-shrink: 0;
+      }
+      .category-card-img img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .category-card > span,
+      .category-card .category-card-name {
         font-size: 13px;
         font-weight: 700;
         color: var(--text);
+      }
+      .category-tab-btn .cat-tab-thumb {
+        width: 22px;
+        height: 22px;
+        border-radius: 6px;
+        object-fit: cover;
+        vertical-align: middle;
+        margin-right: 6px;
       }
       .products-grid {
         display: grid;
@@ -488,9 +515,16 @@
         background-color: #ffffff;
         display: flex;
         flex-direction: column;
+        height: 100%;
         min-height: 0;
+        overflow: hidden;
+      }
+      .customer-selector,
+      .custom-line-section {
+        flex-shrink: 0;
       }
       .cart-header {
+        flex-shrink: 0;
         padding: 12px 16px;
         border-bottom: 1px solid var(--line);
         display: flex;
@@ -521,8 +555,15 @@
         background-color: #fafafa;
         position: relative;
       }
+      .customer-search-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
       .customer-inp-wrap {
         position: relative;
+        flex: 1;
+        min-width: 0;
       }
       .inp-customer {
         width: 100%;
@@ -541,6 +582,22 @@
         left: 10px;
         top: 11px;
         color: var(--muted);
+      }
+      .btn-add-customer-inline {
+        flex-shrink: 0;
+        height: 38px;
+        padding: 0 12px;
+        border: 0;
+        border-radius: 8px;
+        background: var(--brand);
+        color: #fff;
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .btn-add-customer-inline:hover {
+        filter: brightness(0.95);
       }
       
       /* Dropdown autocomplete */
@@ -632,9 +689,10 @@
         cursor: pointer;
       }
 
-      /* Cart Scroll List */
+      /* Cart Scroll List — min-height:0 so flex can shrink without hiding lines */
       .cart-items-list {
-        flex: 1;
+        flex: 1 1 0;
+        min-height: 120px;
         overflow-y: auto;
         padding: 12px;
         background-color: #f8fafc;
@@ -714,6 +772,9 @@
 
       /* Cart Footer / Checkout Totals */
       .cart-footer {
+        flex-shrink: 0;
+        max-height: 48%;
+        overflow-y: auto;
         padding: 16px;
         border-top: 1px solid var(--line);
         background-color: #ffffff;
@@ -1331,6 +1392,40 @@
         font-weight: 700;
       }
 
+      .prod-card.expiry-near {
+        border-color: #f59e0b;
+        box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.35);
+      }
+      .prod-card.expiry-expired {
+        border-color: #ef4444;
+        box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.4);
+        opacity: 0.92;
+      }
+      .prod-expiry-badge {
+        display: inline-block;
+        margin-top: 4px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 1.4;
+      }
+      .prod-expiry-badge.near {
+        background: #fff7ed;
+        color: #c2410c;
+        border: 1px solid #fed7aa;
+      }
+      .prod-expiry-badge.expired {
+        background: #fef2f2;
+        color: #b91c1c;
+        border: 1px solid #fecaca;
+      }
+      .prod-expiry-badge.ok {
+        background: #ecfdf5;
+        color: #047857;
+        border: 1px solid #a7f3d0;
+      }
+
       /* Stock In View Styles */
       .stock-layout {
         display: grid;
@@ -1815,8 +1910,172 @@
       body.pos-mode-restaurant .cart-header h3::before {
         content: '🍽 ';
       }
+      body.pos-mode-restaurant .cart-items-list {
+        min-height: 140px;
+      }
+      body.pos-mode-restaurant .restaurant-order-panel {
+        margin-top: 8px;
+        padding: 10px;
+      }
+      body.pos-mode-restaurant .restaurant-order-panel .panel-title small {
+        display: none;
+      }
       .restaurant-ready-header h2::before {
         content: '🍳 ';
+      }
+
+      /* ── Restaurant POS visual redesign (reference: green menu POS) ── */
+      body.pos-mode-restaurant {
+        --rest-green: #16a34a;
+        --rest-green-soft: #dcfce7;
+        --rest-green-deep: #15803d;
+        --rest-card: #ffffff;
+        --rest-muted: #64748b;
+      }
+      body.pos-mode-restaurant .sell-layout {
+        grid-template-columns: 1.45fr 360px;
+        gap: 0;
+        background: #f1f5f9;
+      }
+      body.pos-mode-restaurant .product-browser {
+        background: #f8fafc;
+        border-right: 0;
+        padding: 12px 14px 14px;
+      }
+      body.pos-mode-restaurant .browser-header {
+        background: transparent;
+        border: 0;
+        padding: 0 0 10px;
+      }
+      body.pos-mode-restaurant .search-wrap input,
+      body.pos-mode-restaurant #product-search-input {
+        height: 44px;
+        border-radius: 14px;
+        border: 1px solid #e2e8f0;
+        background: #fff;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      }
+      body.pos-mode-restaurant .category-card {
+        border-radius: 16px;
+        border: 1px solid #e2e8f0;
+        background: #fff;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      }
+      body.pos-mode-restaurant .category-card:hover,
+      body.pos-mode-restaurant .category-tab-btn.selected {
+        border-color: var(--rest-green);
+        background: var(--rest-green-soft);
+      }
+      body.pos-mode-restaurant .category-tab-btn {
+        border-radius: 999px;
+        border: 1px solid #e2e8f0;
+        background: #fff;
+        padding: 8px 14px;
+        font-weight: 700;
+      }
+      body.pos-mode-restaurant .products-grid {
+        grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+        gap: 14px;
+      }
+      body.pos-mode-restaurant .prod-card {
+        border-radius: 16px;
+        border: 1px solid #e2e8f0;
+        background: var(--rest-card);
+        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
+        padding: 10px;
+        gap: 8px;
+        position: relative;
+      }
+      body.pos-mode-restaurant .prod-card:hover {
+        border-color: var(--rest-green);
+        background: #fff;
+      }
+      body.pos-mode-restaurant .prod-card.unavailable {
+        opacity: 0.55;
+        filter: grayscale(0.2);
+      }
+      body.pos-mode-restaurant .prod-card-img {
+        height: 110px;
+        border-radius: 12px;
+        background: #f1f5f9;
+      }
+      body.pos-mode-restaurant .prod-card b {
+        font-size: 13px;
+        line-height: 1.3;
+        min-height: 34px;
+      }
+      body.pos-mode-restaurant .prod-card-price {
+        color: var(--rest-green-deep);
+        font-weight: 800;
+        font-size: 15px;
+      }
+      body.pos-mode-restaurant .prod-add-btn,
+      body.pos-mode-restaurant .prod-qty-controls {
+        width: 100%;
+        margin-top: 2px;
+      }
+      body.pos-mode-restaurant .prod-add-btn {
+        height: 36px;
+        border: 0;
+        border-radius: 10px;
+        background: var(--rest-green-soft);
+        color: var(--rest-green-deep);
+        font-weight: 800;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      body.pos-mode-restaurant .prod-qty-controls {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: var(--rest-green);
+        color: #fff;
+        border-radius: 10px;
+        height: 36px;
+        padding: 0 6px;
+        font-weight: 800;
+      }
+      body.pos-mode-restaurant .prod-qty-btn {
+        width: 28px;
+        height: 28px;
+        border: 0;
+        border-radius: 8px;
+        background: rgba(255,255,255,0.2);
+        color: #fff;
+        font-size: 16px;
+        cursor: pointer;
+      }
+      body.pos-mode-restaurant .cart-pane {
+        background: #fff;
+        border-left: 1px solid #e2e8f0;
+        border-radius: 18px 0 0 0;
+        margin: 8px 8px 8px 0;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+      }
+      body.pos-mode-restaurant .cart-header h3 {
+        font-size: 16px;
+      }
+      body.pos-mode-restaurant .restaurant-fields {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      body.pos-mode-restaurant #restaurant-order-type {
+        border-radius: 999px;
+      }
+      body.pos-mode-restaurant .btn-send-kitchen,
+      body.pos-mode-restaurant .btn-checkout {
+        background: linear-gradient(180deg, #22c55e 0%, #16a34a 100%);
+        border-radius: 12px;
+        height: 48px;
+        font-weight: 800;
+      }
+      body.pos-mode-restaurant .cart-item-row {
+        border-radius: 12px;
+        border-color: #e2e8f0;
+      }
+      body.pos-mode-restaurant .totals-row.grand-total .val {
+        color: var(--rest-green-deep);
       }
     </style>
   </head>
@@ -1874,6 +2133,9 @@
           <button class="tab-btn" data-tab="stock">
             <span>Stock In</span>
           </button>
+          <button class="tab-btn" data-tab="expiry">
+            <span>Expiry</span>
+          </button>
           <button class="tab-btn" data-tab="reports">
             <span>Reports</span>
           </button>
@@ -1921,9 +2183,12 @@
                 </div>
                 
                 <div class="customer-selector">
-                  <div class="customer-inp-wrap">
-                    <input type="text" class="inp-customer" id="customer-search-input" placeholder="Search customer (name, phone)..." />
-                    <span class="icon-cust-search">&#128100;</span>
+                  <div class="customer-search-row">
+                    <div class="customer-inp-wrap">
+                      <input type="text" class="inp-customer" id="customer-search-input" placeholder="Search customer (name, phone)..." />
+                      <span class="icon-cust-search">&#128100;</span>
+                    </div>
+                    <button type="button" class="btn-add-customer-inline" id="btn-add-customer-sale" title="Add customer">+ Add</button>
                   </div>
                   <div class="cust-dropdown" id="customer-dropdown-results">
                     <!-- autocomplete items -->
@@ -2120,113 +2385,124 @@
 
           <div class="view-panel" id="tab-reports">
             <div class="panel-content rpt-page">
-              <div class="mod-head">
-                <div>
-                  <h2>Reports</h2>
-                  <p id="rpt-subtitle">Sales performance for the selected period</p>
+              <div class="rpt-filter-bar" id="rpt-filter-bar">
+                <select id="rpt-report-type" class="rpt-filter-select" title="Report type">
+                  <option value="sales" selected>Sales Report</option>
+                </select>
+                <select id="rpt-filter" class="rpt-filter-select" title="Filter">
+                  <option value="summary">Sales summary</option>
+                  <option value="items" selected>Item Sales</option>
+                  <option value="categories">Sales by category</option>
+                  <option value="payments">Sales by payment type</option>
+                  <option value="time">Sales by time</option>
+                  <option value="cashiers">Cashiers</option>
+                  <option value="customers">Customers &amp; loyalty</option>
+                  <option value="returns">Returns &amp; refunds</option>
+                  <option value="shift">Shift (X-report)</option>
+                </select>
+                <div class="rpt-datetime-range">
+                  <input type="datetime-local" id="rpt-from-dt" />
+                  <span>to</span>
+                  <input type="datetime-local" id="rpt-to-dt" />
                 </div>
-                <div class="mod-head-actions">
-                  <button class="btn-nav-action ghost" id="rpt-btn-refresh" type="button">↻ Refresh</button>
-                  <button class="btn-nav-action ghost" id="rpt-btn-csv" type="button">Export CSV</button>
-                  <button class="btn-nav-action" id="rpt-btn-print" type="button">Print</button>
-                </div>
-              </div>
-
-              <div class="rpt-period">
-                <div class="chip-row" id="rpt-presets">
-                  <button type="button" class="chip active" data-preset="today">Today</button>
+                <div class="rpt-filter-quick" id="rpt-presets">
+                  <button type="button" class="chip" data-preset="today">Today</button>
                   <button type="button" class="chip" data-preset="yesterday">Yesterday</button>
                   <button type="button" class="chip" data-preset="week">This week</button>
                   <button type="button" class="chip" data-preset="month">This month</button>
                   <button type="button" class="chip" data-preset="last30">Last 30 days</button>
-                  <button type="button" class="chip" data-preset="custom">Custom</button>
                 </div>
-                <div class="rpt-custom" id="rpt-custom">
-                  <input type="date" id="rpt-from" class="mod-select" />
-                  <span>to</span>
-                  <input type="date" id="rpt-to" class="mod-select" />
-                  <button type="button" class="btn-nav-action ghost" id="rpt-apply">Apply</button>
+                <button type="button" class="btn-nav-action accent" id="rpt-btn-advance">Advance Search</button>
+                <div class="rpt-filter-actions">
+                  <button class="btn-nav-action ghost" id="rpt-btn-refresh" type="button">↻ Refresh</button>
+                  <button class="btn-rpt-csv" id="rpt-btn-csv" type="button">Export CSV</button>
+                  <button class="btn-rpt-print" id="rpt-btn-print" type="button">Print</button>
                 </div>
-                <span class="rpt-range" id="rpt-range"></span>
               </div>
-
-              <div class="rpt-layout">
-                <nav class="rpt-nav" id="rpt-nav">
-                  <div class="rpt-nav-group">Reports</div>
-                  <button type="button" class="active" data-report="summary">Sales summary</button>
-                  <button type="button" data-report="items">Sales by item</button>
-                  <button type="button" data-report="categories">Sales by category</button>
-                  <button type="button" data-report="payments">Sales by payment type</button>
-                  <div class="rpt-nav-group">More</div>
-                  <button type="button" data-report="time">Sales by time</button>
-                  <button type="button" data-report="cashiers">Cashiers</button>
-                  <button type="button" data-report="customers">Customers &amp; loyalty</button>
-                  <button type="button" data-report="returns">Returns &amp; refunds</button>
-                  <button type="button" data-report="shift">Shift (X-report)</button>
-                </nav>
-                <section class="rpt-body" id="rpt-body">
-                  <div class="cust-empty">Loading report…</div>
-                </section>
+              <p id="rpt-subtitle" class="rpt-subtitle-line">Item sales detail for the selected period</p>
+              <!-- kept for compatibility with existing report JS (hidden) -->
+              <div class="rpt-custom open" id="rpt-custom" style="display:none;">
+                <input type="date" id="rpt-from" class="mod-select" />
+                <input type="date" id="rpt-to" class="mod-select" />
+                <button type="button" class="btn-nav-action ghost" id="rpt-apply">Apply</button>
               </div>
+              <span class="rpt-range" id="rpt-range" hidden></span>
+              <section class="rpt-body rpt-body-full" id="rpt-body">
+                <div class="cust-empty">Loading report…</div>
+              </section>
             </div>
           </div>
 
           <!-- ─── SALES REGISTER ──────────────────────────────── -->
           <div class="view-panel" id="tab-sales">
-            <div class="panel-content">
-              <div class="panel-header">
-                <h2>POS Sales</h2>
+            <div class="panel-content sales-page">
+              <div class="panel-header sales-page-head">
+                <div>
+                  <h2>Sales register</h2>
+                  <p class="sales-page-sub">Invoice register with item, cost and profit detail</p>
+                </div>
+                <div class="mod-head-actions">
+                  <button class="btn-nav-action ghost" id="btn-sales-print" type="button">🖨 Print</button>
+                  <button class="btn-nav-action ghost" id="btn-sales-pdf" type="button">Export CSV</button>
+                  <button class="btn-nav-action danger" id="btn-sales-delete-all" type="button">Delete all</button>
+                </div>
               </div>
-              <div class="embed-kpi">
-                <div class="kpi"><span>Sales count</span><b id="sales-kpi-count">0</b></div>
-                <div class="kpi"><span>Total amount</span><b id="sales-kpi-total">PKR 0.00</b></div>
+              <div class="embed-kpi sales-kpi-row">
+                <div class="kpi"><span>Invoices</span><b id="sales-kpi-count">0</b></div>
+                <div class="kpi"><span>Gross sales</span><b id="sales-kpi-total">PKR 0.00</b></div>
+                <div class="kpi"><span>Est. profit</span><b id="sales-kpi-profit">PKR 0.00</b></div>
                 <div class="kpi"><span>Credit sales</span><b id="sales-kpi-credit">PKR 0.00</b></div>
                 <div class="kpi"><span>Cashiers</span><b id="sales-kpi-users">0</b></div>
               </div>
-              <div class="data-panel">
-                <h3>By cashier / user</h3>
+              <div class="data-panel sales-register-panel">
+                 <div class="sales-toolbar">
+                   <input id="sales-search" type="text" placeholder="Search invoice, customer, item, SKU…" />
+                   <input id="sales-date-from" type="date" />
+                   <span class="sales-range-sep">–</span>
+                   <input id="sales-date-to" type="date" />
+                   <select id="sales-page-size" title="Rows per page">
+                     <option value="10">10 / page</option>
+                     <option value="25" selected>25 / page</option>
+                     <option value="50">50 / page</option>
+                     <option value="100">100 / page</option>
+                   </select>
+                 </div>
+                 <div id="sales-list-table" class="sales-table-wrap"></div>
+                 <div id="sales-pagination" class="sales-pagination"></div>
+               </div>
+               <div class="data-panel">
+                <h3>By cashier</h3>
                 <div id="sales-user-table"></div>
               </div>
-                             <div class="data-panel">
-                 <h3>All sales</h3>
-                 <div class="sales-toolbar" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-                   <input id="sales-search" type="text" placeholder="Search invoice / customer / product…" style="flex:1;min-width:140px;padding:4px 8px;font-size:12px;" />
-                   <input id="sales-date-from" type="date" style="padding:4px;font-size:12px;" />
-                   <span>&ndash;</span>
-                   <input id="sales-date-to" type="date" style="padding:4px;font-size:12px;" />
-                   <button class="btn-nav-action danger" id="btn-sales-delete-all" type="button" style="margin-left:auto;font-size:12px;">🗑 Delete All</button>
-                   <button class="btn-nav-action ghost" id="btn-sales-print" type="button" style="font-size:12px;">🖨 Print</button>
-                   <button class="btn-nav-action ghost" id="btn-sales-pdf" type="button" style="font-size:12px;">📄 PDF</button>
-                 </div>
-                 <div id="sales-list-table"></div>
-               </div>
 
                <!-- ─── SALE DETAIL MODAL ────────────────────────────── -->
-               <div id="sale-detail-modal" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.45);z-index:2000;align-items:flex-start;justify-content:center;padding-top:24px;">
-                 <div style="background:#fff;border-radius:8px;width:min(90%,560px);max-height:80vh;overflow:auto;">
-                   <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #eee;">
-                     <h3 style="margin:0;font-size:14px;">Sale Details</h3>
-                     <button id="sale-detail-close" type="button" style="background:none;border:none;font-size:18px;cursor:pointer;">✕</button>
+               <div id="sale-detail-modal" class="sale-detail-overlay" style="display:none;">
+                 <div class="sale-detail-box">
+                   <div class="sale-detail-head">
+                     <div>
+                       <h3>Sale details</h3>
+                       <p id="detail-invoice-sub" class="sale-detail-sub"></p>
+                     </div>
+                     <button id="sale-detail-close" type="button" class="modal-close-btn" aria-label="Close">✕</button>
                    </div>
-                   <div style="padding:16px;">
-                     <div style="margin-bottom:8px;font-size:13px;">
-                       <b>Invoice:</b> <span id="detail-invoice">—</span><br/>
-                       <b>Date:</b> <span id="detail-date">—</span><br/>
-                       <b>Cashier:</b> <span id="detail-cashier">—</span><br/>
-                       <b>Customer:</b> <span id="detail-customer">—</span><br/>
-                       <b>Total:</b> <span id="detail-total">PKR 0.00</span>
-                     </div>
-                     <div id="sale-detail-body"></div>
-                     <div style="display:flex;gap:8px;margin-top:12px;">
-                       <button class="btn-nav-action accent" id="btn-detail-print" type="button" style="font-size:12px;">🖨 Print</button>
-                       <button class="btn-nav-action ghost" id="btn-detail-pdf" type="button" style="font-size:12px;">📄 PDF</button>
-                       <button class="btn-nav-action danger" id="btn-detail-delete" type="button" style="font-size:12px;">🗑 Delete</button>
-                     </div>
+                   <div class="sale-detail-meta">
+                     <div><span>Invoice</span><b id="detail-invoice">—</b></div>
+                     <div><span>Date</span><b id="detail-date">—</b></div>
+                     <div><span>Cashier</span><b id="detail-cashier">—</b></div>
+                     <div><span>Customer</span><b id="detail-customer">—</b></div>
+                     <div><span>Payment</span><b id="detail-payment">—</b></div>
+                     <div><span>Total</span><b id="detail-total">PKR 0.00</b></div>
+                   </div>
+                   <div id="sale-detail-body"></div>
+                   <div class="sale-detail-actions">
+                     <button class="btn-nav-action accent" id="btn-detail-print" type="button">🖨 Print</button>
+                     <button class="btn-nav-action ghost" id="btn-detail-pdf" type="button">📄 PDF</button>
+                     <button class="btn-nav-action danger" id="btn-detail-delete" type="button">Delete</button>
+                   </div>
+                 </div>
+               </div>
             </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+          </div>
 
           <!-- ─── CATEGORIES ───────────────────────────────────── -->
           <div class="view-panel" id="tab-categories">
@@ -2270,52 +2546,172 @@
                 <h2>POS settings</h2>
               </div>
               <div class="settings-stack">
-                <div class="settings-card">
-                  <h3>This computer</h3>
-                  <p class="settings-muted" id="machine-os">Loading…</p>
-                  <div class="spec-grid" id="machine-specs"></div>
-                  <div class="meter">
-                    <div class="meter-row"><span>Disk used</span><b id="disk-used-label">—</b></div>
-                    <div class="meter-track"><span class="meter-fill" id="disk-used-bar"></span></div>
-                    <div class="meter-row muted"><span id="disk-free-label">—</span><span id="disk-total-label">—</span></div>
+                <div class="settings-card" id="print-settings-card">
+                  <h3>Printing</h3>
+                  <p class="settings-muted">Local print options for this POS terminal.</p>
+                  <div class="receipt-feature" style="margin-top:10px;">
+                    <label class="receipt-toggle" style="border:0;padding:0;">
+                      <span style="font-weight:700;">Auto-print receipt on sale</span>
+                      <input type="checkbox" id="settings-enable-thermal" />
+                    </label>
+                    <p>When enabled, a full customer receipt prints after checkout.</p>
                   </div>
-                  <div class="meter">
-                    <div class="meter-row"><span>Memory used</span><b id="mem-used-label">—</b></div>
-                    <div class="meter-track"><span class="meter-fill mem" id="mem-used-bar"></span></div>
-                    <div class="meter-row muted"><span id="mem-free-label">—</span><span id="mem-total-label">—</span></div>
-                  </div>
+                  <button class="btn-add-custom" id="btn-save-settings" type="button" style="margin-top:10px;">Save print settings</button>
                 </div>
-                <div class="settings-card">
-                  <h3>This app’s local storage</h3>
-                  <p class="settings-muted">Offline catalog, queues and session on this PC.</p>
-                  <div class="storage-hero">
-                    <div>
-                      <div class="storage-hero-label">App data used</div>
-                      <div class="storage-hero-value" id="app-data-used">—</div>
+
+                <div class="settings-card" id="restaurant-token-card">
+                  <h3>Restaurant token flow</h3>
+                  <p class="settings-muted">
+                    When enabled, <b>Send to Kitchen</b> prints a short customer token and kitchen slip
+                    on the <b>same thermal printer as receipts</b>. Paper length matches slip content only.
+                    Layout/text style matches the receipt template (store logo, name, dashed rows).
+                  </p>
+                  <div class="receipt-feature" style="margin-top:10px;">
+                    <label class="receipt-toggle" style="border:0;padding:0;">
+                      <span style="font-weight:700;">Enable token flow</span>
+                      <input type="checkbox" id="token-enabled" />
+                    </label>
+                  </div>
+                  <div class="receipt-feature">
+                    <label class="receipt-toggle" style="border:0;padding:0;">
+                      <span style="font-weight:700;">Print customer token</span>
+                      <input type="checkbox" id="token-print-customer" checked />
+                    </label>
+                  </div>
+                  <div class="receipt-feature">
+                    <label class="receipt-toggle" style="border:0;padding:0;">
+                      <span style="font-weight:700;">Print kitchen token / KOT</span>
+                      <input type="checkbox" id="token-print-kitchen" checked />
+                    </label>
+                  </div>
+                  <div class="invoice-serial-grid" style="margin-top:12px;">
+                    <label>
+                      <span>Token prefix</span>
+                      <input type="text" id="token-prefix" maxlength="8" placeholder="T" />
+                    </label>
+                    <label>
+                      <span>Next token #</span>
+                      <input type="number" id="token-next" min="1" step="1" />
+                    </label>
+                    <label>
+                      <span>Digits</span>
+                      <input type="number" id="token-pad" min="1" max="8" step="1" />
+                    </label>
+                    <label>
+                      <span>Reset tokens</span>
+                      <select id="token-reset-mode" class="pf-select" style="height:36px;">
+                        <option value="daily">Every day (24h)</option>
+                        <option value="never">Never (keep running)</option>
+                        <option value="shift">On new day after reset hour</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>Daily reset hour</span>
+                      <input type="number" id="token-reset-hour" min="0" max="23" step="1" placeholder="0" />
+                    </label>
+                    <div class="invoice-serial-preview">
+                      <span>Next token will be</span>
+                      <b id="token-preview">T001</b>
                     </div>
-                    <div>
-                      <div class="storage-hero-label">Install size</div>
-                      <div class="storage-hero-value" id="app-install-size">—</div>
-                    </div>
                   </div>
-                  <div class="spec-grid" id="app-storage-specs"></div>
-                  <p class="settings-path" id="app-data-path"></p>
-                </div>
-                <div class="settings-card">
-                  <h3>Hardware</h3>
-                  <div style="margin-bottom:12px;">
-                    <label style="display:block;font-weight:600;margin-bottom:6px;font-size:13px;">Barcode Scanner</label>
-                    <input type="checkbox" id="settings-enable-scanner" checked /> Enable USB barcode scanner (keyboard wedge)
+
+                  <h4 style="margin:18px 0 6px;font-size:14px;">Token design / theme</h4>
+                  <p class="settings-muted" style="margin-bottom:10px;">
+                    Same look as the sales receipt. Store logo &amp; address come from the synced receipt template.
+                  </p>
+                  <div class="invoice-serial-grid">
+                    <label>
+                      <span>Paper width</span>
+                      <select id="token-paper-width" class="pf-select" style="height:36px;">
+                        <option value="80">80 mm</option>
+                        <option value="58">58 mm</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>Customer header</span>
+                      <input type="text" id="token-header-customer" placeholder="CUSTOMER TOKEN" />
+                    </label>
+                    <label>
+                      <span>Kitchen header</span>
+                      <input type="text" id="token-header-kitchen" placeholder="KITCHEN TOKEN / KOT" />
+                    </label>
+                    <label>
+                      <span>Copy label</span>
+                      <input type="text" id="token-copy-label" placeholder="TOKEN COPY" />
+                    </label>
                   </div>
-                  <div style="margin-bottom:12px;">
-                    <label style="display:block;font-weight:600;margin-bottom:6px;font-size:13px;">Card Terminal (Split Payment Link)</label>
-                    <input type="checkbox" id="settings-enable-terminal" /> Enable card reader link
+                  <div class="receipt-field" style="margin-top:10px;">
+                    <label>Customer message</label>
+                    <input id="token-customer-message" type="text" placeholder="Please wait for your order" />
                   </div>
-                  <div style="margin-bottom:12px;">
-                    <label style="display:block;font-weight:600;margin-bottom:6px;font-size:13px;">Receipt Thermal Printing</label>
-                    <input type="checkbox" id="settings-enable-thermal" /> Auto-print receipt on sale
+                  <div class="receipt-field">
+                    <label>Customer hint</label>
+                    <input id="token-customer-hint" type="text" placeholder="Show this token when collecting" />
                   </div>
-                  <button class="btn-add-custom" id="btn-save-settings" style="margin-top:10px;">Save Settings</button>
+                  <div class="receipt-field">
+                    <label>Footer text</label>
+                    <input id="token-footer-text" type="text" placeholder="Thank you!" />
+                  </div>
+                  <div class="receipt-field">
+                    <label>Powered by</label>
+                    <input id="token-powered-by" type="text" placeholder="Powered by BisonTechs POS" />
+                  </div>
+                  <div class="receipt-feature">
+                    <label class="receipt-toggle" style="border:0;padding:0;">
+                      <span style="font-weight:700;">Show logo</span>
+                      <input type="checkbox" id="token-show-logo" checked />
+                    </label>
+                  </div>
+                  <div class="receipt-feature">
+                    <label class="receipt-toggle" style="border:0;padding:0;">
+                      <span style="font-weight:700;">Show address</span>
+                      <input type="checkbox" id="token-show-address" checked />
+                    </label>
+                  </div>
+                  <div class="receipt-feature">
+                    <label class="receipt-toggle" style="border:0;padding:0;">
+                      <span style="font-weight:700;">Show phone</span>
+                      <input type="checkbox" id="token-show-phone" checked />
+                    </label>
+                  </div>
+                  <div class="receipt-feature">
+                    <label class="receipt-toggle" style="border:0;padding:0;">
+                      <span style="font-weight:700;">Show date / time</span>
+                      <input type="checkbox" id="token-show-datetime" checked />
+                    </label>
+                  </div>
+                  <div class="receipt-feature">
+                    <label class="receipt-toggle" style="border:0;padding:0;">
+                      <span style="font-weight:700;">Show table</span>
+                      <input type="checkbox" id="token-show-table" checked />
+                    </label>
+                  </div>
+                  <div class="receipt-feature">
+                    <label class="receipt-toggle" style="border:0;padding:0;">
+                      <span style="font-weight:700;">Show ticket #</span>
+                      <input type="checkbox" id="token-show-ticket" checked />
+                    </label>
+                  </div>
+                  <div class="receipt-feature">
+                    <label class="receipt-toggle" style="border:0;padding:0;">
+                      <span style="font-weight:700;">Show items on customer token</span>
+                      <input type="checkbox" id="token-show-items-customer" />
+                    </label>
+                  </div>
+                  <div class="receipt-feature">
+                    <label class="receipt-toggle" style="border:0;padding:0;">
+                      <span style="font-weight:700;">Show cashier</span>
+                      <input type="checkbox" id="token-show-cashier" />
+                    </label>
+                  </div>
+
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+                    <button class="btn-add-custom" id="btn-save-token-settings" type="button">Save token settings</button>
+                    <button class="btn-add-custom" id="btn-preview-token" type="button" style="background:#334155;">Preview customer token</button>
+                    <button class="btn-add-custom" id="btn-reset-token-now" type="button" style="background:#0f766e;">Reset counter now</button>
+                  </div>
+                  <p class="settings-muted" id="token-settings-status" style="margin-top:8px;font-size:12px;"></p>
+                  <div id="token-preview-panel" class="hidden" style="margin-top:14px;padding:12px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:10px;overflow:auto;max-height:420px;"></div>
                 </div>
 
                 <div class="settings-card" id="drive-backup-card">
@@ -2398,6 +2794,89 @@
                   </div>
                   <button class="btn-add-custom" id="btn-save-receipt-settings" type="button" style="margin-top:10px;">Save local option</button>
                 </div>
+
+                <div class="settings-card" id="invoice-serial-card">
+                  <h3>Invoice / receipt serial</h3>
+                  <p class="settings-muted">
+                    New sales get a proper running receipt number (e.g. <b>INV000001</b>).
+                    Change prefix and next number here so serials start clean from your preferred sequence.
+                  </p>
+                  <div class="invoice-serial-grid">
+                    <label>
+                      <span>Prefix</span>
+                      <input type="text" id="inv-serial-prefix" maxlength="12" placeholder="INV" />
+                    </label>
+                    <label>
+                      <span>Next number</span>
+                      <input type="number" id="inv-serial-next" min="1" step="1" />
+                    </label>
+                    <label>
+                      <span>Digits (padding)</span>
+                      <input type="number" id="inv-serial-pad" min="1" max="12" step="1" />
+                    </label>
+                    <div class="invoice-serial-preview">
+                      <span>Next receipt will be</span>
+                      <b id="inv-serial-preview">INV000001</b>
+                    </div>
+                  </div>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+                    <button class="btn-add-custom" id="btn-save-invoice-serial" type="button">Save serial settings</button>
+                    <button class="btn-add-custom" id="btn-renumber-invoices" type="button" style="background:#0f766e;">Fix empty / temp invoices</button>
+                  </div>
+                  <p class="settings-muted" id="invoice-serial-status" style="margin-top:8px;font-size:12px;"></p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ─── EXPIRY TRACKING ──── -->
+          <div class="view-panel" id="tab-expiry">
+            <div style="padding:20px; height:calc(100vh - 64px); overflow:auto; box-sizing:border-box;">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
+                <div>
+                  <h2 style="margin:0 0 4px;font-size:20px;font-weight:800;color:var(--brand);">Expiry Tracking</h2>
+                  <p style="margin:0;font-size:13px;color:var(--muted);">Products that are expired or nearing expiry (next 30 days).</p>
+                </div>
+                <button type="button" class="btn-nav-action ghost" id="btn-refresh-expiry">Refresh</button>
+              </div>
+
+              <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:16px;">
+                <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;">
+                  <div style="font-size:11px;text-transform:uppercase;color:#94a3b8;font-weight:700;">Tracked</div>
+                  <div id="expiry-count-tracked" style="font-size:24px;font-weight:800;color:#0f172a;margin-top:4px;">0</div>
+                </div>
+                <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:14px;">
+                  <div style="font-size:11px;text-transform:uppercase;color:#c2410c;font-weight:700;">Near Expiry</div>
+                  <div id="expiry-count-near" style="font-size:24px;font-weight:800;color:#c2410c;margin-top:4px;">0</div>
+                </div>
+                <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:14px;">
+                  <div style="font-size:11px;text-transform:uppercase;color:#b91c1c;font-weight:700;">Expired</div>
+                  <div id="expiry-count-expired" style="font-size:24px;font-weight:800;color:#b91c1c;margin-top:4px;">0</div>
+                </div>
+              </div>
+
+              <div style="display:flex;gap:8px;margin-bottom:12px;">
+                <button type="button" class="btn-nav-action accent" id="expiry-filter-near" data-expiry-filter="near">Near Expiry</button>
+                <button type="button" class="btn-nav-action ghost" id="expiry-filter-expired" data-expiry-filter="expired">Expired</button>
+                <button type="button" class="btn-nav-action ghost" id="expiry-filter-all" data-expiry-filter="all">All Tracked</button>
+              </div>
+
+              <div style="background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;">
+                <table class="returns-table" style="width:100%;margin:0;">
+                  <thead>
+                    <tr>
+                      <th>Product</th>
+                      <th>Batch</th>
+                      <th style="text-align:right;">Stock</th>
+                      <th>Expiry Date</th>
+                      <th style="text-align:right;">Days Left</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="expiry-table-body">
+                    <tr><td colspan="6" style="text-align:center;color:var(--muted);padding:28px;">No expiry-tracked products</td></tr>
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
@@ -2441,6 +2920,7 @@
                     <span id="stock-unit-label" class="unit-badge" style="display:none;">Pcs</span>
                   </label>
                   <input type="number" step="any" min="0" id="stock-qty-input" placeholder="e.g. 2.5" />
+                  <div id="stock-unit-preview" style="font-size:12px;color:#64748b;margin-top:4px;"></div>
                 </div>
 
                 <!-- Box Quantity Inputs (Hidden by default) -->
@@ -2460,9 +2940,20 @@
                   Total Pieces: <span id="stock-calc-qty-val">0</span>
                 </div>
 
+                <div id="stock-batch-expiry-group" style="display:none; gap:12px; flex-direction:column;">
+                  <div class="form-group" id="stock-batch-field" style="display:none;">
+                    <label for="stock-batch-input">Batch Number</label>
+                    <input type="text" id="stock-batch-input" placeholder="BATCH-001" />
+                  </div>
+                  <div class="form-group" id="stock-expiry-field" style="display:none;">
+                    <label for="stock-expiry-input">Expiry Date</label>
+                    <input type="date" id="stock-expiry-input" />
+                  </div>
+                </div>
+
                 <!-- Unit Cost Input -->
                 <div class="form-group">
-                  <label for="stock-cost-input">Unit Cost (PKR/Piece) *</label>
+                  <label for="stock-cost-input">Unit Cost *</label>
                   <input type="number" step="any" min="0" id="stock-cost-input" placeholder="0.00" />
                 </div>
 
@@ -2472,20 +2963,21 @@
                   <span id="stock-total-value" style="font-size:16px; font-weight:800; color:var(--brand); float:right;">PKR 0.00</span>
                 </div>
 
-                <!-- Reason Selection -->
+                <!-- Reason Selection (values must match backend STOCK_IN_REASONS) -->
                 <div class="form-group">
                   <label for="stock-reason-select">Stock Source / Reason</label>
                   <select id="stock-reason-select">
                     <option value="opening_stock">Opening Stock</option>
-                    <option value="purchase">Purchase from Supplier</option>
-                    <option value="adjustment">Stock Adjustment / Add</option>
-                    <option value="return">Sales Return</option>
+                    <option value="supplier_credit">Purchase from Supplier (Pay Later)</option>
+                    <option value="physical_adjustment_in">Stock Adjustment / Add</option>
+                    <option value="owner_contribution">Owner Contribution</option>
+                    <option value="free_sample">Free / Sample / Gift</option>
                   </select>
                 </div>
 
-                <!-- Supplier Selection -->
-                <div class="form-group">
-                  <label for="stock-supplier-select">Supplier</label>
+                <!-- Supplier Selection (required for supplier_credit) -->
+                <div class="form-group" id="stock-supplier-group">
+                  <label for="stock-supplier-select" id="stock-supplier-label">Supplier</label>
                   <select id="stock-supplier-select">
                     <option value="">Select supplier...</option>
                   </select>
@@ -2799,6 +3291,17 @@
             <label style="display:block;font-size:12px;font-weight:700;margin-bottom:4px;">Description</label>
             <textarea id="cat-f-desc" rows="2" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;"></textarea>
           </div>
+          <div style="margin-bottom:10px;">
+            <label style="display:block;font-size:12px;font-weight:700;margin-bottom:4px;">Image</label>
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+              <input id="cat-f-image" placeholder="Image URL or pick a file" style="flex:1;height:36px;border:1px solid var(--line);border-radius:8px;padding:0 10px;" />
+              <button type="button" class="btn-nav-action ghost" id="cat-f-image-pick" style="height:36px;">Browse</button>
+              <input type="file" id="cat-f-image-file" accept="image/*" hidden />
+            </div>
+            <div id="cat-f-image-preview" style="display:none;width:96px;height:72px;border-radius:8px;overflow:hidden;border:1px solid var(--line);background:#f8fafc;">
+              <img id="cat-f-image-preview-img" alt="" style="width:100%;height:100%;object-fit:cover;" />
+            </div>
+          </div>
           <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
             <button type="button" class="btn-nav-action ghost" id="cat-form-no">Cancel</button>
             <button type="submit" class="btn-nav-action accent">Save</button>
@@ -2817,6 +3320,7 @@
           <div class="prod-tabs" id="prod-tabs">
             <button type="button" class="prod-tab active" data-prod-tab="basic">Basic Info</button>
             <button type="button" class="prod-tab" data-prod-tab="pricing">Pricing &amp; Stock</button>
+            <button type="button" class="prod-tab" data-prod-tab="recipe" id="prod-tab-recipe" style="display:none;">Recipe</button>
             <button type="button" class="prod-tab" data-prod-tab="category">Category &amp; Supplier</button>
             <button type="button" class="prod-tab" data-prod-tab="warehouse">Warehouse</button>
             <button type="button" class="prod-tab" data-prod-tab="physical">Physical</button>
@@ -2860,6 +3364,17 @@
                 <div id="pf-qr-preview" style="margin-top:12px;padding:12px;border:1px dashed #cbd5e1;border-radius:10px;background:#fff;min-height:140px;display:flex;align-items:center;justify-content:center;"></div>
               </div>
               <div><label class="pf-label">Product Type</label><select class="pf-select" id="pf-productType"><option value="Physical">Physical</option><option value="Service">Service</option><option value="Digital">Digital</option><option value="Raw Material">Raw Material</option></select></div>
+              <div id="pf-item-type-wrap" style="display:none;">
+                <label class="pf-label">Item Type (Restaurant)</label>
+                <select class="pf-select" id="pf-itemType">
+                  <option value="MENU_ITEM">Menu Item (made to order)</option>
+                  <option value="READY_ITEM">Ready Item (resale / drinks)</option>
+                  <option value="INGREDIENT">Ingredient (raw material)</option>
+                  <option value="MODIFIER">Modifier (add-on)</option>
+                </select>
+                <div class="pf-hint">Menu items use a recipe; ingredients are hidden from the POS grid.</div>
+              </div>
+              <div class="pf-check" id="pf-show-in-pos-wrap" style="display:none;"><input type="checkbox" id="pf-showInPos" checked /><label for="pf-showInPos">Show in POS</label></div>
               <div class="pf-check"><input type="checkbox" id="pf-isActive" checked /><label for="pf-isActive">Active</label></div>
               <div class="pf-span"><label class="pf-label">Description</label><textarea class="pf-textarea" id="pf-description" placeholder="Enter product description..."></textarea></div>
               <div class="pf-span"><label class="pf-label">Tags</label><input class="pf-input" id="pf-tags" placeholder="e.g., cotton, grade-a, raw-material" /></div>
@@ -2867,17 +3382,61 @@
 
             <div class="prod-pane" data-pane="pricing">
               <div><label class="pf-label">Cost Price *</label><input class="pf-input" id="pf-costPrice" type="number" min="0" step="0.01" placeholder="0.00" /></div>
-              <div><label class="pf-label">Selling Price *</label><input class="pf-input" id="pf-sellingPrice" type="number" min="0" step="0.01" placeholder="0.00" /></div>
+              <div><label class="pf-label">Selling Price *</label><input class="pf-input" id="pf-sellingPrice" type="number" min="0" step="0.01" placeholder="0.00" /><div class="pf-hint" id="pf-price-unit-hint">Price per piece / unit</div></div>
               <div><label class="pf-label">Landing Cost</label><input class="pf-input" id="pf-landingCost" type="number" min="0" step="0.01" placeholder="0.00" /></div>
               <div><label class="pf-label">Currency *</label><select class="pf-select" id="pf-currency"><option>PKR</option><option>USD</option><option>EUR</option><option>GBP</option><option>AUD</option></select></div>
               <div id="pf-tax-fields" class="pf-span" style="display:contents;">
                 <div><label class="pf-label">Tax Rate %</label><input class="pf-input" id="pf-taxRate" type="number" min="0" step="0.01" /></div>
                 <div><label class="pf-label">Tax Type</label><select class="pf-select" id="pf-taxType"><option>Exclusive</option><option>Inclusive</option></select></div>
               </div>
-              <div><label class="pf-label">Stock Unit</label><select class="pf-select" id="pf-stockUnit"><option>Pcs</option><option>Kg</option><option>Box</option><option>Meter</option><option>Liter</option><option>Dozen</option><option>Pair</option><option>Set</option></select></div>
-              <div><label class="pf-label">Current Stock</label><input class="pf-input" id="pf-currentStock" type="number" min="0" step="1" /><div class="pf-hint">Local POS stock on this PC</div></div>
-              <div><label class="pf-label">Minimum Stock</label><input class="pf-input" id="pf-minimumStock" type="number" min="0" step="1" placeholder="5" /></div>
-              <div><label class="pf-label">Maximum Stock</label><input class="pf-input" id="pf-maximumStock" type="number" min="0" step="1" placeholder="100" /></div>
+
+              <!-- Menu item: how it is sold (burger = Pcs, biryani = Plate/Kg, karhai = Kg) -->
+              <div class="pf-span pf-menu-sell-fields" id="pf-menu-sell-fields" style="display:none;border:1px solid #bbf7d0;border-radius:12px;padding:12px;background:#f0fdf4;grid-column:1/-1;">
+                <label class="pf-label">Sold by *</label>
+                <div class="pf-hint" style="margin-bottom:8px;">Customer is charged per this unit. Example: Burger → Piece, Biryani → Plate, Karhai → Kg.</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                  <div>
+                    <select class="pf-select" id="pf-menuSoldBy">
+                      <option value="Pcs">Piece / Single (burger, drink)</option>
+                      <option value="Plate">Plate</option>
+                      <option value="Half Plate">Half Plate</option>
+                      <option value="Portion">Portion / Serving</option>
+                      <option value="Karhai">Karhai</option>
+                      <option value="Kg">Kg (weight)</option>
+                      <option value="g">Gram</option>
+                      <option value="Litre">Litre</option>
+                      <option value="ml">ml</option>
+                      <option value="Box">Box / Pack</option>
+                      <option value="Dozen">Dozen</option>
+                    </select>
+                  </div>
+                  <div class="pf-check" style="align-items:center;margin:0;">
+                    <input type="checkbox" id="pf-menuAllowFractional" />
+                    <label for="pf-menuAllowFractional">Allow decimal qty (e.g. 1.5 Kg)</label>
+                  </div>
+                </div>
+                <div id="pf-menu-price-preview" style="margin-top:10px;font-size:13px;font-weight:800;color:#15803d;">Price: —</div>
+              </div>
+
+              <div class="pf-stock-fields"><label class="pf-label">Stock Unit</label><select class="pf-select" id="pf-stockUnit"><option>Pcs</option><option>Kg</option><option>g</option><option>ml</option><option>Litre</option><option>Box</option><option>Meter</option><option>Packet</option><option>Bottle</option><option>Dozen</option><option>Pair</option><option>Set</option><option>Plate</option><option>Half Plate</option><option>Portion</option><option>Karhai</option></select></div>
+              <div class="pf-stock-fields"><label class="pf-label">Purchase Unit</label><select class="pf-select" id="pf-purchaseUnit"><option>Pcs</option><option>Kg</option><option>g</option><option>ml</option><option>Litre</option><option>Box</option><option>Meter</option><option>Packet</option><option>Bottle</option><option>Dozen</option><option>Pair</option><option>Set</option></select></div>
+              <div class="pf-stock-fields"><label class="pf-label">Purchase Conversion</label><input class="pf-input" id="pf-purchaseConversionFactor" type="number" min="0.000001" step="any" value="1" /><div class="pf-hint">1 purchase unit = ? stock units</div></div>
+              <div class="pf-stock-fields"><label class="pf-label">Sales Unit</label><select class="pf-select" id="pf-salesUnit"><option>Pcs</option><option>Kg</option><option>g</option><option>ml</option><option>Litre</option><option>Box</option><option>Meter</option><option>Packet</option><option>Bottle</option><option>Dozen</option><option>Pair</option><option>Set</option><option>Plate</option><option>Half Plate</option><option>Portion</option><option>Karhai</option></select></div>
+              <div class="pf-stock-fields"><label class="pf-label">Sales Conversion</label><input class="pf-input" id="pf-salesConversionFactor" type="number" min="0.000001" step="any" value="1" /><div class="pf-hint">1 sales unit = ? stock units</div></div>
+              <div class="pf-check pf-stock-fields"><input type="checkbox" id="pf-allowFractionalQty" /><label for="pf-allowFractionalQty">Allow fractional qty (KG, LTR, etc.)</label></div>
+              <div class="pf-stock-fields"><label class="pf-label">Current Stock</label><input class="pf-input" id="pf-currentStock" type="number" min="0" step="any" /><div class="pf-hint">Local POS stock on this PC</div></div>
+              <div class="pf-stock-fields"><label class="pf-label">Minimum Stock</label><input class="pf-input" id="pf-minimumStock" type="number" min="0" step="any" placeholder="5" /></div>
+              <div class="pf-stock-fields"><label class="pf-label">Maximum Stock</label><input class="pf-input" id="pf-maximumStock" type="number" min="0" step="any" placeholder="100" /></div>
+            </div>
+
+            <div class="prod-pane" data-pane="recipe">
+              <div class="pf-span">
+                <label class="pf-label">Recipe / BOM</label>
+                <div class="pf-hint">Add ingredients consumed when this menu item is sent to kitchen.</div>
+                <div id="recipe-cost-banner" style="margin:8px 0;padding:8px 10px;border-radius:8px;background:#ecfdf5;color:#065f46;font-size:12px;font-weight:700;">Recipe cost: —</div>
+                <div id="recipe-items-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+                <button type="button" class="btn-nav-action ghost" id="btn-add-recipe-row" style="margin-top:10px;">+ Add ingredient</button>
+              </div>
             </div>
 
             <div class="prod-pane" data-pane="category">
@@ -2935,15 +3494,36 @@
               <div class="pf-check"><input type="checkbox" id="pf-hasExpiry" /><label for="pf-hasExpiry">Has Expiry</label></div>
               <div class="pf-check"><input type="checkbox" id="pf-isBatchManaged" /><label for="pf-isBatchManaged">Batch Managed</label></div>
               <div class="pf-check"><input type="checkbox" id="pf-isSerialManaged" /><label for="pf-isSerialManaged">Serial Managed</label></div>
-              <div class="pf-check"><input type="checkbox" id="pf-isExpiryManaged" /><label for="pf-isExpiryManaged">Expiry Managed</label></div>
-              <div><label class="pf-label">Expiry Date</label><input class="pf-input" id="pf-expiryDate" type="date" /></div>
-              <div><label class="pf-label">Manufacturing Date</label><input class="pf-input" id="pf-manufacturingDate" type="date" /></div>
-              <div><label class="pf-label">Batch Number</label><input class="pf-input" id="pf-batchNumber" placeholder="BATCH-001" /></div>
-              <div><label class="pf-label">Shelf Life (days)</label><input class="pf-input" id="pf-shelfLife" type="number" min="0" step="1" placeholder="365" /></div>
-              <div class="pf-check"><input type="checkbox" id="pf-isBulkManaged" /><label for="pf-isBulkManaged">Bulk Managed</label></div>
-              <div class="pf-check"><input type="checkbox" id="pf-hasIndividualTracking" /><label for="pf-hasIndividualTracking">Individual Tracking</label></div>
-              <div><label class="pf-label">Bulk Unit</label><select class="pf-select" id="pf-bulkUnit"><option>Bale</option><option>Box</option><option>Roll</option><option>Pallet</option></select></div>
-              <div><label class="pf-label">Default Batch Quantity</label><input class="pf-input" id="pf-defaultBatchQuantity" type="number" min="0" step="1" placeholder="50" /></div>
+              <div class="pf-check" style="display:none;"><input type="checkbox" id="pf-isExpiryManaged" /><label for="pf-isExpiryManaged">Expiry Managed</label></div>
+
+              <div id="pf-expiry-fields" class="pf-span" style="display:none; margin-top:8px; padding:12px; border:1px solid #fecaca; border-radius:10px; background:#fff7ed;">
+                <div class="pf-hint" style="margin-bottom:8px;">Enter expiry date — this date is used on Sell page and Expiry report.</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                  <div><label class="pf-label">Manufacturing Date</label><input class="pf-input" id="pf-manufacturingDate" type="date" /></div>
+                  <div><label class="pf-label">Shelf Life (days)</label><input class="pf-input" id="pf-shelfLife" type="number" min="0" step="1" placeholder="365" /></div>
+                  <div class="pf-span"><label class="pf-label">Expiry Date *</label><input class="pf-input" id="pf-expiryDate" type="date" /><div class="pf-hint">Auto-fills from manufacturing date + shelf life</div></div>
+                </div>
+              </div>
+
+              <div id="pf-batch-fields" class="pf-span" style="display:none; margin-top:8px; padding:12px; border:1px solid #bfdbfe; border-radius:10px; background:#eff6ff;">
+                <div class="pf-hint" style="margin-bottom:8px;">Batch / lot tracking for this product.</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                  <div><label class="pf-label">Batch Number</label><input class="pf-input" id="pf-batchNumber" placeholder="BATCH-001" /></div>
+                  <div><label class="pf-label">Default Batch Quantity</label><input class="pf-input" id="pf-defaultBatchQuantity" type="number" min="0" step="1" placeholder="50" /></div>
+                </div>
+              </div>
+
+              <div id="pf-serial-fields" class="pf-span" style="display:none; margin-top:8px; padding:12px; border:1px solid #ddd6fe; border-radius:10px; background:#f5f3ff;">
+                <div class="pf-hint">Serial managed products require a serial number at sale time.</div>
+                <div class="pf-check" style="margin-top:8px;"><input type="checkbox" id="pf-hasIndividualTracking" /><label for="pf-hasIndividualTracking">Individual Tracking</label></div>
+              </div>
+
+              <div class="pf-span" style="margin-top:12px; border-top:1px solid #e2e8f0; padding-top:12px;">
+                <div class="pf-check"><input type="checkbox" id="pf-isBulkManaged" /><label for="pf-isBulkManaged">Bulk Managed</label></div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;">
+                  <div><label class="pf-label">Bulk Unit</label><select class="pf-select" id="pf-bulkUnit"><option>Bale</option><option>Box</option><option>Roll</option><option>Pallet</option></select></div>
+                </div>
+              </div>
             </div>
 
             <div class="prod-pane" data-pane="shipping">

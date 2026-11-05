@@ -218,11 +218,15 @@ function getSalesQueue() {
 function addSaleToQueue(salePayload) {
   const queue = getSalesQueue();
   // Ensure we assign a unique client-side ID for tracking
+  let invoiceNumber = salePayload.invoiceNumber;
+  if (isPlaceholderInvoice(invoiceNumber)) {
+    invoiceNumber = allocateInvoiceNumber().invoiceNumber;
+  }
   const sale = {
     id: salePayload.id || `local-sale-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-    invoiceNumber: salePayload.invoiceNumber || `POS-L-${Date.now()}`,
     createdAt: new Date().toISOString(),
     ...salePayload,
+    invoiceNumber,
   };
   queue.push(sale);
   writeJson('queue_sales.json', queue);
@@ -239,6 +243,15 @@ function removeFromSalesQueue(ids) {
   const remaining = queue.filter((s) => !idSet.has(String(s.id)));
   writeJson('queue_sales.json', remaining);
   return remaining.length;
+}
+
+function patchSaleInQueue(id, patch = {}) {
+  const queue = getSalesQueue();
+  const idx = queue.findIndex((s) => String(s.id) === String(id));
+  if (idx < 0) return null;
+  queue[idx] = { ...queue[idx], ...patch };
+  writeJson('queue_sales.json', queue);
+  return queue[idx];
 }
 
 // ─── RETURNS QUEUE (TO SYNC) ──────────────────────────────────────────────────
@@ -366,6 +379,223 @@ function saveReceiptSettings(settings) {
   return writeJson('receipt_settings.json', settings);
 }
 
+// ─── INVOICE / RECEIPT SERIAL NUMBERING ───────────────────────────────────────
+const DEFAULT_INVOICE_SERIAL = {
+  prefix: 'INV',
+  nextNumber: 1,
+  padLength: 6,
+};
+
+function normalizeInvoiceSerial(raw = {}) {
+  const prefix = String(raw.prefix ?? DEFAULT_INVOICE_SERIAL.prefix).trim() || 'INV';
+  let nextNumber = Math.floor(Number(raw.nextNumber));
+  if (!Number.isFinite(nextNumber) || nextNumber < 1) nextNumber = 1;
+  let padLength = Math.floor(Number(raw.padLength));
+  if (!Number.isFinite(padLength) || padLength < 1) padLength = 6;
+  if (padLength > 12) padLength = 12;
+  return { prefix, nextNumber, padLength };
+}
+
+function getInvoiceSerialSettings() {
+  return normalizeInvoiceSerial(readJson('invoice_serial.json', DEFAULT_INVOICE_SERIAL));
+}
+
+function saveInvoiceSerialSettings(settings) {
+  const next = normalizeInvoiceSerial(settings);
+  writeJson('invoice_serial.json', next);
+  return next;
+}
+
+function formatInvoiceNumber(settings, n) {
+  const cfg = normalizeInvoiceSerial(settings);
+  const num = Math.max(1, Math.floor(Number(n) || 1));
+  return `${cfg.prefix}${String(num).padStart(cfg.padLength, '0')}`;
+}
+
+function previewInvoiceNumber(settings) {
+  const cfg = normalizeInvoiceSerial(settings || getInvoiceSerialSettings());
+  return formatInvoiceNumber(cfg, cfg.nextNumber);
+}
+
+/** True when invoice looks auto/temp/empty and should be replaced by a serial. */
+function isPlaceholderInvoice(value) {
+  const s = String(value || '').trim();
+  if (!s) return true;
+  if (/^POS-L-\d+/i.test(s)) return true;
+  if (/^POS-R-\d+/i.test(s)) return true;
+  if (/^local-sale-/i.test(s)) return true;
+  if (/^POS-\d{8}-\d+$/i.test(s)) return true; // backend random day stamp
+  return false;
+}
+
+/**
+ * Atomically allocate the next receipt/invoice number for this company PC.
+ * Returns { invoiceNumber, serial }.
+ */
+function allocateInvoiceNumber() {
+  const cfg = getInvoiceSerialSettings();
+  const invoiceNumber = formatInvoiceNumber(cfg, cfg.nextNumber);
+  const serial = saveInvoiceSerialSettings({
+    ...cfg,
+    nextNumber: cfg.nextNumber + 1,
+  });
+  return { invoiceNumber, serial };
+}
+
+// ─── RESTAURANT TOKEN NUMBERING ───────────────────────────────────────────────
+const DEFAULT_RESTAURANT_TOKEN = {
+  enabled: false,
+  printCustomer: true,
+  printKitchen: true,
+  prefix: 'T',
+  nextNumber: 1,
+  padLength: 3,
+  resetMode: 'daily', // daily | never | shift (same as daily with hour)
+  resetHour: 0,
+  lastResetKey: '',
+  // Token slip design (same printer / receipt-style layout)
+  paperWidthMm: 80, // 58 | 80 — same thermal widths as receipt
+  showLogo: true,
+  showAddress: true,
+  showPhone: true,
+  showDateTime: true,
+  showTable: true,
+  showTicket: true,
+  showItemsOnCustomer: false,
+  showCashier: false,
+  headerCustomer: 'CUSTOMER TOKEN',
+  headerKitchen: 'KITCHEN TOKEN / KOT',
+  copyLabel: 'TOKEN COPY',
+  customerMessage: 'Please wait for your order',
+  customerHint: 'Show this token when collecting',
+  footerText: 'Thank you!',
+  poweredBy: 'Powered by BisonTechs POS',
+};
+
+function localDateKey(d = new Date(), resetHour = 0) {
+  const x = new Date(d);
+  const hour = Math.min(23, Math.max(0, Math.floor(Number(resetHour) || 0)));
+  // Business day flips at resetHour (e.g. 0 = midnight, 4 = 4am restaurant day)
+  if (x.getHours() < hour) x.setDate(x.getDate() - 1);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${x.getFullYear()}-${p(x.getMonth() + 1)}-${p(x.getDate())}`;
+}
+
+function boolField(raw, key, fallback = true) {
+  if (raw[key] === undefined || raw[key] === null || raw[key] === '') return fallback;
+  return raw[key] === true || raw[key] === 'true' || raw[key] === 1 || raw[key] === '1';
+}
+
+function textField(raw, key, fallback = '') {
+  if (raw[key] === undefined || raw[key] === null) return fallback;
+  return String(raw[key]);
+}
+
+function normalizeRestaurantToken(raw = {}) {
+  const prefix = String(raw.prefix ?? DEFAULT_RESTAURANT_TOKEN.prefix).trim() || 'T';
+  let nextNumber = Math.floor(Number(raw.nextNumber));
+  if (!Number.isFinite(nextNumber) || nextNumber < 1) nextNumber = 1;
+  let padLength = Math.floor(Number(raw.padLength));
+  if (!Number.isFinite(padLength) || padLength < 1) padLength = 3;
+  if (padLength > 8) padLength = 8;
+  let resetHour = Math.floor(Number(raw.resetHour));
+  if (!Number.isFinite(resetHour) || resetHour < 0) resetHour = 0;
+  if (resetHour > 23) resetHour = 23;
+  const resetMode = ['daily', 'never', 'shift'].includes(String(raw.resetMode || ''))
+    ? String(raw.resetMode)
+    : 'daily';
+  const paperWidthMm = Number(raw.paperWidthMm) === 58 ? 58 : 80;
+  return {
+    enabled: raw.enabled === true || raw.enabled === 'true' || raw.enabled === 1,
+    printCustomer: boolField(raw, 'printCustomer', true),
+    printKitchen: boolField(raw, 'printKitchen', true),
+    prefix,
+    nextNumber,
+    padLength,
+    resetMode,
+    resetHour,
+    lastResetKey: String(raw.lastResetKey || ''),
+    paperWidthMm,
+    showLogo: boolField(raw, 'showLogo', true),
+    showAddress: boolField(raw, 'showAddress', true),
+    showPhone: boolField(raw, 'showPhone', true),
+    showDateTime: boolField(raw, 'showDateTime', true),
+    showTable: boolField(raw, 'showTable', true),
+    showTicket: boolField(raw, 'showTicket', true),
+    showItemsOnCustomer: boolField(raw, 'showItemsOnCustomer', false),
+    showCashier: boolField(raw, 'showCashier', false),
+    headerCustomer: textField(raw, 'headerCustomer', DEFAULT_RESTAURANT_TOKEN.headerCustomer).trim()
+      || DEFAULT_RESTAURANT_TOKEN.headerCustomer,
+    headerKitchen: textField(raw, 'headerKitchen', DEFAULT_RESTAURANT_TOKEN.headerKitchen).trim()
+      || DEFAULT_RESTAURANT_TOKEN.headerKitchen,
+    copyLabel: textField(raw, 'copyLabel', DEFAULT_RESTAURANT_TOKEN.copyLabel),
+    customerMessage: textField(raw, 'customerMessage', DEFAULT_RESTAURANT_TOKEN.customerMessage),
+    customerHint: textField(raw, 'customerHint', DEFAULT_RESTAURANT_TOKEN.customerHint),
+    footerText: textField(raw, 'footerText', DEFAULT_RESTAURANT_TOKEN.footerText),
+    poweredBy: textField(raw, 'poweredBy', DEFAULT_RESTAURANT_TOKEN.poweredBy),
+  };
+}
+
+function getRestaurantTokenSettings() {
+  return normalizeRestaurantToken(readJson('restaurant_token.json', DEFAULT_RESTAURANT_TOKEN));
+}
+
+function saveRestaurantTokenSettings(settings) {
+  const next = normalizeRestaurantToken(settings);
+  writeJson('restaurant_token.json', next);
+  return next;
+}
+
+function formatRestaurantToken(settings, n) {
+  const cfg = normalizeRestaurantToken(settings);
+  const num = Math.max(1, Math.floor(Number(n) || 1));
+  return `${cfg.prefix}${String(num).padStart(cfg.padLength, '0')}`;
+}
+
+function previewRestaurantToken(settings) {
+  const cfg = normalizeRestaurantToken(settings || getRestaurantTokenSettings());
+  if (cfg.resetMode !== 'never') {
+    const key = localDateKey(new Date(), cfg.resetHour);
+    if (cfg.lastResetKey !== key) return formatRestaurantToken(cfg, 1);
+  }
+  return formatRestaurantToken(cfg, cfg.nextNumber);
+}
+
+/** Apply daily/shift reset if needed. persist=true writes back. */
+function maybeResetRestaurantToken(cfg, persist = true) {
+  const settings = normalizeRestaurantToken(cfg);
+  if (settings.resetMode === 'never') return settings;
+  const key = localDateKey(new Date(), settings.resetHour);
+  if (settings.lastResetKey === key) return settings;
+  const next = {
+    ...settings,
+    nextNumber: 1,
+    lastResetKey: key,
+  };
+  if (persist) saveRestaurantTokenSettings(next);
+  return next;
+}
+
+function allocateRestaurantToken() {
+  let cfg = maybeResetRestaurantToken(getRestaurantTokenSettings(), true);
+  const tokenNumber = formatRestaurantToken(cfg, cfg.nextNumber);
+  cfg = saveRestaurantTokenSettings({
+    ...cfg,
+    nextNumber: cfg.nextNumber + 1,
+  });
+  return { tokenNumber, settings: cfg };
+}
+
+function resetRestaurantTokenCounter() {
+  const cfg = getRestaurantTokenSettings();
+  const key = localDateKey(new Date(), cfg.resetHour);
+  return saveRestaurantTokenSettings({
+    ...cfg,
+    nextNumber: 1,
+    lastResetKey: key,
+  });
+}
+
 module.exports = {
   initialize,
   setCompanyScope,
@@ -385,6 +615,7 @@ module.exports = {
   addSaleToQueue,
   clearSalesQueue,
   removeFromSalesQueue,
+  patchSaleInQueue,
   getReturnsQueue,
   addReturnToQueue,
   clearReturnsQueue,
@@ -405,4 +636,17 @@ module.exports = {
   addShiftToHistory,
   getReceiptSettings,
   saveReceiptSettings,
+  getInvoiceSerialSettings,
+  saveInvoiceSerialSettings,
+  formatInvoiceNumber,
+  previewInvoiceNumber,
+  isPlaceholderInvoice,
+  allocateInvoiceNumber,
+  getRestaurantTokenSettings,
+  saveRestaurantTokenSettings,
+  formatRestaurantToken,
+  previewRestaurantToken,
+  allocateRestaurantToken,
+  maybeResetRestaurantToken,
+  resetRestaurantTokenCounter,
 };

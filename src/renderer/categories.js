@@ -41,8 +41,14 @@ function renderCategories() {
     return;
   }
   tableWrap.innerHTML = `<table>
-    <thead><tr><th>Name</th><th>Code</th><th>Description</th><th>Subcategories</th><th>Actions</th></tr></thead>
-    <tbody>${rows.map((c) => `<tr>
+    <thead><tr><th></th><th>Name</th><th>Code</th><th>Description</th><th>Subcategories</th><th>Actions</th></tr></thead>
+    <tbody>${rows.map((c) => {
+      const img = c.mainImage || c.image || '';
+      const thumb = img
+        ? `<img src="${String(img).replace(/"/g, '&quot;')}" alt="" style="width:36px;height:36px;object-fit:cover;border-radius:8px;" referrerpolicy="no-referrer" onerror="this.style.display='none'" />`
+        : '📁';
+      return `<tr>
+      <td>${thumb}</td>
       <td><b>${c.name}</b></td>
       <td>${c.code || '—'}</td>
       <td>${c.description || '—'}</td>
@@ -51,7 +57,8 @@ function renderCategories() {
         <button class="icon-btn" data-edit-cat="${c.id}">✎</button>
         <button class="icon-btn" data-del-cat="${c.id}">🗑</button>
       </td>
-    </tr>`).join('')}</tbody>
+    </tr>`;
+    }).join('')}</tbody>
   </table>`;
 }
 
@@ -70,8 +77,14 @@ function renderSubcategories() {
     return;
   }
   tableWrap.innerHTML = `<table>
-    <thead><tr><th>Name</th><th>Code</th><th>Parent Category</th><th>Description</th><th>Actions</th></tr></thead>
-    <tbody>${filtered.map((s) => `<tr>
+    <thead><tr><th></th><th>Name</th><th>Code</th><th>Parent Category</th><th>Description</th><th>Actions</th></tr></thead>
+    <tbody>${filtered.map((s) => {
+      const img = s.mainImage || s.image || '';
+      const thumb = img
+        ? `<img src="${String(img).replace(/"/g, '&quot;')}" alt="" style="width:36px;height:36px;object-fit:cover;border-radius:8px;" referrerpolicy="no-referrer" onerror="this.style.display='none'" />`
+        : '📁';
+      return `<tr>
+      <td>${thumb}</td>
       <td><b>${s.name}</b></td>
       <td>${s.code || '—'}</td>
       <td>${s.parentName}</td>
@@ -80,7 +93,8 @@ function renderSubcategories() {
         <button class="icon-btn" data-edit-sub="${s.id}" data-parent="${s.parentId}">✎</button>
         <button class="icon-btn" data-del-sub="${s.id}">🗑</button>
       </td>
-    </tr>`).join('')}</tbody>
+    </tr>`;
+    }).join('')}</tbody>
   </table>`;
 }
 
@@ -101,6 +115,20 @@ function openForm(kind, row) {
   document.getElementById('f-name').value = row?.name || '';
   document.getElementById('f-code').value = row?.code || '';
   document.getElementById('f-desc').value = row?.description || '';
+  const imgVal = row?.mainImage || row?.image || '';
+  const imgInp = document.getElementById('f-image');
+  if (imgInp) imgInp.value = imgVal;
+  const preview = document.getElementById('f-image-preview');
+  const previewImg = document.getElementById('f-image-preview-img');
+  if (preview && previewImg) {
+    if (imgVal) {
+      previewImg.src = imgVal;
+      preview.style.display = 'block';
+    } else {
+      previewImg.removeAttribute('src');
+      preview.style.display = 'none';
+    }
+  }
   overlay.classList.add('show');
 }
 
@@ -167,6 +195,40 @@ document.querySelectorAll('.tab').forEach((btn) => {
 searchInp.addEventListener('input', render);
 btnAdd.addEventListener('click', () => openForm(tab, null));
 document.getElementById('btn-cancel').addEventListener('click', closeForm);
+document.getElementById('f-image')?.addEventListener('input', (e) => {
+  const preview = document.getElementById('f-image-preview');
+  const previewImg = document.getElementById('f-image-preview-img');
+  const value = String(e.target.value || '').trim();
+  if (!preview || !previewImg) return;
+  if (value) {
+    previewImg.src = value;
+    preview.style.display = 'block';
+  } else {
+    previewImg.removeAttribute('src');
+    preview.style.display = 'none';
+  }
+});
+document.getElementById('f-image-pick')?.addEventListener('click', () => {
+  document.getElementById('f-image-file')?.click();
+});
+document.getElementById('f-image-file')?.addEventListener('change', (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const value = reader.result;
+    const inp = document.getElementById('f-image');
+    if (inp) inp.value = value;
+    const preview = document.getElementById('f-image-preview');
+    const previewImg = document.getElementById('f-image-preview-img');
+    if (preview && previewImg) {
+      previewImg.src = value;
+      preview.style.display = 'block';
+    }
+  };
+  reader.readAsDataURL(file);
+  e.target.value = '';
+});
 document.getElementById('btn-back').addEventListener('click', () => {
   window.location.href = './sell.html';
 });
@@ -205,6 +267,7 @@ form.addEventListener('submit', async (e) => {
   const name = document.getElementById('f-name').value.trim();
   const code = document.getElementById('f-code').value.trim();
   const description = document.getElementById('f-desc').value.trim();
+  const image = document.getElementById('f-image')?.value?.trim() || '';
   if (!name) {
     formError.textContent = 'Name is required';
     return;
@@ -213,7 +276,7 @@ form.addEventListener('submit', async (e) => {
     formError.textContent = 'Please select a parent category';
     return;
   }
-  const payload = { id: editing?.row?.id, name, code, description };
+  const payload = { id: editing?.row?.id, name, code, description, image, mainImage: image };
   let res;
   try {
     res = editing?.kind === 'subs'

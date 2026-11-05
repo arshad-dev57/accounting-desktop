@@ -9,69 +9,325 @@
     <title>Kitchen Display — Bisonstechs</title>
     <link rel="stylesheet" href="./shared.css" />
     <style>
-      body { background: #eef2f6; min-height: 100%; margin: 0; }
+      :root {
+        --kds-bg: #0f172a;
+        --kds-panel: #1e293b;
+        --kds-card: #273549;
+        --kds-line: #334155;
+        --kds-text: #f8fafc;
+        --kds-muted: #94a3b8;
+        --kds-new: #f59e0b;
+        --kds-prep: #38bdf8;
+        --kds-ready: #34d399;
+        --kds-danger: #f87171;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(1200px 500px at 10% -10%, rgba(56, 189, 248, 0.12), transparent 55%),
+          radial-gradient(900px 400px at 90% 0%, rgba(245, 158, 11, 0.1), transparent 50%),
+          var(--kds-bg);
+        color: var(--kds-text);
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      }
       .hidden { display: none !important; }
+
       .top {
-        display: flex; align-items: center; justify-content: space-between;
-        padding: 14px 18px; background: #fff; border-bottom: 1px solid var(--line);
-        position: sticky; top: 0; z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 16px 20px;
+        background: rgba(15, 23, 42, 0.92);
+        border-bottom: 1px solid var(--kds-line);
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        backdrop-filter: blur(10px);
       }
-      .top h1 { margin: 0; font-size: 18px; }
-      .top .meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+      .brand-block { min-width: 0; }
+      .brand-kicker {
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--kds-muted);
+      }
+      .top h1 {
+        margin: 4px 0 0;
+        font-size: 22px;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+      }
+      .top .meta {
+        margin-top: 4px;
+        font-size: 12px;
+        color: var(--kds-muted);
+      }
+      .live-clock {
+        font-variant-numeric: tabular-nums;
+        font-size: 28px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        color: #e2e8f0;
+      }
       .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-      .toolbar button, .toolbar select {
-        height: 38px; padding: 0 14px; border-radius: 10px;
-        border: 1px solid var(--line); background: #fff; font-weight: 600; cursor: pointer;
+      .toolbar button,
+      .toolbar select {
+        height: 40px;
+        padding: 0 14px;
+        border-radius: 10px;
+        border: 1px solid var(--kds-line);
+        background: var(--kds-panel);
+        color: var(--kds-text);
+        font-weight: 700;
+        font-size: 13px;
+        cursor: pointer;
       }
+      .toolbar select { min-width: 160px; }
+      .toolbar button:hover { border-color: #64748b; }
+      #btn-refresh {
+        background: linear-gradient(180deg, #0284c7, #0369a1);
+        border-color: #0284c7;
+      }
+      #btn-logout { background: #7f1d1d; border-color: #991b1b; }
+
+      .status-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding: 10px 20px;
+        color: var(--kds-muted);
+        font-size: 12px;
+      }
+      .status-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .pulse-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #22c55e;
+        box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55);
+        animation: pulse 1.8s infinite;
+      }
+      .pulse-dot.offline { background: #f87171; animation: none; }
+      @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5); }
+        70% { box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+      }
+      .new-badge {
+        font-size: 12px;
+        font-weight: 800;
+        padding: 5px 12px;
+        border-radius: 999px;
+        background: rgba(245, 158, 11, 0.2);
+        color: #fbbf24;
+        border: 1px solid rgba(245, 158, 11, 0.35);
+      }
+      .kpi-row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .kpi-pill {
+        min-width: 72px;
+        padding: 6px 10px;
+        border-radius: 10px;
+        background: var(--kds-panel);
+        border: 1px solid var(--kds-line);
+        text-align: center;
+      }
+      .kpi-pill span {
+        display: block;
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--kds-muted);
+      }
+      .kpi-pill b { font-size: 16px; }
+
       .kds-board {
-        display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
-        padding: 16px 18px 24px; min-height: calc(100vh - 120px);
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        padding: 0 18px 24px;
+        min-height: calc(100vh - 150px);
       }
-      @media (max-width: 1100px) { .kds-board { grid-template-columns: 1fr; } }
-      .kds-col { background: #fff; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+      @media (max-width: 1100px) {
+        .kds-board { grid-template-columns: 1fr; }
+        .live-clock { display: none; }
+      }
+
+      .kds-col {
+        background: rgba(30, 41, 59, 0.88);
+        border: 1px solid var(--kds-line);
+        border-radius: 18px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        min-height: 280px;
+      }
       .kds-col-head {
-        padding: 12px 14px; font-weight: 800; font-size: 13px; letter-spacing: 0.04em;
-        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 14px 16px;
+        font-weight: 800;
+        font-size: 13px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        border-bottom: 1px solid var(--kds-line);
       }
-      .kds-col-head.new { background: #fef3c7; color: #92400e; }
-      .kds-col-head.prep { background: #dbeafe; color: #1e40af; }
-      .kds-col-head.ready { background: #dcfce7; color: #166534; }
-      .kds-col-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; min-height: 120px; }
+      .kds-col-head .count {
+        min-width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+        background: rgba(255, 255, 255, 0.12);
+      }
+      .kds-col-head.new { background: linear-gradient(90deg, rgba(245, 158, 11, 0.25), transparent); color: #fbbf24; }
+      .kds-col-head.prep { background: linear-gradient(90deg, rgba(56, 189, 248, 0.22), transparent); color: #7dd3fc; }
+      .kds-col-head.ready { background: linear-gradient(90deg, rgba(52, 211, 153, 0.22), transparent); color: #6ee7b7; }
+      .kds-col-body {
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        overflow: auto;
+        flex: 1;
+      }
+
       .card {
-        background: #fafbfc; border: 1px solid var(--line); border-radius: 12px; padding: 12px;
+        background: var(--kds-card);
+        border: 1px solid var(--kds-line);
+        border-radius: 14px;
+        padding: 14px;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+        transition: transform 0.15s ease, border-color 0.15s ease;
       }
-      .card.delayed { border-color: #f87171; box-shadow: 0 0 0 2px rgba(248,113,113,0.15); }
-      .ticket-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-      .ticket-head b { font-size: 15px; }
-      .meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+      .card:hover { transform: translateY(-1px); border-color: #475569; }
+      .card.delayed {
+        border-color: var(--kds-danger);
+        box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.35), 0 10px 24px rgba(0, 0, 0, 0.2);
+      }
+      .ticket-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+      .ticket-no {
+        font-size: 20px;
+        font-weight: 900;
+        letter-spacing: 0.02em;
+        line-height: 1.1;
+      }
+      .ticket-table {
+        margin-top: 4px;
+        font-size: 13px;
+        font-weight: 700;
+        color: #e2e8f0;
+      }
+      .meta { font-size: 11px; color: var(--kds-muted); margin-top: 4px; }
       .time-badge {
-        font-size: 11px; font-weight: 700; padding: 4px 8px; border-radius: 999px;
-        background: #e8eef4; color: #334155; white-space: nowrap;
+        font-size: 12px;
+        font-weight: 800;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.16);
+        color: #e2e8f0;
+        white-space: nowrap;
+        height: fit-content;
       }
-      .time-badge.delayed { background: #fee2e2; color: #b91c1c; }
+      .time-badge.delayed { background: rgba(248, 113, 113, 0.2); color: #fecaca; }
       .badge-priority {
-        font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 6px;
-        background: #fde68a; color: #92400e; margin-left: 6px;
+        display: inline-block;
+        font-size: 10px;
+        font-weight: 800;
+        padding: 2px 7px;
+        border-radius: 6px;
+        background: rgba(245, 158, 11, 0.25);
+        color: #fcd34d;
+        margin-left: 6px;
+        vertical-align: middle;
       }
-      .lines { font-size: 13px; color: #334155; margin: 8px 0; }
-      .lines div { padding: 2px 0; }
-      .station-tag { font-size: 10px; color: #64748b; }
-      .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-      .actions button { flex: 1; min-width: 100px; height: 36px; border: 0; border-radius: 10px; font-weight: 700; cursor: pointer; }
-      .btn-brand { background: var(--brand); color: #fff; }
-      .btn-soft { background: #e8eef4; color: var(--navy); }
-      .empty-col { text-align: center; color: var(--muted); font-size: 13px; padding: 24px 8px; }
-      .sync-meta { font-size: 11px; color: var(--muted); padding: 0 18px 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-      .new-badge { font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px; background: #fef3c7; color: #92400e; }
-      #btn-refresh { background: var(--brand); color: #fff; border-color: var(--brand); }
+      .lines {
+        margin: 8px 0 0;
+        padding: 10px 0 0;
+        border-top: 1px dashed rgba(148, 163, 184, 0.25);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .line-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 14px;
+        font-weight: 700;
+      }
+      .line-row .qty {
+        color: #7dd3fc;
+        min-width: 36px;
+      }
+      .line-row .name { flex: 1; text-transform: uppercase; letter-spacing: 0.02em; }
+      .line-notes {
+        font-size: 12px;
+        font-weight: 600;
+        color: #fbbf24;
+        margin-top: 2px;
+      }
+      .station-tag { font-size: 11px; color: var(--kds-muted); font-weight: 600; }
+      .order-notes {
+        margin-top: 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.45);
+        font-size: 12px;
+        color: #cbd5e1;
+      }
+      .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+      .actions button {
+        flex: 1;
+        min-width: 110px;
+        height: 40px;
+        border: 0;
+        border-radius: 10px;
+        font-weight: 800;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .btn-brand {
+        background: linear-gradient(180deg, #22c55e, #16a34a);
+        color: #052e16;
+      }
+      .btn-soft {
+        background: linear-gradient(180deg, #38bdf8, #0ea5e9);
+        color: #082f49;
+      }
+      .empty-col {
+        text-align: center;
+        color: var(--kds-muted);
+        font-size: 13px;
+        padding: 36px 12px;
+        border: 1px dashed rgba(148, 163, 184, 0.25);
+        border-radius: 12px;
+      }
+      .empty-col b { display: block; font-size: 15px; color: #cbd5e1; margin-bottom: 4px; }
     </style>
   </head>
   <body>
     <div class="top">
-      <div>
+      <div class="brand-block">
+        <div class="brand-kicker">Restaurant KDS</div>
         <h1>Kitchen Display</h1>
         <div class="meta" id="user-meta"></div>
       </div>
+      <div class="live-clock" id="live-clock">--:--</div>
       <div class="toolbar">
         <select id="station-filter" title="Kitchen station">
           <option value="">All stations</option>
@@ -83,22 +339,39 @@
       </div>
     </div>
 
-    <div class="sync-meta">
-      <span id="sync-meta"></span>
-      <span id="new-order-badge" class="new-badge hidden"></span>
+    <div class="status-bar">
+      <div class="status-left">
+        <span class="pulse-dot" id="live-dot"></span>
+        <span id="sync-meta">Loading kitchen queue…</span>
+        <span id="new-order-badge" class="new-badge hidden"></span>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi-pill"><span>New</span><b id="kpi-new">0</b></div>
+        <div class="kpi-pill"><span>Preparing</span><b id="kpi-prep">0</b></div>
+        <div class="kpi-pill"><span>Ready</span><b id="kpi-ready">0</b></div>
+      </div>
     </div>
 
     <div class="kds-board">
       <section class="kds-col">
-        <div class="kds-col-head new">NEW ORDERS</div>
+        <div class="kds-col-head new">
+          <span>New orders</span>
+          <span class="count" id="count-new">0</span>
+        </div>
         <div class="kds-col-body" id="col-new"></div>
       </section>
       <section class="kds-col">
-        <div class="kds-col-head prep">PREPARING</div>
+        <div class="kds-col-head prep">
+          <span>Preparing</span>
+          <span class="count" id="count-prep">0</span>
+        </div>
         <div class="kds-col-body" id="col-preparing"></div>
       </section>
       <section class="kds-col">
-        <div class="kds-col-head ready">READY</div>
+        <div class="kds-col-head ready">
+          <span>Ready</span>
+          <span class="count" id="count-ready">0</span>
+        </div>
         <div class="kds-col-body" id="col-ready"></div>
       </section>
     </div>

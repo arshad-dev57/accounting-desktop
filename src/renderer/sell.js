@@ -245,6 +245,89 @@ function saveReceiptSettings() {
   alert('Local checkout option saved');
 }
 
+function invSerialPreviewFromForm() {
+  const prefix = String(document.getElementById('inv-serial-prefix')?.value || 'INV').trim() || 'INV';
+  let next = Math.floor(Number(document.getElementById('inv-serial-next')?.value || 1));
+  if (!Number.isFinite(next) || next < 1) next = 1;
+  let pad = Math.floor(Number(document.getElementById('inv-serial-pad')?.value || 6));
+  if (!Number.isFinite(pad) || pad < 1) pad = 6;
+  if (pad > 12) pad = 12;
+  return `${prefix}${String(next).padStart(pad, '0')}`;
+}
+
+function refreshInvSerialPreview() {
+  const el = document.getElementById('inv-serial-preview');
+  if (el) el.textContent = invSerialPreviewFromForm();
+}
+
+async function loadInvoiceSerialSettings() {
+  try {
+    const res = await api.pos.getInvoiceSerial();
+    if (!res?.success || !res.data) return;
+    const d = res.data;
+    const prefix = document.getElementById('inv-serial-prefix');
+    const next = document.getElementById('inv-serial-next');
+    const pad = document.getElementById('inv-serial-pad');
+    if (prefix) prefix.value = d.prefix || 'INV';
+    if (next) next.value = String(d.nextNumber || 1);
+    if (pad) pad.value = String(d.padLength || 6);
+    refreshInvSerialPreview();
+  } catch (err) {
+    console.warn('[invoice serial] load failed', err);
+  }
+}
+
+async function saveInvoiceSerialSettings() {
+  const status = document.getElementById('invoice-serial-status');
+  try {
+    const res = await api.pos.saveInvoiceSerial({
+      prefix: document.getElementById('inv-serial-prefix')?.value || 'INV',
+      nextNumber: Number(document.getElementById('inv-serial-next')?.value || 1),
+      padLength: Number(document.getElementById('inv-serial-pad')?.value || 6),
+    });
+    if (!res?.success) {
+      if (status) status.textContent = res?.message || 'Could not save serial settings';
+      showToast(res?.message || 'Could not save serial settings', 'error');
+      return;
+    }
+    if (res.data) {
+      const d = res.data;
+      const prefix = document.getElementById('inv-serial-prefix');
+      const next = document.getElementById('inv-serial-next');
+      const pad = document.getElementById('inv-serial-pad');
+      if (prefix) prefix.value = d.prefix || 'INV';
+      if (next) next.value = String(d.nextNumber || 1);
+      if (pad) pad.value = String(d.padLength || 6);
+      refreshInvSerialPreview();
+    }
+    if (status) status.textContent = `Saved. Next receipt: ${res.data?.preview || invSerialPreviewFromForm()}`;
+    showToast('Invoice serial settings saved', 'success');
+  } catch (err) {
+    if (status) status.textContent = err.message || 'Save failed';
+    showToast(err.message || 'Could not save serial settings', 'error');
+  }
+}
+
+async function renumberEmptyInvoices() {
+  if (!confirm('Assign proper serial numbers to sales that have empty or temporary invoice numbers (POS-L-…)? Existing proper numbers are left unchanged.')) {
+    return;
+  }
+  const status = document.getElementById('invoice-serial-status');
+  try {
+    const res = await api.pos.renumberEmptyInvoices();
+    if (!res?.success) {
+      showToast(res?.message || 'Renumber failed', 'error');
+      return;
+    }
+    if (status) status.textContent = res.message || 'Done';
+    showToast(res.message || 'Invoices updated', 'success');
+    await loadInvoiceSerialSettings();
+    try { loadSalesRegister(); } catch { /* ignore */ }
+  } catch (err) {
+    showToast(err.message || 'Renumber failed', 'error');
+  }
+}
+
 async function syncReceiptSettingsFromWeb(opts = {}) {
   const quiet = !!opts.quiet;
   if (!window.PosReceipt?.syncReceiptTemplateFromCloud) {
@@ -280,27 +363,262 @@ function loadLocalSettings() {
     console.warn('[POS Settings] Load failed', e);
   }
 
-  // Wire to Settings form
-  document.getElementById('settings-enable-scanner').checked = posSettings.enableBarcodeScanner;
-  document.getElementById('settings-enable-terminal').checked = posSettings.enablePaymentTerminal;
-  document.getElementById('settings-enable-thermal').checked = posSettings.autoPrintOnSale;
+  // Wire to Settings form (scanner/terminal stay on by default; UI removed)
+  const thermal = document.getElementById('settings-enable-thermal');
+  if (thermal) thermal.checked = !!posSettings.autoPrintOnSale;
   fillReceiptSettingsForm();
+  void loadInvoiceSerialSettings();
+  void loadRestaurantTokenSettings();
   void syncReceiptSettingsFromWeb({ quiet: true });
 }
 
 function saveLocalSettings() {
-  posSettings.enableBarcodeScanner = document.getElementById('settings-enable-scanner').checked;
-  posSettings.enablePaymentTerminal = document.getElementById('settings-enable-terminal').checked;
-  posSettings.autoPrintOnSale = document.getElementById('settings-enable-thermal').checked;
+  const thermal = document.getElementById('settings-enable-thermal');
+  if (thermal) posSettings.autoPrintOnSale = !!thermal.checked;
+  // Keep scanner enabled unless explicitly disabled in stored settings
+  if (posSettings.enableBarcodeScanner == null) posSettings.enableBarcodeScanner = true;
 
   localStorage.setItem('pos_settings', JSON.stringify(posSettings));
-  alert('Settings saved successfully!');
+  showToast('Print settings saved', 'success');
+}
+
+function tokenPreviewFromForm() {
+  const prefix = String(document.getElementById('token-prefix')?.value || 'T').trim() || 'T';
+  let next = Math.floor(Number(document.getElementById('token-next')?.value || 1));
+  if (!Number.isFinite(next) || next < 1) next = 1;
+  let pad = Math.floor(Number(document.getElementById('token-pad')?.value || 3));
+  if (!Number.isFinite(pad) || pad < 1) pad = 3;
+  if (pad > 8) pad = 8;
+  return `${prefix}${String(next).padStart(pad, '0')}`;
+}
+
+function refreshTokenPreview() {
+  const el = document.getElementById('token-preview');
+  if (el) el.textContent = tokenPreviewFromForm();
+}
+
+function tokenDesignFromForm() {
+  return {
+    paperWidthMm: Number(document.getElementById('token-paper-width')?.value) === 58 ? 58 : 80,
+    showLogo: !!document.getElementById('token-show-logo')?.checked,
+    showAddress: !!document.getElementById('token-show-address')?.checked,
+    showPhone: !!document.getElementById('token-show-phone')?.checked,
+    showDateTime: !!document.getElementById('token-show-datetime')?.checked,
+    showTable: !!document.getElementById('token-show-table')?.checked,
+    showTicket: !!document.getElementById('token-show-ticket')?.checked,
+    showItemsOnCustomer: !!document.getElementById('token-show-items-customer')?.checked,
+    showCashier: !!document.getElementById('token-show-cashier')?.checked,
+    headerCustomer: document.getElementById('token-header-customer')?.value || 'CUSTOMER TOKEN',
+    headerKitchen: document.getElementById('token-header-kitchen')?.value || 'KITCHEN TOKEN / KOT',
+    copyLabel: document.getElementById('token-copy-label')?.value || '',
+    customerMessage: document.getElementById('token-customer-message')?.value || '',
+    customerHint: document.getElementById('token-customer-hint')?.value || '',
+    footerText: document.getElementById('token-footer-text')?.value || '',
+    poweredBy: document.getElementById('token-powered-by')?.value || '',
+  };
+}
+
+function tokenSettingsPayloadFromForm() {
+  return {
+    enabled: !!document.getElementById('token-enabled')?.checked,
+    printCustomer: !!document.getElementById('token-print-customer')?.checked,
+    printKitchen: !!document.getElementById('token-print-kitchen')?.checked,
+    prefix: document.getElementById('token-prefix')?.value || 'T',
+    nextNumber: Number(document.getElementById('token-next')?.value || 1),
+    padLength: Number(document.getElementById('token-pad')?.value || 3),
+    resetMode: document.getElementById('token-reset-mode')?.value || 'daily',
+    resetHour: Number(document.getElementById('token-reset-hour')?.value || 0),
+    ...tokenDesignFromForm(),
+  };
+}
+
+function applyRestaurantTokenSettingsToForm(d) {
+  if (!d) return;
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (el.type === 'checkbox') el.checked = !!val;
+    else el.value = val == null ? '' : String(val);
+  };
+  set('token-enabled', d.enabled);
+  set('token-print-customer', d.printCustomer !== false);
+  set('token-print-kitchen', d.printKitchen !== false);
+  set('token-prefix', d.prefix || 'T');
+  set('token-next', d.nextNumber || 1);
+  set('token-pad', d.padLength || 3);
+  set('token-reset-mode', d.resetMode || 'daily');
+  set('token-reset-hour', d.resetHour ?? 0);
+  set('token-paper-width', Number(d.paperWidthMm) === 58 ? 58 : 80);
+  set('token-header-customer', d.headerCustomer || 'CUSTOMER TOKEN');
+  set('token-header-kitchen', d.headerKitchen || 'KITCHEN TOKEN / KOT');
+  set('token-copy-label', d.copyLabel ?? 'TOKEN COPY');
+  set('token-customer-message', d.customerMessage ?? 'Please wait for your order');
+  set('token-customer-hint', d.customerHint ?? 'Show this token when collecting');
+  set('token-footer-text', d.footerText ?? 'Thank you!');
+  set('token-powered-by', d.poweredBy ?? 'Powered by BisonTechs POS');
+  set('token-show-logo', d.showLogo !== false);
+  set('token-show-address', d.showAddress !== false);
+  set('token-show-phone', d.showPhone !== false);
+  set('token-show-datetime', d.showDateTime !== false);
+  set('token-show-table', d.showTable !== false);
+  set('token-show-ticket', d.showTicket !== false);
+  set('token-show-items-customer', !!d.showItemsOnCustomer);
+  set('token-show-cashier', !!d.showCashier);
+  refreshTokenPreview();
+}
+
+let cachedTokenDesign = null;
+
+async function loadRestaurantTokenSettings() {
+  try {
+    const res = await api.pos.getRestaurantTokenSettings();
+    if (!res?.success || !res.data) return;
+    applyRestaurantTokenSettingsToForm(res.data);
+    cachedTokenDesign = { ...res.data };
+  } catch (err) {
+    console.warn('[token settings] load failed', err);
+  }
+}
+
+async function saveRestaurantTokenSettings() {
+  const status = document.getElementById('token-settings-status');
+  try {
+    const res = await api.pos.saveRestaurantTokenSettings(tokenSettingsPayloadFromForm());
+    if (!res?.success) {
+      if (status) status.textContent = res?.message || 'Could not save';
+      showToast(res?.message || 'Could not save token settings', 'error');
+      return;
+    }
+    await loadRestaurantTokenSettings();
+    if (status) status.textContent = `Saved. Next token: ${res.data?.preview || tokenPreviewFromForm()}`;
+    showToast('Token settings saved', 'success');
+  } catch (err) {
+    if (status) status.textContent = err.message || 'Save failed';
+    showToast(err.message || 'Could not save token settings', 'error');
+  }
+}
+
+async function resetRestaurantTokenNow() {
+  if (!confirm('Reset token counter to 1 for a new sequence?')) return;
+  const status = document.getElementById('token-settings-status');
+  try {
+    const res = await api.pos.resetRestaurantToken();
+    if (!res?.success) {
+      showToast(res?.message || 'Reset failed', 'error');
+      return;
+    }
+    await loadRestaurantTokenSettings();
+    if (status) status.textContent = res.message || 'Token counter reset';
+    showToast(res.message || 'Token counter reset', 'success');
+  } catch (err) {
+    showToast(err.message || 'Reset failed', 'error');
+  }
+}
+
+function resolveTokenDesign(override) {
+  const fromForm = tokenDesignFromForm();
+  return {
+    ...(cachedTokenDesign || {}),
+    ...fromForm,
+    ...(override || {}),
+  };
+}
+
+function buildTokenPrintParts(tokenPayload, designOverride) {
+  const tpl = window.PosReceipt.loadReceiptTemplate();
+  const design = resolveTokenDesign(designOverride || tokenPayload.design);
+  const company = window.PosReceipt.resolveReceiptCompany(companyProfile, tpl);
+  // Same thermal path as sales receipt (exact page height = content length only)
+  const widthMm = Number(design.paperWidthMm) === 58 ? 58 : 80;
+  return { tpl, design, company, widthMm };
+}
+
+function printRestaurantTokens(tokenPayload) {
+  if (!window.PosReceipt?.buildTokenHtml || !window.PosReceipt?.printHtmlAsReceipt) {
+    showToast('Token printer helper unavailable', 'error');
+    return;
+  }
+  const { tpl, design, company, widthMm } = buildTokenPrintParts(tokenPayload);
+  const cashierName = (cashierMetaEl?.textContent || '').replace(/^Cashier:\s*/i, '').trim();
+
+  if (tokenPayload.printKitchen) {
+    const kitchenHtml = window.PosReceipt.buildTokenHtml(
+      { ...tokenPayload, kind: 'kitchen', cashierName },
+      company,
+      tpl,
+      design
+    );
+    window.PosReceipt.printHtmlAsReceipt(kitchenHtml, widthMm);
+  }
+  if (tokenPayload.printCustomer) {
+    const customerHtml = window.PosReceipt.buildTokenHtml(
+      { ...tokenPayload, kind: 'customer', cashierName },
+      company,
+      tpl,
+      design
+    );
+    // Same printer queue as receipts — customer slip after kitchen
+    setTimeout(() => window.PosReceipt.printHtmlAsReceipt(customerHtml, widthMm), tokenPayload.printKitchen ? 700 : 0);
+  }
+}
+
+function previewCustomerToken() {
+  if (!window.PosReceipt?.buildTokenHtml) {
+    showToast('Token preview unavailable', 'error');
+    return;
+  }
+  const panel = document.getElementById('token-preview-panel');
+  const { tpl, design, company } = buildTokenPrintParts({});
+  const html = window.PosReceipt.buildTokenHtml(
+    {
+      kind: 'customer',
+      tokenNumber: tokenPreviewFromForm(),
+      tableLabel: 'T1',
+      orderType: 'dine_in',
+      ticketNumber: '12',
+      itemCount: 3,
+      lines: [
+        { productName: 'Chicken Biryani', quantity: 2 },
+        { productName: 'Fresh Juice', quantity: 1 },
+      ],
+      at: Date.now(),
+      cashierName: (cashierMetaEl?.textContent || '').replace(/^Cashier:\s*/i, '').trim() || 'Cashier',
+    },
+    company,
+    tpl,
+    design
+  );
+  if (panel) {
+    panel.classList.remove('hidden');
+    panel.innerHTML = html;
+  }
 }
 
 document.getElementById('btn-save-settings').addEventListener('click', saveLocalSettings);
 document.getElementById('btn-save-receipt-settings')?.addEventListener('click', saveReceiptSettings);
 document.getElementById('btn-sync-receipt-settings')?.addEventListener('click', () => {
   void syncReceiptSettingsFromWeb({ quiet: false });
+});
+document.getElementById('btn-save-invoice-serial')?.addEventListener('click', () => {
+  void saveInvoiceSerialSettings();
+});
+document.getElementById('btn-renumber-invoices')?.addEventListener('click', () => {
+  void renumberEmptyInvoices();
+});
+['inv-serial-prefix', 'inv-serial-next', 'inv-serial-pad'].forEach((id) => {
+  document.getElementById(id)?.addEventListener('input', refreshInvSerialPreview);
+});
+document.getElementById('btn-save-token-settings')?.addEventListener('click', () => {
+  void saveRestaurantTokenSettings();
+});
+document.getElementById('btn-preview-token')?.addEventListener('click', () => {
+  previewCustomerToken();
+});
+document.getElementById('btn-reset-token-now')?.addEventListener('click', () => {
+  void resetRestaurantTokenNow();
+});
+['token-prefix', 'token-next', 'token-pad'].forEach((id) => {
+  document.getElementById(id)?.addEventListener('input', refreshTokenPreview);
 });
 
 function specItem(label, value) {
@@ -679,6 +997,39 @@ function applyRestaurantBranding(user) {
   const sellTab = document.querySelector('.tab-btn[data-tab="sell"] span');
   if (sellTab) sellTab.textContent = 'New order';
 
+  // Product → Item wording in restaurant POS
+  const productsTab = document.querySelector('.tab-btn[data-tab="products"] span');
+  if (productsTab) productsTab.textContent = 'Items';
+  const productsHeading = document.querySelector('#tab-products h2');
+  if (productsHeading) productsHeading.textContent = 'Items';
+  const prodAdd = document.getElementById('prod-add');
+  if (prodAdd) prodAdd.textContent = '+ Add Item';
+  const prodFormTitle = document.getElementById('prod-form-title');
+  if (prodFormTitle) prodFormTitle.textContent = 'Add Item';
+  const saveProdBtn = document.querySelector('#prod-form button[type="submit"]');
+  if (saveProdBtn) saveProdBtn.textContent = 'Save Item';
+  document.querySelectorAll('#tab-stock label').forEach((el) => {
+    if (/Select Product/i.test(el.textContent || '')) el.textContent = 'Select Item *';
+  });
+  const stockPickerLabel = document.getElementById('stock-product-picker-label');
+  if (stockPickerLabel && /product/i.test(stockPickerLabel.textContent || '')) {
+    stockPickerLabel.textContent = 'Choose item…';
+  }
+  const stockPickerTitle = document.querySelector('#modal-stock-product-picker h3');
+  if (stockPickerTitle) stockPickerTitle.textContent = 'Select item';
+  const syncMsg = document.getElementById('sync-overlay-msg');
+  if (syncMsg) syncMsg.textContent = 'Pulling latest categories, items and customers from the cloud.';
+  document.querySelectorAll('#pf-name').forEach((inp) => {
+    if (inp.placeholder) inp.placeholder = 'e.g., Chicken Karhai';
+  });
+  document.querySelectorAll('label.pf-label').forEach((el) => {
+    const t = el.textContent || '';
+    if (/^Product Name/i.test(t)) el.textContent = 'Item Name *';
+    else if (/^Product QR/i.test(t)) el.textContent = 'Item QR';
+    else if (/^Product Type/i.test(t)) el.textContent = 'Item Kind';
+    else if (/^Product Images/i.test(t)) el.textContent = 'Item Images';
+  });
+
   const tableInp = document.getElementById('restaurant-table');
   if (tableInp && !tableInp.value) tableInp.value = '1';
 }
@@ -727,11 +1078,52 @@ async function sendCartToKitchen() {
     }
 
     const ticket = res.data?.ticketNumber ?? res.data?.ticket ?? '—';
-    showToast(`Sent to kitchen · Ticket #${ticket}`, 'success');
+    const tableLabel = document.getElementById('restaurant-table')?.value?.trim() || '';
+    const orderType = document.getElementById('restaurant-order-type')?.value || 'dine_in';
+    const notes = document.getElementById('restaurant-notes')?.value?.trim() || '';
+    const orderLines = lines.map((l) => ({ ...l }));
+
+    // Restaurant token flow (optional — Settings)
+    let tokenLabel = '';
+    try {
+      const tokenRes = await api.pos.allocateRestaurantToken();
+      if (tokenRes?.success && tokenRes.data?.tokenNumber) {
+        tokenLabel = tokenRes.data.tokenNumber;
+        if (tokenRes.data.settings) cachedTokenDesign = { ...tokenRes.data.settings };
+        printRestaurantTokens({
+          tokenNumber: tokenLabel,
+          ticketNumber: ticket,
+          tableLabel,
+          orderType,
+          notes,
+          lines: orderLines,
+          itemCount: orderLines.reduce((n, l) => n + Number(l.quantity || 0), 0),
+          at: Date.now(),
+          printCustomer: tokenRes.data.printCustomer !== false,
+          printKitchen: tokenRes.data.printKitchen !== false,
+          design: tokenRes.data.settings || cachedTokenDesign,
+        });
+      }
+    } catch (tokenErr) {
+      // Token disabled or print failed — order already sent
+      if (tokenErr?.code !== 'TOKEN_DISABLED') {
+        console.warn('[token] print skipped', tokenErr);
+      }
+    }
+
+    showToast(
+      tokenLabel
+        ? `Sent to kitchen · Token ${tokenLabel} · Ticket #${ticket}`
+        : `Sent to kitchen · Ticket #${ticket}`,
+      'success'
+    );
     cart.length = 0;
     renderCartList();
+    if (typeof renderProducts === 'function') renderProducts();
     const notesEl = document.getElementById('restaurant-notes');
     if (notesEl) notesEl.value = '';
+  } catch (err) {
+    showToast(err.message || 'Could not send order to kitchen', 'error');
   } finally {
     if (btn) {
       btn.textContent = prevLabel;
@@ -834,7 +1226,7 @@ async function payRestaurantReadyOrder(btn) {
       terminalId: activeShift.terminalId,
       shiftId: activeShift.id,
       locationId: activeShift.locationId || currentLocationId() || undefined,
-      invoiceNumber: saleId,
+      invoiceNumber: '', // serial from Settings → Invoice / receipt serial
       customerName: order.tableLabel ? `Table ${order.tableLabel}` : 'Restaurant guest',
       restaurantOrderId: order.id,
       items: (order.lines || []).map((l) => ({
@@ -951,10 +1343,12 @@ function setupTabs() {
       if (targetTab === 'categories') { try { loadLocalCatalog(); } catch (e) { console.warn('loadLocalCatalog not defined', e); } }
       if (targetTab === 'products') { try { loadLocalProducts(); } catch (e) { console.warn('loadLocalProducts not defined', e); } }
       if (targetTab === 'settings') {
-        try { loadMachineInfo(); } catch (e) { console.warn('loadMachineInfo not defined', e); }
         try { fillReceiptSettingsForm(); } catch (e) { console.warn('fillReceiptSettingsForm not defined', e); }
+        try { void loadInvoiceSerialSettings(); } catch (e) { console.warn('loadInvoiceSerialSettings not defined', e); }
+        try { void loadRestaurantTokenSettings(); } catch (e) { console.warn('loadRestaurantTokenSettings not defined', e); }
       }
       if (targetTab === 'stock') { try { loadStockPanel(); } catch (e) { console.warn('loadStockPanel not defined', e); } }
+      if (targetTab === 'expiry') { try { loadExpiryPanel(); } catch (e) { console.warn('loadExpiryPanel not defined', e); } }
       if (targetTab === 'returns') { try { loadReturnHistory(); } catch (e) { console.warn('loadReturnHistory not defined', e); } }
       if (targetTab === 'ready-orders') { try { refreshRestaurantReadyOrders(); } catch (e) { console.warn('refreshRestaurantReadyOrders not defined', e); } }
       if (targetTab === 'sell') {
@@ -1207,7 +1601,11 @@ function renderCategoryLayout() {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = `category-tab-btn ${selectedCategoryId === catId ? 'selected' : ''}`;
-      btn.textContent = cat.name;
+      const img = categoryImageOf(cat);
+      const imgSrc = String(img).replace(/"/g, '&quot;');
+      btn.innerHTML = img
+        ? `<img class="cat-tab-thumb" src="${imgSrc}" alt="" referrerpolicy="no-referrer" onerror="this.remove()" /><span>${escapeHtmlAttr(cat.name || '')}</span>`
+        : escapeHtmlAttr(cat.name || '');
       btn.addEventListener('click', () => handleCategorySelect(catId));
       tabsRow.appendChild(btn);
     });
@@ -1228,9 +1626,14 @@ function renderCategoryLayout() {
       mains.forEach(cat => {
         const card = document.createElement('div');
         card.className = 'category-card';
+        const img = categoryImageOf(cat);
+        const imgSrc = String(img).replace(/"/g, '&quot;');
         card.innerHTML = `
-          <span style="font-size:32px; color: var(--brand);">📁</span>
-          <span><b>${cat.name}</b></span>
+          <div class="category-card-img">
+            ${img ? `<img src="${imgSrc}" alt="${escapeHtmlAttr(cat.name || '')}" referrerpolicy="no-referrer" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline';" />` : ''}
+            <span style="font-size:32px; color: var(--brand); ${img ? 'display:none;' : ''}">📁</span>
+          </div>
+          <span class="category-card-name"><b>${escapeHtmlAttr(cat.name || '')}</b></span>
         `;
         card.addEventListener('click', () => openMainCategory(cat));
         mainCategoriesGrid.appendChild(card);
@@ -1240,6 +1643,11 @@ function renderCategoryLayout() {
     productsGrid.style.display = 'none';
     mainCategoriesGrid.style.display = 'grid';
   }
+}
+
+function categoryImageOf(cat) {
+  if (!cat || typeof cat !== 'object') return '';
+  return String(cat.mainImage || cat.image || cat.imageUrl || '').trim();
 }
 
 function openMainCategory(cat) {
@@ -1291,6 +1699,47 @@ async function loadCategoryProducts(categoryId) {
   }
 }
 
+const EXPIRY_NEAR_DAYS = 30;
+
+function parseProductExpiryDate(p = {}) {
+  if (!(p.hasExpiry || p.isExpiryManaged || p.expiryDate)) return null;
+  const raw = p.expiryDate;
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function getExpiryStatus(p = {}, nearDays = EXPIRY_NEAR_DAYS) {
+  const exp = parseProductExpiryDate(p);
+  if (!exp) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const daysLeft = Math.floor((exp.getTime() - today.getTime()) / 86400000);
+  if (daysLeft < 0) {
+    return { state: 'expired', daysLeft, label: 'Expired', date: exp };
+  }
+  if (daysLeft <= nearDays) {
+    return {
+      state: 'near',
+      daysLeft,
+      label: daysLeft === 0 ? 'Expires today' : `Expires in ${daysLeft}d`,
+      date: exp,
+    };
+  }
+  return { state: 'ok', daysLeft, label: `Exp ${formatExpiryDate(exp)}`, date: exp };
+}
+
+function formatExpiryDate(d) {
+  if (!d) return '—';
+  try {
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  } catch {
+    return String(d);
+  }
+}
+
 function renderProducts() {
   productsGrid.innerHTML = '';
   mainCategoriesGrid.style.display = 'none';
@@ -1321,23 +1770,87 @@ function renderProducts() {
   productsGrid.appendChild(backCard);
 
   products.forEach(p => {
+    if (isIngredientItem(p) && resolveItemType(p) === 'INGREDIENT') return;
+    if (p.showInPos === false) return;
     const card = document.createElement('div');
-    card.className = 'prod-card';
+    const expiry = getExpiryStatus(p);
+    const menu = isMenuItem(p);
+    const maxQty = maxSellable(p);
+    const unavailable = !menu && maxQty <= 0;
+    // MENU_ITEM without recipe stays sellable; server enforces ingredient shortages on KOT
+    const menuUnavailable = Boolean(p.posUnavailable === true || p.recipeUnavailable === true);
+    card.className = `prod-card${unavailable || menuUnavailable ? ' unavailable' : ''}${menu ? ' menu-item' : ''}`;
+    if (expiry?.state === 'expired') card.classList.add('expiry-expired');
+    else if (expiry?.state === 'near') card.classList.add('expiry-near');
     const img = p.mainImage || p.image || '';
     const imgSrc = String(img).replace(/"/g, '&quot;');
+    const expiryBadge = (expiry && (expiry.state === 'near' || expiry.state === 'expired'))
+      ? `<div class="prod-expiry-badge ${expiry.state}">${expiry.label}</div>`
+      : '';
+    const stockHtml = menu
+      ? (menuUnavailable
+        ? `<div class="prod-card-stock" style="color:#ef4444;">Unavailable</div>`
+        : `<div class="prod-card-stock" style="color:#64748b;">Made to order</div>`)
+      : (p.trackInventory === false
+        ? ''
+        : `<div class="prod-card-stock" style="color: ${p.currentStock <= 0 ? '#ef4444' : p.currentStock <= 5 ? '#f59e0b' : '#10b981'}">
+        Stock: ${p.currentStock || 0}
+      </div>`);
+    const inCart = cart.find((c) => c.productId === p.id);
+    const qtyControls = isRestaurantPos && inCart
+      ? `<div class="prod-qty-controls" data-prod-id="${escapeHtmlAttr(p.id)}">
+           <button type="button" class="prod-qty-btn" data-qty-delta="-1">−</button>
+           <span>${inCart.quantity}</span>
+           <button type="button" class="prod-qty-btn" data-qty-delta="1">+</button>
+         </div>`
+      : `<button type="button" class="prod-add-btn">${isRestaurantPos ? 'Add to Dish' : 'Add'}</button>`;
     card.innerHTML = `
       <div class="prod-card-img">
-        ${img ? `<img src="${imgSrc}" alt="${p.name}" referrerpolicy="no-referrer" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline';" />` : ''}
-        <span style="font-size: 28px; ${img ? 'display: none;' : ''}">📦</span>
+        ${img ? `<img src="${imgSrc}" alt="${escapeHtmlAttr(p.name || '')}" referrerpolicy="no-referrer" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline';" />` : ''}
+        <span style="font-size: 28px; ${img ? 'display: none;' : ''}">${menu ? '🍽' : '📦'}</span>
       </div>
-      <b>${p.name}</b>
-      <span>SKU: ${p.sku || 'N/A'}</span>
-      <div class="prod-card-price">${pkr(p.sellingPrice)}</div>
-      <div class="prod-card-stock" style="color: ${p.currentStock <= 0 ? '#ef4444' : p.currentStock <= 5 ? '#f59e0b' : '#10b981'}">
-        Stock: ${p.currentStock || 0}
-      </div>
+      <b>${escapeHtmlAttr(p.name || '')}</b>
+      ${isRestaurantPos ? '' : `<span>SKU: ${escapeHtmlAttr(p.sku || 'N/A')}</span>`}
+      <div class="prod-card-price">${pkr(p.sellingPrice)}${isRestaurantPos ? ` <small style="font-weight:600;color:#64748b;">/ ${escapeHtmlAttr(p.salesUnitName || p.salesUnit || p.stockUnitName || p.stockUnit || 'Pcs')}</small>` : ''}</div>
+      ${stockHtml}
+      ${expiryBadge}
+      ${isRestaurantPos ? qtyControls : ''}
     `;
-    card.addEventListener('click', () => addProductToCart(p));
+    card.addEventListener('click', (e) => {
+      const qtyBtn = e.target.closest('[data-qty-delta]');
+      if (qtyBtn) {
+        e.stopPropagation();
+        const delta = Number(qtyBtn.getAttribute('data-qty-delta')) || 0;
+        const line = cart.find((c) => c.productId === p.id);
+        if (!line) return;
+        const next = normalizeCartQty(line.quantity + delta);
+        if (next <= 0) {
+          cart = cart.filter((c) => c.productId !== p.id);
+          renderCartList();
+          renderProducts();
+          return;
+        }
+        commitProductQtyToCart(p, next, 'edit');
+        renderProducts();
+        return;
+      }
+      if (unavailable || menuUnavailable) {
+        showToast(menu ? `${p.name} is Unavailable` : `Cannot add ${p.name} - Out of stock!`, 'error');
+        return;
+      }
+      if (expiry?.state === 'expired') {
+        const ok = window.confirm(`${p.name} is EXPIRED (${formatExpiryDate(expiry.date)}). Add to cart anyway?`);
+        if (!ok) return;
+      } else if (expiry?.state === 'near') {
+        showToast(`${p.name}: ${expiry.label}`, 'error');
+      }
+      if (isRestaurantPos) {
+        commitProductQtyToCart(p, 1, 'add');
+        renderProducts();
+        return;
+      }
+      addProductToCart(p);
+    });
     productsGrid.appendChild(card);
   });
 }
@@ -1802,20 +2315,45 @@ function normalizeCartQty(qty) {
   return Math.round(n * 1000) / 1000;
 }
 
+function resolveItemType(p) {
+  return String(p?.itemType || 'READY_ITEM').toUpperCase().trim() || 'READY_ITEM';
+}
+
+function isMenuItem(p) {
+  return resolveItemType(p) === 'MENU_ITEM';
+}
+
+function isIngredientItem(p) {
+  return resolveItemType(p) === 'INGREDIENT' || p?.showInPos === false;
+}
+
 function maxSellable(p) {
   const uom = resolveUom(p);
+  // MENU_ITEM / untracked: do not gate on own SKU stock (recipe checked server-side on KOT)
+  if (isMenuItem(p) || p?.trackInventory === false) {
+    return 999999;
+  }
   const avail = Number(p.availableStock ?? p.currentStock ?? 0) || 0;
   if (uom.salesFactor <= 0) return 0;
   return normalizeCartQty(Math.max(0, avail / uom.salesFactor));
 }
 
 function commitProductQtyToCart(p, rawQty, mode = 'add') {
+  if (isIngredientItem(p) && !isMenuItem(p) && resolveItemType(p) === 'INGREDIENT') {
+    showToast(`${p.name} is an ingredient — not sold on POS`, 'error');
+    return false;
+  }
   const uom = resolveUom(p);
   const maxQty = maxSellable(p);
   const qty = normalizeCartQty(rawQty);
 
   if (maxQty <= 0) {
-    showToast(`⚠️ Cannot add ${p.name} - Out of stock!`, 'error');
+    showToast(
+      isMenuItem(p)
+        ? `${p.name} is Unavailable (check recipe ingredients)`
+        : `Cannot add ${p.name} - Out of stock!`,
+      'error'
+    );
     return false;
   }
   if (qty <= 0) {
@@ -1828,7 +2366,11 @@ function commitProductQtyToCart(p, rawQty, mode = 'add') {
   }
 
   const fractional = uom.allowFractional || Math.abs(qty - Math.round(qty)) > 1e-9;
-  const existing = cart.find((item) => item.productId === p.id);
+  const serialNumber = String(p.serialNumber || p._pendingSerial || '').trim() || null;
+  // Serial-managed lines stay separate per serial
+  const existing = serialNumber
+    ? cart.find((item) => item.productId === p.id && item.serialNumber === serialNumber)
+    : cart.find((item) => item.productId === p.id && !item.serialNumber);
   if (existing) {
     const nextQty = mode === 'edit' ? qty : normalizeCartQty(existing.quantity + qty);
     if (nextQty > maxQty + 1e-9) {
@@ -1839,7 +2381,9 @@ function commitProductQtyToCart(p, rawQty, mode = 'add') {
     existing.unitName = uom.salesUnit;
     existing.stockUnitName = uom.stockUnit;
     existing.salesConversionFactor = uom.salesFactor;
+    existing.conversionFactor = uom.salesFactor;
     existing.allowFractionalQty = fractional || Boolean(existing.allowFractionalQty);
+    if (serialNumber) existing.serialNumber = serialNumber;
     existing.lineTotal = existing.quantity * existing.unitPrice;
   } else {
     const rate = resolveTaxRate(p.taxRate)
@@ -1860,7 +2404,11 @@ function commitProductQtyToCart(p, rawQty, mode = 'add') {
       unitName: uom.salesUnit,
       stockUnitName: uom.stockUnit,
       salesConversionFactor: uom.salesFactor,
+      conversionFactor: uom.salesFactor,
       allowFractionalQty: fractional,
+      serialNumber,
+      batchNumber: p.batchNumber || null,
+      expiryDate: p.expiryDate || null,
       isCustom: false,
     });
   }
@@ -1872,7 +2420,7 @@ function promptProductQty(p, mode = 'add') {
   const uom = resolveUom(p);
   const maxQty = maxSellable(p);
   if (maxQty <= 0) {
-    showToast(`⚠️ Cannot add ${p.name} - Out of stock!`, 'error');
+    showToast(`Cannot add ${p.name} - Out of stock!`, 'error');
     setScanStatus(`${p.name} is out of stock`, 'error');
     setTimeout(() => barcodeScanInp?.focus(), 40);
     return;
@@ -1930,8 +2478,6 @@ function promptProductQty(p, mode = 'add') {
     quickEl.appendChild(btn);
   });
 
-  // USB scanners often send a trailing Enter after the barcode; ignore it briefly
-  // so the qty modal does not auto-submit/close before the cashier can type.
   const openedAt = Date.now();
   const ENTER_GUARD_MS = 280;
 
@@ -1963,6 +2509,17 @@ function promptProductQty(p, mode = 'add') {
 }
 
 function addProductToCart(p) {
+  if (p?.isSerialManaged) {
+    const serial = window.prompt(`Enter serial number for ${p.name || 'product'}:`, '');
+    if (serial == null) return;
+    const value = String(serial).trim();
+    if (!value) {
+      showToast('Serial number is required for this product', 'error');
+      return;
+    }
+    promptProductQty({ ...p, serialNumber: value, _pendingSerial: value }, 'add');
+    return;
+  }
   promptProductQty(p, 'add');
 }
 
@@ -1976,7 +2533,7 @@ function renderCartList() {
       <div class="cart-item-row-top">
         <div class="cart-item-info">
           <b>${item.productName}</b>
-          <span>${formatSellQty(item.quantity, item.unitName || 'Pcs')} × ${pkr(item.unitPrice)}</span>
+          <span>${formatSellQty(item.quantity, item.unitName || 'Pcs')} × ${pkr(item.unitPrice)}${item.serialNumber ? ` · S/N ${item.serialNumber}` : ''}</span>
         </div>
         <div class="cart-item-total">${pkr(Number(item.unitPrice || 0) * Number(item.quantity || 0))}</div>
       </div>
@@ -2196,6 +2753,14 @@ customerSearchInp.addEventListener('input', () => {
   }, 300);
 });
 
+function openAddCustomerModal(prefillName = '') {
+  if (customerDropdown) customerDropdown.style.display = 'none';
+  const nameEl = document.getElementById('cust-new-name');
+  if (nameEl) nameEl.value = String(prefillName || '').trim();
+  if (modalAddCustomer) modalAddCustomer.style.display = 'flex';
+  setTimeout(() => nameEl?.focus(), 50);
+}
+
 function createAddNewCustomerBtn(query) {
   const btn = document.createElement('div');
   btn.className = 'cust-item';
@@ -2203,13 +2768,13 @@ function createAddNewCustomerBtn(query) {
   btn.style.fontWeight = 'bold';
   btn.style.color = 'var(--brand)';
   btn.innerHTML = `+ Add "${query}" as New Customer`;
-  btn.addEventListener('click', () => {
-    customerDropdown.style.display = 'none';
-    document.getElementById('cust-new-name').value = query;
-    modalAddCustomer.style.display = 'flex';
-  });
+  btn.addEventListener('click', () => openAddCustomerModal(query));
   return btn;
 }
+
+document.getElementById('btn-add-customer-sale')?.addEventListener('click', () => {
+  openAddCustomerModal(customerSearchInp?.value || '');
+});
 
 async function selectCustomer(c) {
   selectedCustomer = c;
@@ -2686,7 +3251,8 @@ async function submitCompleteSale() {
   const payload = {
     terminalId: activeShift.terminalId,
     locationId: currentLocationId() || undefined,
-    invoiceNumber: `POS-L-${Date.now()}`,
+    // Invoice serial is allocated in main from Settings → Invoice / receipt serial
+    invoiceNumber: '',
     customerName: selectedCustomer ? selectedCustomer.name : 'Walk-in Customer',
     customerPhone: selectedCustomer ? selectedCustomer.phone : null,
     customerEmail: selectedCustomer ? selectedCustomer.email : null,
@@ -2697,8 +3263,9 @@ async function submitCompleteSale() {
       sku: i.sku,
       quantity: i.quantity,
       unitName: i.unitName || 'Pcs',
-      conversionFactor: i.salesConversionFactor ?? 1,
-      salesConversionFactor: i.salesConversionFactor ?? 1,
+      conversionFactor: i.conversionFactor ?? i.salesConversionFactor ?? 1,
+      salesConversionFactor: i.conversionFactor ?? i.salesConversionFactor ?? 1,
+      productUnitId: i.productUnitId || null,
       allowFractionalQty: Boolean(i.allowFractionalQty),
       stockUnitName: i.stockUnitName || i.unitName || 'Pcs',
       unitPrice: i.unitPrice,
@@ -3593,6 +4160,8 @@ function saleIsCredit(sale) {
 let sales = [];
 let salesFilter = { search: '', from: '', to: '' };
 let salesRegisterOpenId = null;
+let salesRegisterPage = 1;
+let salesRegisterPageSize = 25;
 
 function saleMatchesFilter(sale) {
   const term = salesFilter.search.trim().toLowerCase();
@@ -3611,22 +4180,116 @@ function saleMatchesFilter(sale) {
   return true;
 }
 
-function renderSalesTable(sales) {
+function saleItemsSummary(sale) {
+  const items = sale.items || [];
+  if (!items.length) return '—';
+  if (items.length === 1) return items[0].productName || items[0].name || '1 item';
+  const first = items[0].productName || items[0].name || 'Item';
+  return `${first} +${items.length - 1}`;
+}
+
+function saleQtyTotal(sale) {
+  return (sale.items || []).reduce((n, i) => n + saleMoney(i.quantity || 1), 0);
+}
+
+function saleCostOf(sale) {
+  return (sale.items || []).reduce((n, i) => {
+    const qty = saleMoney(i.quantity || 1);
+    const cost = saleMoney(i.costPrice ?? i.cost ?? 0);
+    return n + qty * cost;
+  }, 0);
+}
+
+function saleDiscountOf(sale) {
+  return saleMoney(sale.discountTotal ?? sale.discount ?? 0);
+}
+
+function saleTaxOf(sale) {
+  return saleMoney(sale.taxTotal ?? sale.tax ?? 0);
+}
+
+function saleProfitOf(sale) {
+  return saleTotalOf(sale) - saleTaxOf(sale) - saleCostOf(sale);
+}
+
+function salePayLabel(sale) {
+  if (saleIsCredit(sale)) return 'Credit';
+  return (sale.payments || []).map((p) => p.paymentMethod).filter(Boolean).join(', ') || '—';
+}
+
+function renderSalesTable(list) {
   const listWrap = document.getElementById('sales-list-table');
+  const pager = document.getElementById('sales-pagination');
   if (!listWrap) return;
-  listWrap.innerHTML = sales.length
-    ? `<table><thead><tr><th>Invoice</th><th>Date</th><th>Cashier</th><th>Customer</th><th>Pay</th><th style="text-align:right">Total</th></tr></thead><tbody>${sales
-      .map((s) => `<tr data-sale-id="${s.id}" style="cursor:pointer;">
-        <td>${s.invoiceNumber || s.orderNumber || s.id || '—'}</td>
+  const total = list.length;
+  const pages = Math.max(1, Math.ceil(total / salesRegisterPageSize));
+  if (salesRegisterPage > pages) salesRegisterPage = pages;
+  const start = (salesRegisterPage - 1) * salesRegisterPageSize;
+  const pageRows = list.slice(start, start + salesRegisterPageSize);
+
+  listWrap.innerHTML = pageRows.length
+    ? `<table class="sales-register-table"><thead><tr>
+        <th>Invoice</th><th>Date</th><th>Customer</th><th>Items</th>
+        <th class="num">Qty</th><th class="num">Discount</th><th class="num">Tax</th>
+        <th class="num">Total</th><th class="num">Est. profit</th><th>Payment</th><th>Cashier</th>
+      </tr></thead><tbody>${pageRows
+      .map((s) => {
+        const profit = saleProfitOf(s);
+        return `<tr data-sale-id="${s.id}">
+        <td><a class="sales-inv-link" href="#">${s.invoiceNumber || s.orderNumber || s.id || '—'}</a></td>
         <td>${saleDateFormat(s)}</td>
-        <td>${saleCashier(s)}</td>
         <td>${s.customerName || s.customer?.name || 'Walk-in'}</td>
-        <td>${saleIsCredit(s) ? 'Credit' : ((s.payments || []).map((p) => p.paymentMethod).filter(Boolean).join(', ') || '—')}</td>
-        <td style="text-align:right;">${saleFmt(saleTotalOf(s))}</td>
-      </tr>`)
+        <td class="sales-items-cell">${saleItemsSummary(s)}</td>
+        <td class="num">${saleQtyTotal(s)}</td>
+        <td class="num">${saleDiscountOf(s) ? `−${saleFmt(saleDiscountOf(s))}` : '—'}</td>
+        <td class="num">${saleTaxOf(s) ? saleFmt(saleTaxOf(s)) : '—'}</td>
+        <td class="num"><b>${saleFmt(saleTotalOf(s))}</b></td>
+        <td class="num ${profit >= 0 ? 'pos' : 'neg'}">${saleFmt(profit)}</td>
+        <td>${salePayLabel(s)}</td>
+        <td>${saleCashier(s)}</td>
+      </tr>`;
+      })
       .join('')}
-    </tbody></table>`
-    : '<div style="padding:20px;color:var(--muted);text-align:center;">No POS sales found.</div>';
+    </tbody>
+    <tfoot><tr>
+      <td colspan="4"><b>Page total</b></td>
+      <td class="num">${pageRows.reduce((n, s) => n + saleQtyTotal(s), 0)}</td>
+      <td class="num">${saleFmt(pageRows.reduce((n, s) => n + saleDiscountOf(s), 0))}</td>
+      <td class="num">${saleFmt(pageRows.reduce((n, s) => n + saleTaxOf(s), 0))}</td>
+      <td class="num"><b>${saleFmt(pageRows.reduce((n, s) => n + saleTotalOf(s), 0))}</b></td>
+      <td class="num"><b>${saleFmt(pageRows.reduce((n, s) => n + saleProfitOf(s), 0))}</b></td>
+      <td colspan="2"></td>
+    </tr>
+    <tr class="sales-foot-grand">
+      <td colspan="4"><b>Grand total (${total})</b></td>
+      <td class="num">${list.reduce((n, s) => n + saleQtyTotal(s), 0)}</td>
+      <td class="num">${saleFmt(list.reduce((n, s) => n + saleDiscountOf(s), 0))}</td>
+      <td class="num">${saleFmt(list.reduce((n, s) => n + saleTaxOf(s), 0))}</td>
+      <td class="num"><b>${saleFmt(list.reduce((n, s) => n + saleTotalOf(s), 0))}</b></td>
+      <td class="num"><b>${saleFmt(list.reduce((n, s) => n + saleProfitOf(s), 0))}</b></td>
+      <td colspan="2"></td>
+    </tr></tfoot></table>`
+    : '<div class="sales-empty">No POS sales found for this filter.</div>';
+
+  if (pager) {
+    const from = total ? start + 1 : 0;
+    const to = Math.min(start + salesRegisterPageSize, total);
+    pager.innerHTML = `
+      <span>Showing ${from} to ${to} of ${total} entries</span>
+      <div class="sales-pager-btns">
+        <button type="button" data-sales-page="prev" ${salesRegisterPage <= 1 ? 'disabled' : ''}>Previous</button>
+        <span class="sales-page-label">Page ${salesRegisterPage} / ${pages}</span>
+        <button type="button" data-sales-page="next" ${salesRegisterPage >= pages ? 'disabled' : ''}>Next</button>
+      </div>`;
+    pager.querySelectorAll('[data-sales-page]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.salesPage === 'prev') salesRegisterPage = Math.max(1, salesRegisterPage - 1);
+        else salesRegisterPage += 1;
+        renderSalesTable(list);
+      });
+    });
+  }
+
   listWrap.querySelectorAll('tr[data-sale-id]').forEach((row) => {
     row.addEventListener('click', () => openSaleDetail(row.dataset.saleId));
   });
@@ -3639,26 +4302,60 @@ function openSaleDetail(id) {
   if (!modal || !box) return;
   const sale = sales.find((s) => String(s.id) === String(id));
   if (!sale) return;
-  const itemsHtml = (sale.items || []).map((i) => `
-    <tr><td>${i.productName || i.name || '—'}</td><td>${i.sku || '—'}</td>
-      <td style="text-align:right">${i.quantity || 1}</td>
-      <td style="text-align:right">${saleFmt(i.unitPrice)}</td>
-      <td style="text-align:right">${saleFmt(saleLineTotal(i))}</td></tr>`).join('');
+  const itemsHtml = (sale.items || []).map((i) => {
+    const qty = saleMoney(i.quantity || 1);
+    const price = saleMoney(i.unitPrice);
+    const cost = saleMoney(i.costPrice ?? i.cost ?? 0);
+    const line = saleLineTotal(i);
+    const profit = line - qty * cost;
+    return `<tr>
+      <td>${i.productName || i.name || '—'}</td>
+      <td>${i.sku || i.barcode || '—'}</td>
+      <td class="num">${qty}</td>
+      <td class="num">${saleFmt(price)}</td>
+      <td class="num">${saleFmt(cost)}</td>
+      <td class="num">${saleFmt(profit)}</td>
+      <td class="num"><b>${saleFmt(line)}</b></td>
+    </tr>`;
+  }).join('');
   const paymentsHtml = (sale.payments || []).map((p) => `
-    <tr><td>${p.paymentMethod || '—'}</td><td style="text-align:right">${saleFmt(p.amount || 0)}</td></tr>`).join('');
+    <tr><td>${p.paymentMethod || '—'}</td><td class="num">${saleFmt(p.amount || 0)}</td></tr>`).join('');
   document.getElementById('detail-invoice').textContent = sale.invoiceNumber || sale.orderNumber || sale.id || '—';
+  const sub = document.getElementById('detail-invoice-sub');
+  if (sub) sub.textContent = `${saleItemsSummary(sale)} · ${salePayLabel(sale)}`;
   document.getElementById('detail-date').textContent = saleDateFormat(sale);
   document.getElementById('detail-cashier').textContent = saleCashier(sale);
   document.getElementById('detail-customer').textContent = sale.customerName || sale.customer?.name || 'Walk-in';
+  const payEl = document.getElementById('detail-payment');
+  if (payEl) payEl.textContent = salePayLabel(sale);
   document.getElementById('detail-total').textContent = saleFmt(saleTotalOf(sale));
   box.innerHTML = `
-    <div class="data-panel"><h3>Items</h3>
-      <table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left">Product</th><th style="text-align:left">SKU</th><th style="text-align:right">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Total</th></tr></thead>
-        <tbody>${itemsHtml || '<tr><td colspan="5">No items</td></tr>'}</tbody></table>
+    <div class="sale-detail-section">
+      <h4>Line items</h4>
+      <div class="sales-table-wrap">
+        <table class="sales-register-table">
+          <thead><tr>
+            <th>Item</th><th>Stock code</th><th class="num">Qty</th>
+            <th class="num">Price</th><th class="num">Cost</th><th class="num">Profit</th><th class="num">Total</th>
+          </tr></thead>
+          <tbody>${itemsHtml || '<tr><td colspan="7">No items</td></tr>'}</tbody>
+          <tfoot><tr>
+            <td colspan="2"><b>Sale totals</b></td>
+            <td class="num">${saleQtyTotal(sale)}</td>
+            <td class="num"></td>
+            <td class="num">${saleFmt(saleCostOf(sale))}</td>
+            <td class="num"><b>${saleFmt(saleProfitOf(sale))}</b></td>
+            <td class="num"><b>${saleFmt(saleTotalOf(sale))}</b></td>
+          </tr></tfoot>
+        </table>
+      </div>
     </div>
-    <div class="data-panel"><h3>Payments</h3>
-      <table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left">Method</th><th style="text-align:right">Amount</th></tr></thead>
-        <tbody>${paymentsHtml || '<tr><td colspan="2">—</td></tr>'}</tbody></table>
+    <div class="sale-detail-section">
+      <h4>Payments</h4>
+      <table class="sales-register-table">
+        <thead><tr><th>Method</th><th class="num">Amount</th></tr></thead>
+        <tbody>${paymentsHtml || '<tr><td colspan="2">—</td></tr>'}</tbody>
+      </table>
     </div>`;
   modal.style.display = 'flex';
 }
@@ -3754,28 +4451,39 @@ function buildSalesReportHtml(rows, range) {
     <tr>
       <td>${s.invoiceNumber || s.orderNumber || s.id || '—'}</td>
       <td>${saleDateFormat(s)}</td>
-      <td>${saleCashier(s)}</td>
       <td>${s.customerName || s.customer?.name || 'Walk-in'}</td>
-      <td style="text-align:right">${saleFmt(saleTotalOf(s))}</td>
+      <td>${saleItemsSummary(s)}</td>
+      <td class="tright">${saleQtyTotal(s)}</td>
+      <td class="tright">${saleFmt(saleDiscountOf(s))}</td>
+      <td class="tright">${saleFmt(saleTaxOf(s))}</td>
+      <td class="tright">${saleFmt(saleTotalOf(s))}</td>
+      <td class="tright">${saleFmt(saleProfitOf(s))}</td>
+      <td>${salePayLabel(s)}</td>
+      <td>${saleCashier(s)}</td>
     </tr>`).join('');
   const grand = rows.reduce((sum, s) => sum + saleTotalOf(s), 0);
+  const profit = rows.reduce((sum, s) => sum + saleProfitOf(s), 0);
   const credit = rows.filter(saleIsCredit).reduce((sum, s) => sum + saleTotalOf(s), 0);
   return `
     <!DOCTYPE html><html><head><title>Sales Report</title>
-    <style>body{font-family:Arial,sans-serif;font-size:12px;margin:0;padding:24px;}
+    <style>body{font-family:Arial,sans-serif;font-size:11px;margin:0;padding:24px;}
     h2{margin:0 0 4px;font-size:18px;} .meta{color:#555;margin-bottom:16px;font-size:12px;}
-    table{width:100%;border-collapse:collapse;} th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;}
+    table{width:100%;border-collapse:collapse;} th,td{border:1px solid #ddd;padding:5px 6px;text-align:left;}
     th{background:#f2f2f2;} .tright{text-align:right;} .tfoot{font-weight:bold;background:#fafafa;}
-    @page{size:A4;margin:20mm;}</style></head>
+    @page{size:A4 landscape;margin:12mm;}</style></head>
     <body>
       <h2>POS Sales Report</h2>
       <div class="meta">Date range: ${fromLabel} to ${toLabel}<br/>
         Sales: ${rows.length} &nbsp;|&nbsp; Cashiers: ${new Set(rows.map(saleCashier)).size} &nbsp;|&nbsp; Generated: ${new Date().toLocaleString()}</div>
-      <table><thead><tr><th>Invoice</th><th>Date</th><th>Cashier</th><th>Customer</th><th class="tright">Total</th></tr></thead>
-        <tbody>${rowsHtml || '<tr><td colspan="5" style="text-align:center;color:#999;">No sales in this date range</td></tr>'}</tbody>
+      <table><thead><tr>
+        <th>Invoice</th><th>Date</th><th>Customer</th><th>Items</th><th class="tright">Qty</th>
+        <th class="tright">Discount</th><th class="tright">Tax</th><th class="tright">Total</th>
+        <th class="tright">Profit</th><th>Payment</th><th>Cashier</th>
+      </tr></thead>
+        <tbody>${rowsHtml || '<tr><td colspan="11" style="text-align:center;color:#999;">No sales in this date range</td></tr>'}</tbody>
         <tfoot>
-          <tr class="tfoot"><td colspan="4" class="tright">GRAND TOTAL</td><td class="tright">${saleFmt(grand)}</td></tr>
-          <tr class="tfoot"><td colspan="4" class="tright">Credit sales</td><td class="tright">${saleFmt(credit)}</td></tr>
+          <tr class="tfoot"><td colspan="7" class="tright">GRAND TOTAL</td><td class="tright">${saleFmt(grand)}</td><td class="tright">${saleFmt(profit)}</td><td colspan="2"></td></tr>
+          <tr class="tfoot"><td colspan="7" class="tright">Credit sales</td><td class="tright">${saleFmt(credit)}</td><td colspan="3"></td></tr>
         </tfoot></table>
     </body></html>`;
 }
@@ -3858,6 +4566,7 @@ async function loadSalesRegister() {
     const visible = sales.filter(saleMatchesFilter);
 
     const total = visible.reduce((sum, s) => sum + saleTotalOf(s), 0);
+    const profit = visible.reduce((sum, s) => sum + saleProfitOf(s), 0);
     const credit = visible.filter(saleIsCredit).reduce((sum, s) => sum + saleTotalOf(s), 0);
     const byUser = new Map();
     visible.forEach((s) => {
@@ -3872,6 +4581,8 @@ async function loadSalesRegister() {
 
     document.getElementById('sales-kpi-count').textContent = String(visible.length);
     document.getElementById('sales-kpi-total').textContent = saleFmt(total);
+    const profitEl = document.getElementById('sales-kpi-profit');
+    if (profitEl) profitEl.textContent = saleFmt(profit);
     document.getElementById('sales-kpi-credit').textContent = saleFmt(credit);
     document.getElementById('sales-kpi-users').textContent = String(users.length);
 
@@ -3897,10 +4608,15 @@ function renderLocalCatalog() {
   const wrap = document.getElementById('cat-table');
   if (!wrap) return;
   const q = String(document.getElementById('cat-search')?.value || '').toLowerCase();
+  const catThumb = (row) => {
+    const img = row?.mainImage || row?.image || '';
+    if (!img) return '📁';
+    return `<img src="${escapeHtmlAttr(img)}" alt="" style="width:32px;height:32px;object-fit:cover;border-radius:8px;vertical-align:middle;" referrerpolicy="no-referrer" onerror="this.outerHTML='📁'" />`;
+  };
   if (catTab === 'cats') {
     const rows = localCatalog.filter((c) => `${c.name} ${c.code} ${c.description}`.toLowerCase().includes(q));
-    wrap.innerHTML = rows.length ? `<table class="returns-table"><thead><tr><th>Name</th><th>Code</th><th>Description</th><th>Subs</th><th style="width:100px;text-align:right;padding-right:24px;">Actions</th></tr></thead><tbody>${rows.map((c) => `<tr data-cat-row-id="${c.id}" style="cursor:pointer;">
-        <td><b>${c.name}</b></td><td>${c.code || '—'}</td><td>${c.description || '—'}</td>
+    wrap.innerHTML = rows.length ? `<table class="returns-table"><thead><tr><th></th><th>Name</th><th>Code</th><th>Description</th><th>Subs</th><th style="width:100px;text-align:right;padding-right:24px;">Actions</th></tr></thead><tbody>${rows.map((c) => `<tr data-cat-row-id="${c.id}" style="cursor:pointer;">
+        <td>${catThumb(c)}</td><td><b>${c.name}</b></td><td>${c.code || '—'}</td><td>${c.description || '—'}</td>
         <td>${(c.subCategories || []).length}</td>
         <td style="text-align:right;padding-right:20px;"><button type="button" class="icon-btn" data-edit-cat="${c.id}" title="Edit">✎</button> <button type="button" class="icon-btn del" data-del-cat="${c.id}" title="Delete">🗑</button></td>
       </tr>`).join('')
@@ -3909,8 +4625,8 @@ function renderLocalCatalog() {
     const rows = [];
     localCatalog.forEach((c) => (c.subCategories || []).forEach((s) => rows.push({ ...s, parentName: c.name, parentId: c.id })));
     const filtered = rows.filter((r) => `${r.name} ${r.code} ${r.parentName}`.toLowerCase().includes(q));
-    wrap.innerHTML = filtered.length ? `<table class="returns-table"><thead><tr><th>Name</th><th>Code</th><th>Parent</th><th>Description</th><th style="width:100px;text-align:right;padding-right:24px;">Actions</th></tr></thead><tbody>${filtered.map((s) => `<tr data-sub-row-id="${s.id}" data-parent-id="${s.parentId}" style="cursor:pointer;">
-        <td><b>${s.name}</b></td><td>${s.code || '—'}</td><td>${s.parentName}</td><td>${s.description || '—'}</td>
+    wrap.innerHTML = filtered.length ? `<table class="returns-table"><thead><tr><th></th><th>Name</th><th>Code</th><th>Parent</th><th>Description</th><th style="width:100px;text-align:right;padding-right:24px;">Actions</th></tr></thead><tbody>${filtered.map((s) => `<tr data-sub-row-id="${s.id}" data-parent-id="${s.parentId}" style="cursor:pointer;">
+        <td>${catThumb(s)}</td><td><b>${s.name}</b></td><td>${s.code || '—'}</td><td>${s.parentName}</td><td>${s.description || '—'}</td>
         <td style="text-align:right;padding-right:20px;"><button type="button" class="icon-btn" data-edit-sub="${s.id}" data-parent="${s.parentId}" title="Edit">✎</button> <button type="button" class="icon-btn del" data-del-sub="${s.id}" title="Delete">🗑</button></td>
       </tr>`).join('')
       }</tbody></table>` : '<div style="padding:24px;text-align:center;color:var(--muted);">No subcategories found</div>';
@@ -3925,6 +4641,23 @@ async function loadLocalCatalog() {
   renderLocalCatalog();
 }
 
+function setCatImagePreview(url) {
+  const preview = document.getElementById('cat-f-image-preview');
+  const img = document.getElementById('cat-f-image-preview-img');
+  const value = String(url || '').trim();
+  if (preview && img) {
+    if (value) {
+      img.src = value;
+      preview.style.display = 'block';
+    } else {
+      img.removeAttribute('src');
+      preview.style.display = 'none';
+    }
+  }
+  const inp = document.getElementById('cat-f-image');
+  if (inp && inp.value !== value) inp.value = value;
+}
+
 function openCatForm(kind, row) {
   catEditing = { kind, row };
   document.getElementById('cat-form-error').textContent = '';
@@ -3936,12 +4669,14 @@ function openCatForm(kind, row) {
   document.getElementById('cat-f-name').value = row?.name || '';
   document.getElementById('cat-f-code').value = row?.code || '';
   document.getElementById('cat-f-desc').value = row?.description || '';
+  setCatImagePreview(row?.mainImage || row?.image || '');
   document.getElementById('cat-overlay').style.display = 'flex';
 }
 
 function closeCatForm() {
   document.getElementById('cat-overlay').style.display = 'none';
   catEditing = null;
+  setCatImagePreview('');
 }
 
 function initCatalogPanel() {
@@ -3997,17 +4732,32 @@ function initCatalogPanel() {
       openCatForm('subs', row);
     }
   });
+  document.getElementById('cat-f-image')?.addEventListener('input', (e) => {
+    setCatImagePreview(e.target.value);
+  });
+  document.getElementById('cat-f-image-pick')?.addEventListener('click', () => {
+    document.getElementById('cat-f-image-file')?.click();
+  });
+  document.getElementById('cat-f-image-file')?.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setCatImagePreview(reader.result);
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  });
   document.getElementById('cat-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = document.getElementById('cat-f-name').value.trim();
     const code = document.getElementById('cat-f-code').value.trim();
     const description = document.getElementById('cat-f-desc').value.trim();
     const parentId = document.getElementById('cat-f-parent').value;
+    const image = document.getElementById('cat-f-image')?.value?.trim() || '';
     if (!name) {
       document.getElementById('cat-form-error').textContent = 'Name is required';
       return;
     }
-    const payload = { id: catEditing?.row?.id, name, code, description };
+    const payload = { id: catEditing?.row?.id, name, code, description, image, mainImage: image };
     const res = catEditing?.kind === 'subs'
       ? await api.catalog.saveSubcategory({ ...payload, categoryId: parentId })
       : await api.catalog.saveCategory(payload);
@@ -4193,9 +4943,10 @@ async function afterProductChange() {
 })();
 
 const PF_TEXT = [
-  'name', 'sku', 'barcode', 'qrCode', 'productType', 'description', 'tags',
+  'name', 'sku', 'barcode', 'qrCode', 'productType', 'itemType', 'description', 'tags',
   'costPrice', 'sellingPrice', 'landingCost', 'currency', 'taxRate', 'taxType',
-  'stockUnit', 'currentStock', 'minimumStock', 'maximumStock',
+  'stockUnit', 'purchaseUnit', 'salesUnit', 'purchaseConversionFactor', 'salesConversionFactor',
+  'currentStock', 'minimumStock', 'maximumStock',
   'brand', 'modelNumber', 'supplier', 'supplierSku', 'leadTime', 'reorderPoint',
   'rackLocation', 'zone', 'palletNumber', 'shelfNumber', 'storageCondition', 'tempMin', 'tempMax',
   'weight', 'weightUnit', 'length', 'width', 'height', 'dimensionUnit', 'color', 'size', 'material', 'finish',
@@ -4205,8 +4956,165 @@ const PF_TEXT = [
 ];
 const PF_BOOL = [
   'isActive', 'hasExpiry', 'isBatchManaged', 'isSerialManaged', 'isExpiryManaged',
-  'isBulkManaged', 'hasIndividualTracking', 'dangerousGoods', 'isReturnable',
+  'isBulkManaged', 'hasIndividualTracking', 'dangerousGoods', 'isReturnable', 'allowFractionalQty',
+  'showInPos',
 ];
+
+let recipeDraftRows = [];
+
+function menuSoldByUnit() {
+  return String(document.getElementById('pf-menuSoldBy')?.value || pfVal('salesUnit') || 'Pcs').trim() || 'Pcs';
+}
+
+function isWeightLikeUnit(unit) {
+  const u = String(unit || '').toLowerCase();
+  return ['kg', 'g', 'gram', 'grams', 'litre', 'liter', 'ltr', 'ml', 'karhai'].some((x) => u === x || u.includes(x));
+}
+
+function updateMenuPricePreview() {
+  const hint = document.getElementById('pf-price-unit-hint');
+  const preview = document.getElementById('pf-menu-price-preview');
+  const unit = menuSoldByUnit();
+  const price = pfNum('sellingPrice');
+  if (hint) hint.textContent = `Price per ${unit}`;
+  if (preview) {
+    preview.textContent = Number.isFinite(price)
+      ? `Price: ${pkr(price)} / ${unit}`
+      : `Price: — / ${unit}`;
+  }
+}
+
+function syncRestaurantProductFormUi() {
+  const restaurant = !!isRestaurantPos;
+  const itemTypeWrap = document.getElementById('pf-item-type-wrap');
+  const showInPosWrap = document.getElementById('pf-show-in-pos-wrap');
+  const recipeTab = document.getElementById('prod-tab-recipe');
+  const menuSell = document.getElementById('pf-menu-sell-fields');
+  if (itemTypeWrap) itemTypeWrap.style.display = restaurant ? 'block' : 'none';
+  if (showInPosWrap) showInPosWrap.style.display = restaurant ? 'flex' : 'none';
+  const itemType = String(pfVal('itemType') || 'READY_ITEM').toUpperCase();
+  const isMenu = restaurant && itemType === 'MENU_ITEM';
+  if (recipeTab) recipeTab.style.display = isMenu ? '' : 'none';
+  if (menuSell) menuSell.style.display = isMenu ? 'block' : 'none';
+  document.querySelectorAll('.pf-stock-fields').forEach((el) => {
+    el.style.display = isMenu ? 'none' : '';
+  });
+  // Barcode block still useful for READY_ITEM; hide for MENU_ITEM in restaurant
+  const barcodeBlock = document.getElementById('pf-barcode')?.closest('.pf-span');
+  if (barcodeBlock && restaurant) barcodeBlock.style.display = isMenu ? 'none' : '';
+
+  if (isMenu) {
+    // Keep sold-by in sync with salesUnit used by POS cart
+    const soldBy = document.getElementById('pf-menuSoldBy');
+    const currentSales = pfVal('salesUnit') || 'Pcs';
+    if (soldBy) {
+      // Ensure option exists for legacy values
+      if (currentSales && ![...soldBy.options].some((o) => o.value === currentSales)) {
+        const opt = document.createElement('option');
+        opt.value = currentSales;
+        opt.textContent = currentSales;
+        soldBy.appendChild(opt);
+      }
+      if (!soldBy.value || soldBy.value === 'Pcs') {
+        // only force when empty-ish first open; prefer existing sales unit
+        if (currentSales) soldBy.value = currentSales;
+      }
+    }
+    const frac = document.getElementById('pf-menuAllowFractional');
+    if (frac && !frac.dataset.userTouched) {
+      frac.checked = pfBool('allowFractionalQty') || isWeightLikeUnit(menuSoldByUnit());
+    }
+    updateMenuPricePreview();
+  } else {
+    const hint = document.getElementById('pf-price-unit-hint');
+    if (hint) hint.textContent = 'Price per piece / unit';
+  }
+}
+
+function applyMenuSoldByToFormFields() {
+  const unit = menuSoldByUnit();
+  setPf('salesUnit', unit);
+  setPf('stockUnit', unit);
+  setPf('purchaseUnit', unit);
+  setPf('salesConversionFactor', '1');
+  setPf('purchaseConversionFactor', '1');
+  const frac = document.getElementById('pf-menuAllowFractional');
+  const allowFrac = frac ? !!frac.checked : isWeightLikeUnit(unit);
+  setPf('allowFractionalQty', allowFrac);
+  updateMenuPricePreview();
+}
+
+function ingredientOptionsHtml(selectedId) {
+  const list = (localProducts || []).filter((p) => {
+    const t = resolveItemType(p);
+    return t === 'INGREDIENT' || t === 'READY_ITEM' || p.trackInventory !== false;
+  });
+  return `<option value="">Select ingredient…</option>` + list.map((p) =>
+    `<option value="${escapeHtmlAttr(p.id)}" ${String(p.id) === String(selectedId || '') ? 'selected' : ''}>${escapeHtmlAttr(p.name || '')}</option>`
+  ).join('');
+}
+
+function renderRecipeDraft() {
+  const wrap = document.getElementById('recipe-items-list');
+  const banner = document.getElementById('recipe-cost-banner');
+  if (!wrap) return;
+  if (!recipeDraftRows.length) {
+    wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;">No ingredients yet.</div>';
+  } else {
+    wrap.innerHTML = recipeDraftRows.map((row, idx) => `
+      <div class="recipe-row" data-idx="${idx}" style="display:grid;grid-template-columns:1.6fr 0.7fr 0.6fr auto;gap:8px;align-items:center;">
+        <select class="pf-select recipe-ing">${ingredientOptionsHtml(row.ingredientProductId)}</select>
+        <input class="pf-input recipe-qty" type="number" min="0.0001" step="any" value="${escapeHtmlAttr(row.quantity || 1)}" placeholder="Qty" />
+        <input class="pf-input recipe-uom" value="${escapeHtmlAttr(row.uom || 'Pcs')}" placeholder="UOM" />
+        <button type="button" class="icon-btn recipe-del" title="Remove">🗑</button>
+      </div>
+    `).join('');
+  }
+  let cost = 0;
+  recipeDraftRows.forEach((row) => {
+    const ing = (localProducts || []).find((p) => String(p.id) === String(row.ingredientProductId));
+    const unit = Number(ing?.costPrice || ing?.averageCost || 0);
+    cost += unit * (Number(row.quantity) || 0);
+  });
+  if (banner) banner.textContent = `Recipe cost: ${pkr(cost)}`;
+}
+
+function readRecipeDraftFromDom() {
+  const rows = [];
+  document.querySelectorAll('#recipe-items-list .recipe-row').forEach((el) => {
+    rows.push({
+      ingredientProductId: el.querySelector('.recipe-ing')?.value || '',
+      quantity: Number(el.querySelector('.recipe-qty')?.value) || 0,
+      uom: el.querySelector('.recipe-uom')?.value || 'Pcs',
+    });
+  });
+  recipeDraftRows = rows;
+}
+
+async function loadRecipeForProduct(productId) {
+  recipeDraftRows = [];
+  if (!productId || !api?.pos?.getRecipe) {
+    renderRecipeDraft();
+    return;
+  }
+  try {
+    const res = await api.pos.getRecipe(productId);
+    const items = res?.data?.items || [];
+    recipeDraftRows = items.map((it) => ({
+      ingredientProductId: it.ingredientProductId,
+      quantity: it.quantity,
+      uom: it.uom || 'Pcs',
+    }));
+  } catch (_) { /* offline / missing */ }
+  renderRecipeDraft();
+}
+
+async function saveRecipeForProduct(productId) {
+  if (!productId || !api?.pos?.saveRecipe) return;
+  readRecipeDraftFromDom();
+  const items = recipeDraftRows.filter((r) => r.ingredientProductId && Number(r.quantity) > 0);
+  await api.pos.saveRecipe(productId, { items });
+}
 
 function renderProdImages() {
   const wrap = document.getElementById('pf-image-preview');
@@ -4274,20 +5182,30 @@ function resetProdForm() {
   setPf('isActive', true);
   setPf('isReturnable', true);
   setPf('productType', 'Physical');
+  setPf('itemType', isRestaurantPos ? 'MENU_ITEM' : 'READY_ITEM');
+  setPf('showInPos', true);
   setPf('currency', 'PKR');
   setPf('taxType', taxContext?.pricingModel === 'inclusive' ? 'Inclusive' : 'Exclusive');
   setPf('taxRate', taxContext?.enabled ? resolveTaxRate(taxContext.defaultRate) : 0);
   setPf('stockUnit', 'Pcs');
+  setPf('purchaseUnit', 'Pcs');
+  setPf('salesUnit', 'Pcs');
+  setPf('purchaseConversionFactor', '1');
+  setPf('salesConversionFactor', '1');
+  setPf('allowFractionalQty', false);
   setPf('weightUnit', 'KG');
   setPf('dimensionUnit', 'cm');
   setPf('countryOfOrigin', 'Pakistan');
   setPf('bulkUnit', 'Bale');
   setPf('warrantyUnit', 'Months');
   prodImages = [];
+  recipeDraftRows = [];
   renderProdImages();
+  renderRecipeDraft();
   const customWrap = document.getElementById('pf-custom-rows');
   if (customWrap) customWrap.innerHTML = '';
   applyCompanyTaxUi();
+  syncRestaurantProductFormUi();
   showProdTab('basic');
   void refreshProductCodePreviews();
 }
@@ -4298,12 +5216,20 @@ function openProdForm(row) {
   const err = document.getElementById('prod-form-error');
   const title = document.getElementById('prod-form-title');
   if (err) err.textContent = '';
-  if (title) title.textContent = row ? 'Edit Product' : 'Add Product';
+  if (title) {
+    title.textContent = isRestaurantPos
+      ? (row ? 'Edit Item' : 'Add Item')
+      : (row ? 'Edit Product' : 'Add Product');
+  }
   const parentId = firstVal(row, ['category', 'categoryId']);
   const subId = firstVal(row, ['subCategory', 'subcategoryId', 'subCategoryId']);
   fillProductCats(parentId, subId);
   fillProductSuppliers(firstVal(row, ['supplierId', 'supplier']));
   if (!row) {
+    syncExpiryFormSections();
+    syncRestaurantProductFormUi();
+    recipeDraftRows = [];
+    renderRecipeDraft();
     document.getElementById('prod-overlay').style.display = 'flex';
     void refreshProductCodePreviews();
     return;
@@ -4313,6 +5239,8 @@ function openProdForm(row) {
   setPf('barcode', firstVal(row, ['barcode', 'barcodeNumber']));
   setPf('qrCode', firstVal(row, ['qrCode']));
   setPf('productType', firstVal(row, ['productType'], 'Physical'));
+  setPf('itemType', firstVal(row, ['itemType'], isRestaurantPos ? 'MENU_ITEM' : 'READY_ITEM'));
+  setPf('showInPos', row.showInPos !== false);
   setPf('description', row.description || '');
   setPf('tags', Array.isArray(row.tags) ? row.tags.join(', ') : (row.tags || ''));
   setPf('isActive', row.isActive !== false);
@@ -4323,6 +5251,29 @@ function openProdForm(row) {
   setPf('taxRate', firstVal(row, ['taxRate']));
   setPf('taxType', firstVal(row, ['taxType', 'taxTypeName'], 'Exclusive'));
   setPf('stockUnit', firstVal(row, ['stockUnit', 'stockUnitName'], 'Pcs'));
+  setPf('purchaseUnit', firstVal(row, ['purchaseUnit', 'purchaseUnitName'], firstVal(row, ['stockUnit', 'stockUnitName'], 'Pcs')));
+  setPf('salesUnit', firstVal(row, ['salesUnit', 'salesUnitName'], firstVal(row, ['stockUnit', 'stockUnitName'], 'Pcs')));
+  setPf('purchaseConversionFactor', firstVal(row, ['purchaseConversionFactor'], 1));
+  setPf('salesConversionFactor', firstVal(row, ['salesConversionFactor'], 1));
+  setPf('allowFractionalQty', !!row.allowFractionalQty);
+  {
+    const soldBy = document.getElementById('pf-menuSoldBy');
+    const unit = firstVal(row, ['salesUnit', 'salesUnitName', 'stockUnit', 'stockUnitName'], 'Pcs');
+    if (soldBy) {
+      if (unit && ![...soldBy.options].some((o) => o.value === unit)) {
+        const opt = document.createElement('option');
+        opt.value = unit;
+        opt.textContent = unit;
+        soldBy.appendChild(opt);
+      }
+      soldBy.value = unit || 'Pcs';
+    }
+    const frac = document.getElementById('pf-menuAllowFractional');
+    if (frac) {
+      frac.checked = !!row.allowFractionalQty || isWeightLikeUnit(unit);
+      delete frac.dataset.userTouched;
+    }
+  }
   setPf('currentStock', firstVal(row, ['currentStock']));
   setPf('minimumStock', firstVal(row, ['minimumStock']));
   setPf('maximumStock', firstVal(row, ['maximumStock']));
@@ -4380,8 +5331,37 @@ function openProdForm(row) {
   renderProdImages();
   const custom = Array.isArray(row.customFields) ? row.customFields : [];
   custom.forEach((item) => addCustomRow(item.name || item.key || '', item.value || ''));
+  syncExpiryFormSections();
+  syncRestaurantProductFormUi();
+  void loadRecipeForProduct(row.id);
   document.getElementById('prod-overlay').style.display = 'flex';
   void refreshProductCodePreviews();
+}
+
+function syncExpiryFormSections() {
+  const hasExpiry = pfBool('hasExpiry');
+  const isBatch = pfBool('isBatchManaged');
+  const isSerial = pfBool('isSerialManaged');
+  const expiryFields = document.getElementById('pf-expiry-fields');
+  const batchFields = document.getElementById('pf-batch-fields');
+  const serialFields = document.getElementById('pf-serial-fields');
+  if (expiryFields) expiryFields.style.display = hasExpiry ? 'block' : 'none';
+  if (batchFields) batchFields.style.display = isBatch ? 'block' : 'none';
+  if (serialFields) serialFields.style.display = isSerial ? 'block' : 'none';
+  // Keep managed flag in sync with Has Expiry checkbox
+  setPf('isExpiryManaged', hasExpiry);
+}
+
+function autoCalcExpiryFromShelfLife() {
+  if (!pfBool('hasExpiry')) return;
+  const mfg = pfVal('manufacturingDate');
+  const shelf = Number(pfVal('shelfLife'));
+  if (!mfg || !Number.isFinite(shelf) || shelf <= 0) return;
+  const d = new Date(mfg);
+  if (Number.isNaN(d.getTime())) return;
+  d.setDate(d.getDate() + Math.floor(shelf));
+  const iso = d.toISOString().slice(0, 10);
+  setPf('expiryDate', iso);
 }
 
 function closeProdForm() {
@@ -4400,6 +5380,14 @@ function collectProductForm() {
     barcodeNumber: pfVal('barcode'),
     qrCode: pfVal('qrCode'),
     productType: pfVal('productType') || 'Physical',
+    itemType: isRestaurantPos ? (pfVal('itemType') || 'MENU_ITEM') : 'READY_ITEM',
+    showInPos: isRestaurantPos ? pfBool('showInPos') : true,
+    trackInventory: (() => {
+      if (!isRestaurantPos) return true;
+      const t = String(pfVal('itemType') || 'READY_ITEM').toUpperCase();
+      if (t === 'MENU_ITEM' || t === 'MODIFIER') return false;
+      return true;
+    })(),
     description: pfVal('description'),
     tags: tags ? tags.split(',').map((t) => t.trim()).filter(Boolean) : [],
     isActive: pfBool('isActive'),
@@ -4412,8 +5400,51 @@ function collectProductForm() {
     taxRate: taxContext?.enabled ? pfNum('taxRate') : 0,
     taxType: taxContext?.enabled ? (pfVal('taxType') || (taxContext.pricingModel === 'inclusive' ? 'Inclusive' : 'Exclusive')) : '',
     taxTypeName: taxContext?.enabled ? (pfVal('taxType') || (taxContext.pricingModel === 'inclusive' ? 'Inclusive' : 'Exclusive')) : '',
-    stockUnit: pfVal('stockUnit'),
-    stockUnitName: pfVal('stockUnit'),
+    stockUnit: (() => {
+      if (isRestaurantPos && String(pfVal('itemType') || '').toUpperCase() === 'MENU_ITEM') {
+        applyMenuSoldByToFormFields();
+        return menuSoldByUnit();
+      }
+      return pfVal('stockUnit');
+    })(),
+    stockUnitName: (() => {
+      if (isRestaurantPos && String(pfVal('itemType') || '').toUpperCase() === 'MENU_ITEM') {
+        return menuSoldByUnit();
+      }
+      return pfVal('stockUnit');
+    })(),
+    purchaseUnit: (() => {
+      if (isRestaurantPos && String(pfVal('itemType') || '').toUpperCase() === 'MENU_ITEM') {
+        return menuSoldByUnit();
+      }
+      return pfVal('purchaseUnit') || pfVal('stockUnit');
+    })(),
+    purchaseUnitName: (() => {
+      if (isRestaurantPos && String(pfVal('itemType') || '').toUpperCase() === 'MENU_ITEM') {
+        return menuSoldByUnit();
+      }
+      return pfVal('purchaseUnit') || pfVal('stockUnit');
+    })(),
+    salesUnit: (() => {
+      if (isRestaurantPos && String(pfVal('itemType') || '').toUpperCase() === 'MENU_ITEM') {
+        return menuSoldByUnit();
+      }
+      return pfVal('salesUnit') || pfVal('stockUnit');
+    })(),
+    salesUnitName: (() => {
+      if (isRestaurantPos && String(pfVal('itemType') || '').toUpperCase() === 'MENU_ITEM') {
+        return menuSoldByUnit();
+      }
+      return pfVal('salesUnit') || pfVal('stockUnit');
+    })(),
+    purchaseConversionFactor: pfNum('purchaseConversionFactor') || 1,
+    salesConversionFactor: pfNum('salesConversionFactor') || 1,
+    allowFractionalQty: (() => {
+      if (isRestaurantPos && String(pfVal('itemType') || '').toUpperCase() === 'MENU_ITEM') {
+        return !!document.getElementById('pf-menuAllowFractional')?.checked || isWeightLikeUnit(menuSoldByUnit());
+      }
+      return pfBool('allowFractionalQty');
+    })(),
     currentStock: pfNum('currentStock'),
     minimumStock: pfNum('minimumStock'),
     maximumStock: pfNum('maximumStock'),
@@ -4457,12 +5488,12 @@ function collectProductForm() {
     hasExpiry: pfBool('hasExpiry'),
     isBatchManaged: pfBool('isBatchManaged'),
     isSerialManaged: pfBool('isSerialManaged'),
-    isExpiryManaged: pfBool('isExpiryManaged'),
-    expiryDate: pfVal('expiryDate'),
-    manufacturingDate: pfVal('manufacturingDate'),
-    batchNumber: pfVal('batchNumber'),
-    shelfLife: pfVal('shelfLife'),
-    shelfLifeDays: pfNum('shelfLife'),
+    isExpiryManaged: pfBool('hasExpiry') || pfBool('isExpiryManaged'),
+    expiryDate: pfBool('hasExpiry') ? (pfVal('expiryDate') || null) : null,
+    manufacturingDate: pfBool('hasExpiry') ? (pfVal('manufacturingDate') || null) : null,
+    batchNumber: pfBool('isBatchManaged') ? (pfVal('batchNumber') || null) : (pfVal('batchNumber') || null),
+    shelfLife: pfBool('hasExpiry') ? pfVal('shelfLife') : '',
+    shelfLifeDays: pfBool('hasExpiry') ? pfNum('shelfLife') : 0,
     isBulkManaged: pfBool('isBulkManaged'),
     hasIndividualTracking: pfBool('hasIndividualTracking'),
     bulkUnit: pfVal('bulkUnit'),
@@ -4554,6 +5585,17 @@ function initProductPanel() {
   }
   document.getElementById('pf-add-category')?.addEventListener('click', () => openProdQuick('category'));
   document.getElementById('pf-add-subcategory')?.addEventListener('click', () => openProdQuick('subcategory'));
+  document.getElementById('pf-stockUnit')?.addEventListener('change', () => {
+    const stock = pfVal('stockUnit') || 'Pcs';
+    if (!pfVal('purchaseUnit')) setPf('purchaseUnit', stock);
+    if (!pfVal('salesUnit')) setPf('salesUnit', stock);
+  });
+  ['hasExpiry', 'isBatchManaged', 'isSerialManaged'].forEach((id) => {
+    document.getElementById(`pf-${id}`)?.addEventListener('change', () => syncExpiryFormSections());
+  });
+  document.getElementById('pf-manufacturingDate')?.addEventListener('change', autoCalcExpiryFromShelfLife);
+  document.getElementById('pf-shelfLife')?.addEventListener('input', autoCalcExpiryFromShelfLife);
+  document.getElementById('pf-shelfLife')?.addEventListener('change', autoCalcExpiryFromShelfLife);
   document.getElementById('prod-quick-cancel')?.addEventListener('click', closeProdQuick);
   document.getElementById('prod-quick-save')?.addEventListener('click', () => { void saveProdQuick(); });
   document.getElementById('prod-quick-name')?.addEventListener('keydown', (e) => {
@@ -4686,13 +5728,66 @@ function initProductPanel() {
       showProdTab('pricing');
       return;
     }
+    if (payload.hasExpiry && !payload.expiryDate) {
+      if (err) err.textContent = 'Expiry date is required when Has Expiry is enabled';
+      showProdTab('expiry');
+      return;
+    }
     const res = await api.catalog.saveProduct(payload);
     if (!res?.success) {
       if (err) err.textContent = res?.message || 'Save failed';
       return;
     }
+    const savedId = res?.data?.id || payload.id;
+    if (isRestaurantPos && payload.itemType === 'MENU_ITEM' && savedId) {
+      try {
+        await saveRecipeForProduct(savedId);
+      } catch (recipeErr) {
+        if (err) err.textContent = recipeErr.message || 'Product saved but recipe failed';
+        await afterProductChange();
+        return;
+      }
+    }
     closeProdForm();
     await afterProductChange();
+  });
+
+  document.getElementById('pf-itemType')?.addEventListener('change', () => {
+    const t = String(pfVal('itemType') || 'READY_ITEM').toUpperCase();
+    if (t === 'INGREDIENT') setPf('showInPos', false);
+    else if (t === 'MENU_ITEM' || t === 'READY_ITEM' || t === 'MODIFIER') setPf('showInPos', true);
+    syncRestaurantProductFormUi();
+  });
+  document.getElementById('pf-menuSoldBy')?.addEventListener('change', () => {
+    const unit = menuSoldByUnit();
+    const frac = document.getElementById('pf-menuAllowFractional');
+    if (frac && !frac.dataset.userTouched) {
+      frac.checked = isWeightLikeUnit(unit);
+    }
+    applyMenuSoldByToFormFields();
+  });
+  document.getElementById('pf-menuAllowFractional')?.addEventListener('change', (e) => {
+    e.target.dataset.userTouched = '1';
+    applyMenuSoldByToFormFields();
+  });
+  document.getElementById('pf-sellingPrice')?.addEventListener('input', updateMenuPricePreview);
+  document.getElementById('btn-add-recipe-row')?.addEventListener('click', () => {
+    readRecipeDraftFromDom();
+    recipeDraftRows.push({ ingredientProductId: '', quantity: 1, uom: 'Pcs' });
+    renderRecipeDraft();
+  });
+  document.getElementById('recipe-items-list')?.addEventListener('click', (e) => {
+    if (!e.target.closest('.recipe-del')) return;
+    readRecipeDraftFromDom();
+    const row = e.target.closest('.recipe-row');
+    const idx = Number(row?.getAttribute('data-idx'));
+    if (!Number.isFinite(idx)) return;
+    recipeDraftRows.splice(idx, 1);
+    renderRecipeDraft();
+  });
+  document.getElementById('recipe-items-list')?.addEventListener('change', () => {
+    readRecipeDraftFromDom();
+    renderRecipeDraft();
   });
 }
 
@@ -4705,18 +5800,60 @@ const srFrom = document.getElementById('sales-date-from');
 const srTo = document.getElementById('sales-date-to');
 srSearch?.addEventListener('input', () => {
   salesFilter.search = srSearch.value || '';
+  salesRegisterPage = 1;
   loadSalesRegister();
 });
 srFrom?.addEventListener('change', () => {
   salesFilter.from = srFrom.value || '';
+  salesRegisterPage = 1;
   loadSalesRegister();
 });
 srTo?.addEventListener('change', () => {
   salesFilter.to = srTo.value || '';
+  salesRegisterPage = 1;
+  loadSalesRegister();
+});
+document.getElementById('sales-page-size')?.addEventListener('change', (e) => {
+  salesRegisterPageSize = Number(e.target.value) || 25;
+  salesRegisterPage = 1;
   loadSalesRegister();
 });
 document.getElementById('btn-sales-print')?.addEventListener('click', () => printSalesReport());
-document.getElementById('btn-sales-pdf')?.addEventListener('click', () => exportSalesReportPdf());
+document.getElementById('btn-sales-pdf')?.addEventListener('click', () => exportSalesRegisterCsv());
+
+function exportSalesRegisterCsv() {
+  const rows = sales.filter(saleMatchesFilter);
+  if (!rows.length) {
+    showToast('No sales to export', 'error');
+    return;
+  }
+  const header = ['Invoice', 'Date', 'Customer', 'Items', 'Qty', 'Discount', 'Tax', 'Total', 'Est. profit', 'Payment', 'Cashier'];
+  const body = rows.map((s) => [
+    s.invoiceNumber || s.orderNumber || s.id || '',
+    saleDateFormat(s),
+    s.customerName || s.customer?.name || 'Walk-in',
+    (s.items || []).map((i) => `${i.productName || i.name || ''} x${i.quantity || 1}`).join('; '),
+    saleQtyTotal(s),
+    saleDiscountOf(s),
+    saleTaxOf(s),
+    saleTotalOf(s),
+    saleProfitOf(s),
+    salePayLabel(s),
+    saleCashier(s),
+  ]);
+  const csv = [header, ...body].map((row) => row.map((v) => {
+    const s = v == null ? '' : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }).join(',')).join('\r\n');
+  const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `sales-register-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
+  showToast(`Exported ${rows.length} sale(s)`, 'success');
+}
 document.getElementById('btn-sales-delete-all')?.addEventListener('click', async () => {
   if (!confirm('Are you sure you want to delete ALL sales? This action cannot be undone.')) return;
   if (!confirm('This will permanently delete all POS sales from the system. Continue?')) return;
@@ -4744,6 +5881,7 @@ window.addEventListener('DOMContentLoaded', () => {
   boot()
     .then(() => {
       initStockPanel();
+      initExpiryPanel();
     })
     .catch((err) => {
       console.error('[POS Boot Error]', err);
@@ -4930,6 +6068,14 @@ function initStockPanel() {
   pcsPerBoxInp.addEventListener('input', recalculateStockFormTotal);
   costInp.addEventListener('input', recalculateStockFormTotal);
 
+  const syncStockReasonUi = () => {
+    const needsSupplier = reasonSelect?.value === 'supplier_credit';
+    const label = document.getElementById('stock-supplier-label');
+    if (label) label.textContent = needsSupplier ? 'Supplier *' : 'Supplier';
+  };
+  reasonSelect?.addEventListener('change', syncStockReasonUi);
+  syncStockReasonUi();
+
   // 6. Form submit handler
   submitBtn.addEventListener('click', async () => {
     try {
@@ -4974,17 +6120,42 @@ function initStockPanel() {
         ? (localSuppliers.find(s => String(s.id || s._id) === supplierId)?.name || '')
         : null;
 
+      if (reason === 'supplier_credit' && !supplierId) {
+        showStockFormAlert('Please select a supplier for Purchase from Supplier', 'error');
+        return;
+      }
+
       const reference = refInp.value.trim();
       const notes = notesInp.value.trim();
 
       submitBtn.disabled = true;
       submitBtn.textContent = 'Saving...';
 
+      const purchaseUnit = stockSelectedProduct.purchaseUnitName
+        || stockSelectedProduct.purchaseUnit
+        || stockSelectedProduct.stockUnitName
+        || stockSelectedProduct.stockUnit
+        || 'Pcs';
+      const purchaseFactor = Number(stockSelectedProduct.purchaseConversionFactor) > 0
+        ? Number(stockSelectedProduct.purchaseConversionFactor)
+        : 1;
+      const batchNumber = document.getElementById('stock-batch-input')?.value?.trim() || null;
+      const expiryDate = document.getElementById('stock-expiry-input')?.value || null;
+      if ((stockSelectedProduct.hasExpiry || stockSelectedProduct.isExpiryManaged) && !expiryDate) {
+        showStockFormAlert('Expiry date is required for this product', 'error');
+        return;
+      }
+      if (stockSelectedProduct.isBatchManaged && !batchNumber) {
+        showStockFormAlert('Batch number is required for this product', 'error');
+        return;
+      }
+
       const payload = {
         productId: stockSelectedProduct.id,
-        quantity,
+        quantity: format === 'box' ? quantity : (parseFloat(bulkQtyInp.value) || quantity),
         unitCost: cost,
         stockType: format,
+        stockSourceReason: reason,
         reason: getReasonLabel(reason),
         supplierId,
         supplierName,
@@ -4992,6 +6163,12 @@ function initStockPanel() {
         notes,
         boxCount: boxCountVal,
         piecesPerBox: piecesPerBoxVal,
+        unitName: format === 'box' ? null : purchaseUnit,
+        conversionFactor: format === 'box' ? piecesPerBoxVal : purchaseFactor,
+        locationId: currentLocationId?.() || undefined,
+        idempotencyKey: `stockin-${stockSelectedProduct.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        batchNumber,
+        expiryDate,
       };
 
       const res = await api.pos.addStockIn(payload);
@@ -4999,12 +6176,32 @@ function initStockPanel() {
         showToast('Inventory stock received successfully', 'success');
         showStockFormAlert('Stock received and updated successfully!', 'success');
 
+        // Keep product expiry/batch in local catalog so Sell + Expiry pages pick the date
+        if (expiryDate || batchNumber) {
+          try {
+            await api.catalog.saveProduct({
+              ...stockSelectedProduct,
+              hasExpiry: stockSelectedProduct.hasExpiry || !!expiryDate,
+              isExpiryManaged: stockSelectedProduct.isExpiryManaged || stockSelectedProduct.hasExpiry || !!expiryDate,
+              isBatchManaged: stockSelectedProduct.isBatchManaged || !!batchNumber,
+              expiryDate: expiryDate || stockSelectedProduct.expiryDate || null,
+              batchNumber: batchNumber || stockSelectedProduct.batchNumber || null,
+            });
+          } catch (e) {
+            console.warn('Could not update product expiry/batch after stock-in', e);
+          }
+        }
+
         // Reset form
         bulkQtyInp.value = '';
         boxCountInp.value = '';
         pcsPerBoxInp.value = '';
         refInp.value = '';
         notesInp.value = '';
+        const batchInp = document.getElementById('stock-batch-input');
+        const expiryInp = document.getElementById('stock-expiry-input');
+        if (batchInp) batchInp.value = '';
+        if (expiryInp) expiryInp.value = '';
 
         // Reload products cache to reflect stock change locally
         if (typeof loadLocalProducts === 'function') {
@@ -5060,19 +6257,45 @@ function resolveProductUnitCost(prod) {
 function onStockProductSelected(prod) {
   if (!prod) return;
 
-  // Show unit label
   const unitLabel = document.getElementById('stock-unit-label');
-  const unit = prod.stockUnitName || prod.stockUnit || 'Pcs';
+  const preview = document.getElementById('stock-unit-preview');
+  const stockUnit = prod.stockUnitName || prod.stockUnit || 'Pcs';
+  const purchaseUnit = prod.purchaseUnitName || prod.purchaseUnit || stockUnit;
+  const factor = Number(prod.purchaseConversionFactor) > 0 ? Number(prod.purchaseConversionFactor) : 1;
+
   if (unitLabel) {
-    unitLabel.textContent = unit;
+    unitLabel.textContent = purchaseUnit;
     unitLabel.style.display = 'inline-block';
   }
+  if (preview) {
+    preview.textContent = purchaseUnit.toLowerCase() === stockUnit.toLowerCase()
+      ? `Quantity in ${stockUnit}`
+      : `1 ${purchaseUnit} = ${factor} ${stockUnit}`;
+  }
 
-  // Always pre-fill unit cost (0 if product has no cost saved)
   const costInp = document.getElementById('stock-cost-input');
   if (costInp) {
     costInp.value = String(resolveProductUnitCost(prod));
   }
+
+  const showBatch = !!(prod.isBatchManaged || prod.batchNumber);
+  const showExpiry = !!(prod.hasExpiry || prod.isExpiryManaged || prod.expiryDate);
+  const group = document.getElementById('stock-batch-expiry-group');
+  const batchField = document.getElementById('stock-batch-field');
+  const expiryField = document.getElementById('stock-expiry-field');
+  const batchInp = document.getElementById('stock-batch-input');
+  const expiryInp = document.getElementById('stock-expiry-input');
+  if (group) {
+    group.style.display = (showBatch || showExpiry) ? 'flex' : 'none';
+  }
+  if (batchField) batchField.style.display = showBatch ? 'block' : 'none';
+  if (expiryField) expiryField.style.display = showExpiry ? 'block' : 'none';
+  if (batchInp) batchInp.value = showBatch ? String(prod.batchNumber || '') : '';
+  if (expiryInp) {
+    const raw = prod.expiryDate ? String(prod.expiryDate).slice(0, 10) : '';
+    expiryInp.value = showExpiry ? raw : '';
+  }
+
   recalculateStockFormTotal();
 }
 
@@ -5166,9 +6389,12 @@ function renderStockProductList(query = stockPickerQuery) {
 function getReasonLabel(reason) {
   switch (reason) {
     case 'opening_stock': return 'Opening Stock';
-    case 'purchase': return 'Purchase';
-    case 'adjustment': return 'Stock Adjustment';
-    case 'return': return 'Sales Return';
+    case 'supplier_credit': return 'Purchase from Supplier (Pay Later)';
+    case 'physical_adjustment_in': return 'Stock Adjustment / Add';
+    case 'owner_contribution': return 'Owner Contribution';
+    case 'free_sample': return 'Free / Sample / Gift';
+    case 'cash_purchase': return 'Cash / Bank Purchase';
+    case 'transfer_in': return 'Transfer In';
     default: return 'Stock In';
   }
 }
@@ -5251,6 +6477,96 @@ function renderStockMovementsHistory() {
       </tr>
     `;
   }).join('');
+}
+
+// ─── Expiry Tracking panel ───────────────────────────────────────────────────
+let expiryFilter = 'near';
+
+function getExpiryTrackedProducts() {
+  const list = Array.isArray(localProducts) ? localProducts : [];
+  return list
+    .filter((p) => p && (p.hasExpiry || p.isExpiryManaged || p.expiryDate) && p.isActive !== false)
+    .map((p) => {
+      const status = getExpiryStatus(p);
+      return { product: p, status };
+    })
+    .filter((row) => row.status);
+}
+
+async function loadExpiryPanel() {
+  try {
+    if (typeof loadLocalProducts === 'function') {
+      await loadLocalProducts();
+    }
+  } catch (e) {
+    console.warn('loadExpiryPanel products refresh failed', e);
+  }
+  renderExpiryPanel();
+}
+
+function renderExpiryPanel() {
+  const rows = getExpiryTrackedProducts();
+  const expired = rows.filter((r) => r.status.state === 'expired');
+  const near = rows.filter((r) => r.status.state === 'near');
+  const trackedEl = document.getElementById('expiry-count-tracked');
+  const nearEl = document.getElementById('expiry-count-near');
+  const expiredEl = document.getElementById('expiry-count-expired');
+  if (trackedEl) trackedEl.textContent = String(rows.length);
+  if (nearEl) nearEl.textContent = String(near.length);
+  if (expiredEl) expiredEl.textContent = String(expired.length);
+
+  document.querySelectorAll('[data-expiry-filter]').forEach((btn) => {
+    const f = btn.getAttribute('data-expiry-filter');
+    btn.classList.toggle('accent', f === expiryFilter);
+    btn.classList.toggle('ghost', f !== expiryFilter);
+  });
+
+  let shown = rows;
+  if (expiryFilter === 'near') shown = near;
+  else if (expiryFilter === 'expired') shown = expired;
+
+  shown = [...shown].sort((a, b) => (a.status.daysLeft ?? 0) - (b.status.daysLeft ?? 0));
+
+  const body = document.getElementById('expiry-table-body');
+  if (!body) return;
+  if (!shown.length) {
+    body.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:28px;">No ${expiryFilter === 'all' ? 'expiry-tracked' : expiryFilter === 'near' ? 'near-expiry' : 'expired'} products</td></tr>`;
+    return;
+  }
+
+  body.innerHTML = shown.map(({ product: p, status }) => {
+    const badgeColor = status.state === 'expired'
+      ? 'background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;'
+      : status.state === 'near'
+        ? 'background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;'
+        : 'background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;';
+    const daysLabel = status.daysLeft < 0
+      ? `${Math.abs(status.daysLeft)}d ago`
+      : String(status.daysLeft);
+    return `<tr>
+      <td>
+        <strong>${escapeHtmlAttr(p.name || '')}</strong>
+        <div style="font-size:11px;color:var(--muted);">SKU: ${escapeHtmlAttr(p.sku || 'N/A')}</div>
+      </td>
+      <td>${escapeHtmlAttr(p.batchNumber || '—')}</td>
+      <td style="text-align:right;">${escapeHtmlAttr(String(p.currentStock ?? 0))} ${escapeHtmlAttr(p.stockUnitName || p.stockUnit || 'Pcs')}</td>
+      <td>${escapeHtmlAttr(formatExpiryDate(status.date))}</td>
+      <td style="text-align:right;font-weight:700;">${escapeHtmlAttr(daysLabel)}</td>
+      <td><span style="display:inline-block;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:700;${badgeColor}">${escapeHtmlAttr(status.label)}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+function initExpiryPanel() {
+  document.getElementById('btn-refresh-expiry')?.addEventListener('click', () => {
+    void loadExpiryPanel();
+  });
+  document.querySelectorAll('[data-expiry-filter]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      expiryFilter = btn.getAttribute('data-expiry-filter') || 'near';
+      renderExpiryPanel();
+    });
+  });
 }
 
 

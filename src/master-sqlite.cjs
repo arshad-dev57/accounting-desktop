@@ -265,8 +265,10 @@ async function open(userDataPath, options = {}) {
   addColumnIfMissing('products', 'image', 'TEXT');
   addColumnIfMissing('categories', 'code', 'TEXT');
   addColumnIfMissing('categories', 'description', 'TEXT');
+  addColumnIfMissing('categories', 'image', 'TEXT');
   addColumnIfMissing('subcategories', 'code', 'TEXT');
   addColumnIfMissing('subcategories', 'description', 'TEXT');
+  addColumnIfMissing('subcategories', 'image', 'TEXT');
   addColumnIfMissing('products', 'cost_price', 'REAL');
   addColumnIfMissing('products', 'payload', 'TEXT');
   addColumnIfMissing('products', 'description', 'TEXT');
@@ -338,6 +340,10 @@ function resolveSyncId(table, syncId, fallbackId) {
   return bySync ? bySync.id : fallbackId;
 }
 
+function categoryImageOf(row = {}) {
+  return resolveMediaUrl(row.mainImage || row.image || row.imageUrl || '');
+}
+
 function upsertCategory(row) {
   const parentId = row.parentId || row.categoryId || null;
   if (parentId) {
@@ -346,9 +352,17 @@ function upsertCategory(row) {
   }
   const id = resolveSyncId('categories', row.syncId, row.id);
   const syncStatus = row.syncStatus && row.syncStatus !== 'SYNCED' ? row.syncStatus : 'SYNCED';
+  // Category images are POS-local only. Sync must never wipe them.
+  // Local saveCategory sets image via explicit UPDATE after upsert.
+  const localImageUpdate = row._localImageUpdate === true;
+  const image = localImageUpdate ? (categoryImageOf(row) || null) : null;
+  const existing = get('SELECT image FROM categories WHERE id = ?', [id]);
+  const insertImage = localImageUpdate
+    ? image
+    : (existing?.image || categoryImageOf(row) || null);
   run(
-    `INSERT INTO categories (id, name, parent_id, code, description, is_active, is_deleted, updated_at, sync_id, sync_status, last_synced_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO categories (id, name, parent_id, code, description, image, is_active, is_deleted, updated_at, sync_id, sync_status, last_synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name,
        parent_id = excluded.parent_id,
@@ -366,6 +380,7 @@ function upsertCategory(row) {
       null,
       row.code || null,
       row.description || null,
+      insertImage,
       row.isActive === false || row.isDeleted ? 0 : 1,
       row.isDeleted ? 1 : 0,
       row.updatedAt || new Date().toISOString(),
@@ -374,14 +389,23 @@ function upsertCategory(row) {
       row.lastSyncedAt || (syncStatus === 'SYNCED' ? new Date().toISOString() : null),
     ]
   );
+  if (localImageUpdate) {
+    run(`UPDATE categories SET image = ? WHERE id = ?`, [image, id]);
+  }
 }
 
 function upsertSubcategory(row) {
   const id = resolveSyncId('subcategories', row.syncId, row.id);
   const syncStatus = row.syncStatus && row.syncStatus !== 'SYNCED' ? row.syncStatus : 'SYNCED';
+  const localImageUpdate = row._localImageUpdate === true;
+  const image = localImageUpdate ? (categoryImageOf(row) || null) : null;
+  const existing = get('SELECT image FROM subcategories WHERE id = ?', [id]);
+  const insertImage = localImageUpdate
+    ? image
+    : (existing?.image || categoryImageOf(row) || null);
   run(
-    `INSERT INTO subcategories (id, category_id, name, code, description, is_active, is_deleted, updated_at, sync_id, sync_status, last_synced_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO subcategories (id, category_id, name, code, description, image, is_active, is_deleted, updated_at, sync_id, sync_status, last_synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        category_id = excluded.category_id,
        name = excluded.name,
@@ -399,6 +423,7 @@ function upsertSubcategory(row) {
       row.name || '',
       row.code || null,
       row.description || null,
+      insertImage,
       row.isActive === false || row.isDeleted ? 0 : 1,
       row.isDeleted ? 1 : 0,
       row.updatedAt || new Date().toISOString(),
@@ -407,6 +432,9 @@ function upsertSubcategory(row) {
       row.lastSyncedAt || (syncStatus === 'SYNCED' ? new Date().toISOString() : null),
     ]
   );
+  if (localImageUpdate) {
+    run(`UPDATE subcategories SET image = ? WHERE id = ?`, [image, id]);
+  }
 }
 
 function parseJson(value, fallback) {
@@ -430,6 +458,67 @@ function toPayloadJson(row) {
   }
 }
 
+function mergeRestaurantProductFields(prevPayload = {}, row = {}) {
+  const prevType = String(prevPayload.itemType || '').toUpperCase();
+  const incType = String(row.itemType || '').toUpperCase();
+  const special = ['MENU_ITEM', 'INGREDIENT', 'MODIFIER'];
+  // Prefer explicit non-default type from either side; never let a lean READY_ITEM sync wipe MENU_ITEM
+  let itemType = 'READY_ITEM';
+  if (special.includes(incType)) itemType = incType;
+  else if (special.includes(prevType)) itemType = prevType;
+  else if (incType) itemType = incType;
+  else if (prevType) itemType = prevType;
+
+  let trackInventory;
+  if (row.trackInventory !== undefined && row.trackInventory !== null) {
+    trackInventory = row.trackInventory !== false;
+  } else if (prevPayload.trackInventory !== undefined) {
+    trackInventory = prevPayload.trackInventory !== false;
+  } else {
+    trackInventory = itemType !== 'MENU_ITEM' && itemType !== 'MODIFIER';
+  }
+  // MENU_ITEM / MODIFIER should not track own stock even if lean sync says true
+  if (itemType === 'MENU_ITEM' || itemType === 'MODIFIER') trackInventory = false;
+
+  let showInPos;
+  if (row.showInPos !== undefined && row.showInPos !== null) {
+    showInPos = row.showInPos !== false;
+  } else if (prevPayload.showInPos !== undefined) {
+    showInPos = prevPayload.showInPos !== false;
+  } else {
+    showInPos = itemType !== 'INGREDIENT';
+  }
+  if (itemType === 'INGREDIENT' && row.showInPos === undefined) showInPos = false;
+
+  const salesUnit =
+    row.salesUnitName || row.salesUnit || prevPayload.salesUnitName || prevPayload.salesUnit || null;
+  const stockUnit =
+    row.stockUnitName || row.stockUnit || prevPayload.stockUnitName || prevPayload.stockUnit || salesUnit || 'Pcs';
+  const allowFractionalQty =
+    row.allowFractionalQty !== undefined
+      ? Boolean(row.allowFractionalQty)
+      : Boolean(prevPayload.allowFractionalQty);
+
+  return {
+    itemType,
+    trackInventory,
+    showInPos,
+    salesUnitName: salesUnit || stockUnit,
+    salesUnit: salesUnit || stockUnit,
+    stockUnitName: stockUnit,
+    stockUnit,
+    allowFractionalQty,
+  };
+}
+
+function nonEmptyImage(...candidates) {
+  for (const c of candidates) {
+    const v = typeof c === 'string' ? c.trim() : '';
+    if (v) return v;
+  }
+  return '';
+}
+
 function upsertProduct(row) {
   const idValue = row.id || row._id;
   if (!idValue) return;
@@ -438,18 +527,27 @@ function upsertProduct(row) {
   const hasCostKey = Object.prototype.hasOwnProperty.call(row, 'costPrice')
     || Object.prototype.hasOwnProperty.call(row, 'cost_price')
     || Object.prototype.hasOwnProperty.call(row, 'landingCost');
-  const existing = get('SELECT cost_price, payload FROM products WHERE id = ?', [id]);
+  const existing = get('SELECT cost_price, payload, image FROM products WHERE id = ?', [id]);
   const incomingCost = Number(row.costPrice ?? row.cost_price ?? row.landingCost ?? 0);
   // Don't wipe a known cost when a lean sync payload omits pricing
   const costPrice = hasCostKey
     ? incomingCost
     : Number(existing?.cost_price ?? incomingCost ?? 0);
   const prevPayload = parseJson(existing?.payload, {});
+  const restaurantFields = mergeRestaurantProductFields(prevPayload, row);
+  const incomingImage = nonEmptyImage(pickImage(row), row.mainImage, row.image);
+  const keptImage = incomingImage || nonEmptyImage(existing?.image, prevPayload.mainImage, prevPayload.image);
   const payloadObj = {
     ...prevPayload,
     ...row,
+    ...restaurantFields,
     costPrice,
     sellingPrice: Number(row.price ?? row.sellingPrice ?? prevPayload.sellingPrice ?? 0),
+    mainImage: keptImage || prevPayload.mainImage || '',
+    image: keptImage || prevPayload.image || '',
+    images: Array.isArray(row.images) && row.images.length
+      ? row.images
+      : (Array.isArray(prevPayload.images) ? prevPayload.images : (keptImage ? [keptImage] : [])),
   };
   delete payloadObj.payload;
   run(
@@ -468,7 +566,10 @@ function upsertProduct(row) {
        tax_rate = excluded.tax_rate,
        tax_type = excluded.tax_type,
        current_stock = excluded.current_stock,
-       image = excluded.image,
+       image = CASE
+         WHEN excluded.image IS NOT NULL AND TRIM(excluded.image) != '' THEN excluded.image
+         ELSE products.image
+       END,
        description = excluded.description,
        cost_price = excluded.cost_price,
        payload = excluded.payload,
@@ -483,7 +584,7 @@ function upsertProduct(row) {
          ELSE excluded.sync_status
        END,
        last_synced_at = COALESCE(excluded.last_synced_at, products.last_synced_at),
-       stock_unit_name = excluded.stock_unit_name`,
+       stock_unit_name = COALESCE(NULLIF(TRIM(excluded.stock_unit_name), ''), products.stock_unit_name)`,
     [
       id,
       row.categoryId || row.category?.id || null,
@@ -495,7 +596,7 @@ function upsertProduct(row) {
       Number(row.taxRate ?? 0),
       row.taxType || row.taxTypeName || 'Exclusive',
       Number(row.currentStock ?? row.availableStock ?? 0),
-      pickImage(row),
+      keptImage || null,
       row.description || '',
       costPrice,
       JSON.stringify(payloadObj),
@@ -864,6 +965,157 @@ function clearCatalog() {
   persist();
 }
 
+/**
+ * Snapshot POS-local fields that cloud sync must never destroy:
+ * category/subcategory images, product data-URL images, restaurant itemType, sold-by units.
+ */
+function snapshotLocalPosOverlays() {
+  const categories = all(`SELECT id, sync_id, image FROM categories WHERE is_deleted = 0`).map((r) => ({
+    id: r.id,
+    syncId: r.sync_id || null,
+    image: r.image || '',
+  }));
+  const subcategories = all(`SELECT id, sync_id, image FROM subcategories WHERE is_deleted = 0`).map((r) => ({
+    id: r.id,
+    syncId: r.sync_id || null,
+    image: r.image || '',
+  }));
+  const products = all(`SELECT id, sync_id, image, payload FROM products WHERE is_deleted = 0`).map((r) => {
+    const extra = parseJson(r.payload, {});
+    return {
+      id: r.id,
+      syncId: r.sync_id || null,
+      image: r.image || extra.mainImage || extra.image || '',
+      itemType: extra.itemType || null,
+      trackInventory: extra.trackInventory,
+      showInPos: extra.showInPos,
+      salesUnitName: extra.salesUnitName || extra.salesUnit || null,
+      stockUnitName: extra.stockUnitName || extra.stockUnit || r.stock_unit_name || null,
+      allowFractionalQty: extra.allowFractionalQty,
+      images: Array.isArray(extra.images) ? extra.images : undefined,
+    };
+  });
+  return { categories, subcategories, products };
+}
+
+function findOverlayRow(list, id, syncId) {
+  if (!Array.isArray(list)) return null;
+  if (id) {
+    const byId = list.find((r) => String(r.id) === String(id));
+    if (byId) return byId;
+  }
+  if (syncId) {
+    return list.find((r) => r.syncId && String(r.syncId) === String(syncId)) || null;
+  }
+  return null;
+}
+
+/** Re-apply local POS overlays after a cloud refresh/seed. */
+function restoreLocalPosOverlays(overlay) {
+  if (!overlay || !db) return false;
+  let touched = false;
+
+  for (const row of all(`SELECT id, sync_id, image FROM categories WHERE is_deleted = 0`)) {
+    const snap = findOverlayRow(overlay.categories, row.id, row.sync_id);
+    if (snap?.image && (!row.image || String(row.image).trim() === '')) {
+      run(`UPDATE categories SET image = ? WHERE id = ?`, [snap.image, row.id]);
+      touched = true;
+    } else if (snap?.image && String(snap.image).startsWith('data:')) {
+      // Prefer local data-URL category image over anything cloud related
+      run(`UPDATE categories SET image = ? WHERE id = ?`, [snap.image, row.id]);
+      touched = true;
+    }
+  }
+
+  for (const row of all(`SELECT id, sync_id, image FROM subcategories WHERE is_deleted = 0`)) {
+    const snap = findOverlayRow(overlay.subcategories, row.id, row.sync_id);
+    if (snap?.image && (!row.image || String(row.image).trim() === '' || String(snap.image).startsWith('data:'))) {
+      run(`UPDATE subcategories SET image = ? WHERE id = ?`, [snap.image, row.id]);
+      touched = true;
+    }
+  }
+
+  for (const row of all(`SELECT id, sync_id, image, payload, stock_unit_name FROM products WHERE is_deleted = 0`)) {
+    const snap = findOverlayRow(overlay.products, row.id, row.sync_id);
+    if (!snap) continue;
+    const extra = parseJson(row.payload, {});
+    let changed = false;
+
+    const special = ['MENU_ITEM', 'INGREDIENT', 'MODIFIER'];
+    const snapType = String(snap.itemType || '').toUpperCase();
+    const curType = String(extra.itemType || '').toUpperCase();
+    let requeue = false;
+    if (special.includes(snapType) && snapType !== curType) {
+      extra.itemType = snapType;
+      extra.trackInventory = snapType === 'MENU_ITEM' || snapType === 'MODIFIER' ? false : snap.trackInventory !== false;
+      if (snapType === 'INGREDIENT') extra.showInPos = false;
+      else if (snap.showInPos !== undefined) extra.showInPos = snap.showInPos !== false;
+      changed = true;
+      requeue = true;
+    } else {
+      if (snap.trackInventory !== undefined && extra.trackInventory === undefined) {
+        extra.trackInventory = snap.trackInventory !== false;
+        changed = true;
+      }
+      if (snap.showInPos !== undefined && extra.showInPos === undefined) {
+        extra.showInPos = snap.showInPos !== false;
+        changed = true;
+      }
+      // Keep local special type even when cloud still says READY_ITEM
+      if (special.includes(snapType) && (!curType || curType === 'READY_ITEM') && snapType !== curType) {
+        extra.itemType = snapType;
+        if (snapType === 'MENU_ITEM' || snapType === 'MODIFIER') extra.trackInventory = false;
+        changed = true;
+        requeue = true;
+      }
+    }
+
+    if (snap.salesUnitName && !extra.salesUnitName) {
+      extra.salesUnitName = snap.salesUnitName;
+      extra.salesUnit = snap.salesUnitName;
+      changed = true;
+    }
+    if (snap.stockUnitName && !extra.stockUnitName) {
+      extra.stockUnitName = snap.stockUnitName;
+      extra.stockUnit = snap.stockUnitName;
+      changed = true;
+    }
+    if (snap.allowFractionalQty !== undefined && extra.allowFractionalQty === undefined) {
+      extra.allowFractionalQty = Boolean(snap.allowFractionalQty);
+      changed = true;
+    }
+
+    const localImg = snap.image || '';
+    const curImg = row.image || extra.mainImage || '';
+    if (localImg && (!curImg || localImg.startsWith('data:'))) {
+      extra.mainImage = localImg;
+      extra.image = localImg;
+      if (Array.isArray(snap.images) && snap.images.length) extra.images = snap.images;
+      run(
+        `UPDATE products SET image = ?, payload = ?${requeue ? `, sync_status = 'PENDING', updated_at = ?` : ''} WHERE id = ?`,
+        requeue
+          ? [localImg, JSON.stringify(extra), new Date().toISOString(), row.id]
+          : [localImg, JSON.stringify(extra), row.id]
+      );
+      touched = true;
+      continue;
+    }
+
+    if (changed) {
+      run(
+        `UPDATE products SET payload = ?${requeue ? `, sync_status = 'PENDING', updated_at = ?` : ''} WHERE id = ?`,
+        requeue
+          ? [JSON.stringify(extra), new Date().toISOString(), row.id]
+          : [JSON.stringify(extra), row.id]
+      );
+      touched = true;
+    }
+  }
+
+  if (touched) persist();
+  return touched;
+}
+
 function categoryMatchIds(categoryId) {
   const ids = [String(categoryId)];
   const root = get('SELECT id FROM categories WHERE id = ? AND is_deleted = 0', [categoryId]);
@@ -943,6 +1195,9 @@ function mapProduct(row) {
     image,
     stockUnitName: row.stock_unit_name || extra.stockUnitName || extra.stockUnit || 'Pcs',
     stockUnit: row.stock_unit_name || extra.stockUnit || extra.stockUnitName || 'Pcs',
+    trackInventory: extra.trackInventory !== false,
+    itemType: extra.itemType || 'READY_ITEM',
+    showInPos: extra.showInPos !== false,
   };
 }
 
@@ -1084,6 +1339,15 @@ function addLocalSale(sale) {
   return id;
 }
 
+function updateLocalSalePayload(id, patch = {}) {
+  const row = get(`SELECT payload, status, created_at FROM local_sales WHERE id = ?`, [id]);
+  if (!row) return null;
+  const sale = { ...parseJson(row.payload, {}), ...patch, id };
+  run(`UPDATE local_sales SET payload = ? WHERE id = ?`, [JSON.stringify(sale), id]);
+  persist();
+  return sale;
+}
+
 function listPendingSales() {
   return all(`SELECT * FROM local_sales WHERE status = 'pending'`).map((row) => ({
     id: row.id,
@@ -1141,31 +1405,42 @@ function listCatalog() {
     `SELECT * FROM categories WHERE is_deleted = 0 AND (parent_id IS NULL OR parent_id = '') ORDER BY name`
   );
   const subs = all(`SELECT * FROM subcategories WHERE is_deleted = 0 ORDER BY name`);
-  return parents.map((p) => ({
-    id: p.id,
-    name: p.name,
-    code: p.code || '',
-    description: p.description || '',
-    isActive: p.is_active === 1,
-    subCategories: subs
-      .filter((s) => s.category_id === p.id)
-      .map((s) => ({
-        id: s.id,
-        name: s.name,
-        code: s.code || '',
-        description: s.description || '',
-        categoryId: s.category_id,
-        isActive: s.is_active === 1,
-      })),
-  }));
+  return parents.map((p) => {
+    const image = resolveMediaUrl(p.image || '');
+    return {
+      id: p.id,
+      name: p.name,
+      code: p.code || '',
+      description: p.description || '',
+      image,
+      mainImage: image,
+      isActive: p.is_active === 1,
+      subCategories: subs
+        .filter((s) => s.category_id === p.id)
+        .map((s) => {
+          const subImage = resolveMediaUrl(s.image || '');
+          return {
+            id: s.id,
+            name: s.name,
+            code: s.code || '',
+            description: s.description || '',
+            image: subImage,
+            mainImage: subImage,
+            categoryId: s.category_id,
+            isActive: s.is_active === 1,
+          };
+        }),
+    };
+  });
 }
 
 function saveCategory(payload = {}) {
   const name = String(payload.name || '').trim();
   if (!name) return { success: false, message: 'Name is required' };
   const id = payload.id || crypto.randomUUID();
-  const prev = get('SELECT sync_id, sync_status, last_synced_at FROM categories WHERE id = ?', [id]);
+  const prev = get('SELECT sync_id, sync_status, last_synced_at, image FROM categories WHERE id = ?', [id]);
   const syncId = String(payload.syncId || prev?.sync_id || crypto.randomUUID()).trim();
+  const image = String(payload.mainImage || payload.image || '').trim() || prev?.image || '';
   upsertCategory({
     id,
     syncId,
@@ -1173,11 +1448,31 @@ function saveCategory(payload = {}) {
     name,
     code: payload.code || '',
     description: payload.description || '',
+    mainImage: image,
+    image,
+    _localImageUpdate: true,
     isActive: payload.isActive !== false,
     isDeleted: false,
   });
+  // Category images stay on this POS only (never cloud). Always write local image explicitly.
+  if (payload.mainImage !== undefined || payload.image !== undefined) {
+    const nextImage = String(payload.mainImage || payload.image || '').trim();
+    run(`UPDATE categories SET image = ?, sync_status = 'PENDING', updated_at = ? WHERE id = ?`,
+      [nextImage || null, new Date().toISOString(), id]);
+  }
   persist();
-  return { success: true, data: { id, name, syncId, code: payload.code || '', description: payload.description || '' } };
+  return {
+    success: true,
+    data: {
+      id,
+      name,
+      syncId,
+      code: payload.code || '',
+      description: payload.description || '',
+      image: String(payload.mainImage || payload.image || image || ''),
+      mainImage: String(payload.mainImage || payload.image || image || ''),
+    },
+  };
 }
 
 function deleteCategory(id) {
@@ -1195,8 +1490,9 @@ function saveSubcategory(payload = {}) {
   if (!name) return { success: false, message: 'Name is required' };
   if (!categoryId) return { success: false, message: 'Parent category is required' };
   const id = payload.id || crypto.randomUUID();
-  const prev = get('SELECT sync_id, sync_status FROM subcategories WHERE id = ?', [id]);
+  const prev = get('SELECT sync_id, sync_status, image FROM subcategories WHERE id = ?', [id]);
   const syncId = String(payload.syncId || prev?.sync_id || crypto.randomUUID()).trim();
+  const image = String(payload.mainImage || payload.image || '').trim() || prev?.image || '';
   upsertSubcategory({
     id,
     syncId,
@@ -1205,11 +1501,31 @@ function saveSubcategory(payload = {}) {
     name,
     code: payload.code || '',
     description: payload.description || '',
+    mainImage: image,
+    image,
+    _localImageUpdate: true,
     isActive: payload.isActive !== false,
     isDeleted: false,
   });
+  if (payload.mainImage !== undefined || payload.image !== undefined) {
+    const nextImage = String(payload.mainImage || payload.image || '').trim();
+    run(`UPDATE subcategories SET image = ?, sync_status = 'PENDING', updated_at = ? WHERE id = ?`,
+      [nextImage || null, new Date().toISOString(), id]);
+  }
   persist();
-  return { success: true, data: { id, name, syncId, categoryId, code: payload.code || '', description: payload.description || '' } };
+  return {
+    success: true,
+    data: {
+      id,
+      name,
+      syncId,
+      categoryId,
+      code: payload.code || '',
+      description: payload.description || '',
+      image: String(payload.mainImage || payload.image || image || ''),
+      mainImage: String(payload.mainImage || payload.image || image || ''),
+    },
+  };
 }
 
 function deleteSubcategory(id) {
@@ -1426,8 +1742,41 @@ function renameProductId(oldId, newId) {
  *
  * @returns {{categories: object[], subcategories: object[], products: object[]}}
  */
+/**
+ * One-time: re-queue restaurant-typed products so itemType / sold-by units
+ * reach the cloud after the restaurant POS fields were added.
+ */
+function requeueRestaurantProductFieldsOnce() {
+  // v2: re-push after sync wipe fix so cloud gets MENU_ITEM / sold-by again
+  const flag = get('SELECT value FROM sync_state WHERE key = ?', ['restaurant_fields_requeued_v2']);
+  if (flag?.value === '1') return false;
+  const rows = all(`SELECT id, payload FROM products WHERE is_deleted = 0`);
+  let n = 0;
+  for (const row of rows) {
+    const extra = parseJson(row.payload, {});
+    const t = String(extra.itemType || '').toUpperCase();
+    if (['MENU_ITEM', 'INGREDIENT', 'MODIFIER'].includes(t)) {
+      run(
+        `UPDATE products SET sync_status = '${SYNC_PENDING}', updated_at = ? WHERE id = ?`,
+        [new Date().toISOString(), row.id]
+      );
+      n += 1;
+    }
+  }
+  run(
+    `INSERT INTO sync_state (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    ['restaurant_fields_requeued_v2', '1']
+  );
+  if (n) persist();
+  return n > 0;
+}
+
 function listPendingSync() {
   const now = new Date().toISOString();
+  try {
+    requeueRestaurantProductFieldsOnce();
+  } catch (_) { /* ignore */ }
   const ensure = (table) => {
     run(
       `UPDATE ${table} SET sync_id = ?, sync_status = IFNULL(sync_status, '${SYNC_PENDING}') WHERE sync_id IS NULL`,
@@ -1447,6 +1796,7 @@ function listPendingSync() {
     name: row.name || '',
     code: row.code || '',
     description: row.description || '',
+    // Category images are POS-local only — never push to cloud
     isActive: row.is_active !== 0,
     isDeleted: row.is_deleted === 1,
     updatedAt: row.updated_at || now,
@@ -1463,6 +1813,7 @@ function listPendingSync() {
     parentSyncId: row.parent_sync_id || '',
     code: row.code || '',
     description: row.description || '',
+    // Subcategory images are POS-local only — never push to cloud
     isActive: row.is_active !== 0,
     isDeleted: row.is_deleted === 1,
     updatedAt: row.updated_at || now,
@@ -1502,6 +1853,15 @@ function listPendingSync() {
       taxType: row.tax_type || extra.taxType || 'Exclusive',
       currentStock: Number(row.current_stock ?? extra.currentStock ?? 0),
       mainImage: row.image || extra.mainImage || '',
+      trackInventory: extra.trackInventory !== false,
+      itemType: extra.itemType || 'READY_ITEM',
+      showInPos: extra.showInPos !== false,
+      stockUnitName: row.stock_unit_name || extra.stockUnitName || extra.stockUnit || 'Pcs',
+      salesUnitName: extra.salesUnitName || extra.salesUnit || row.stock_unit_name || 'Pcs',
+      purchaseUnitName: extra.purchaseUnitName || extra.purchaseUnit || row.stock_unit_name || 'Pcs',
+      salesConversionFactor: Number(extra.salesConversionFactor ?? 1) || 1,
+      purchaseConversionFactor: Number(extra.purchaseConversionFactor ?? 1) || 1,
+      allowFractionalQty: Boolean(extra.allowFractionalQty),
       categorySyncId,
       subcategorySyncId,
       categoryName,
@@ -1622,6 +1982,8 @@ module.exports = {
   getCursor,
   resetCursor,
   clearCatalog,
+  snapshotLocalPosOverlays,
+  restoreLocalPosOverlays,
   reloadFromDisk,
   reloadFromDiskSafe,
   applyPage,
@@ -1642,6 +2004,7 @@ module.exports = {
   getCategoryTree,
   counts,
   addLocalSale,
+  updateLocalSalePayload,
   listPendingSales,
   listAllLocalSales,
   markLocalSaleSynced,

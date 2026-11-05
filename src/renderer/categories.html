@@ -249,6 +249,17 @@
         <label>Description</label>
         <textarea id="f-desc" rows="2"></textarea>
       </div>
+      <div class="field">
+        <label>Image</label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input id="f-image" placeholder="Image URL or pick a file" style="flex:1;" />
+          <button type="button" class="btn" id="f-image-pick" style="background:#e2e8f0;">Browse</button>
+          <input type="file" id="f-image-file" accept="image/*" hidden />
+        </div>
+        <div id="f-image-preview" style="display:none;margin-top:8px;width:96px;height:72px;border-radius:8px;overflow:hidden;border:1px solid var(--line);">
+          <img id="f-image-preview-img" alt="" style="width:100%;height:100%;object-fit:cover;" />
+        </div>
+      </div>
       <div class="modal-actions">
         <button type="button" class="btn" id="btn-cancel">Cancel</button>
         <button type="submit" class="btn-brand">Save</button>

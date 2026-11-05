@@ -2,6 +2,7 @@ const api = window.bisonDesktop;
 const form = document.getElementById('login-form');
 const emailEl = document.getElementById('email');
 const passwordEl = document.getElementById('password');
+const togglePasswordBtn = document.getElementById('toggle-password');
 const submitBtn = document.getElementById('submit');
 const errorEl = document.getElementById('error');
 const blockedBanner = document.getElementById('blocked-banner');
@@ -9,6 +10,20 @@ const blockedBanner = document.getElementById('blocked-banner');
 function showError(message) {
   errorEl.textContent = message || 'Login failed';
   errorEl.style.display = 'block';
+}
+
+if (togglePasswordBtn && passwordEl) {
+  togglePasswordBtn.addEventListener('click', () => {
+    const showing = passwordEl.type === 'text';
+    passwordEl.type = showing ? 'password' : 'text';
+    const openIcon = togglePasswordBtn.querySelector('.eye-open');
+    const closedIcon = togglePasswordBtn.querySelector('.eye-closed');
+    openIcon?.classList.toggle('hidden', !showing);
+    closedIcon?.classList.toggle('hidden', showing);
+    const label = showing ? 'Show password' : 'Hide password';
+    togglePasswordBtn.setAttribute('aria-label', label);
+    togglePasswordBtn.title = label;
+  });
 }
 
 (function showBlockedReason() {

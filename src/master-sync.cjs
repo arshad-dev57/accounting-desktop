@@ -63,10 +63,13 @@ function flattenCategories(nodes, inheritedParent = null, into = { categories: [
     const id = node.id || node._id;
     if (!id) continue;
     const parentId = node.parentId || inheritedParent || null;
+    // Do not seed category/subcategory images from cloud — they stay POS-local
     if (!parentId) {
       into.categories.push({
         id,
         name: node.name,
+        code: node.code || '',
+        description: node.description || '',
         isDeleted: node.isDeleted === true || node.isActive === false,
         isActive: node.isActive !== false,
         updatedAt: node.updatedAt,
@@ -76,6 +79,8 @@ function flattenCategories(nodes, inheritedParent = null, into = { categories: [
         id,
         categoryId: parentId,
         name: node.name,
+        code: node.code || '',
+        description: node.description || '',
         isDeleted: node.isDeleted === true || node.isActive === false,
         isActive: node.isActive !== false,
         updatedAt: node.updatedAt,
@@ -103,7 +108,8 @@ function mapLiveProduct(p) {
   if (!id) return null;
   const categoryId = p.categoryId || p.category?.id || null;
   const parentId = p.category?.parentId || null;
-  return {
+  const image = p.mainImage || (Array.isArray(p.images) && p.images[0]) || '';
+  const mapped = {
     id,
     categoryId: parentId || categoryId,
     subcategoryId: p.subcategoryId || p.subCategoryId || (parentId ? categoryId : null),
@@ -116,13 +122,48 @@ function mapLiveProduct(p) {
     taxRate: Number(p.taxRate || 0),
     taxType: p.taxType || 'Exclusive',
     currentStock: Number(p.currentStock ?? p.availableStock ?? 0),
-    mainImage: p.mainImage || (Array.isArray(p.images) && p.images[0]) || '',
     stockUnitName: p.stockUnitName || p.stockUnit || 'Pcs',
     stockUnit: p.stockUnit || p.stockUnitName || 'Pcs',
+    purchaseUnitName: p.purchaseUnitName || p.stockUnitName || p.stockUnit || 'Pcs',
+    salesUnitName: p.salesUnitName || p.salesUnit || p.stockUnitName || p.stockUnit || 'Pcs',
+    purchaseConversionFactor: Number(p.purchaseConversionFactor ?? 1) || 1,
+    salesConversionFactor: Number(p.salesConversionFactor ?? 1) || 1,
+    allowFractionalQty: Boolean(p.allowFractionalQty),
+    hasExpiry: Boolean(p.hasExpiry),
+    isBatchManaged: Boolean(p.isBatchManaged),
+    isSerialManaged: Boolean(p.isSerialManaged),
+    isExpiryManaged: Boolean(p.isExpiryManaged || p.hasExpiry),
+    expiryDate: p.expiryDate || null,
+    manufacturingDate: p.manufacturingDate || null,
+    batchNumber: p.batchNumber || null,
+    shelfLifeDays: Number(p.shelfLifeDays ?? p.shelfLife ?? 0) || 0,
+    units: Array.isArray(p.units)
+      ? p.units
+      : Array.isArray(p.productUnits)
+        ? p.productUnits
+        : undefined,
+    productUnits: Array.isArray(p.productUnits)
+      ? p.productUnits
+      : Array.isArray(p.units)
+        ? p.units
+        : undefined,
     isDeleted: p.isActive === false,
     isActive: p.isActive !== false,
     updatedAt: p.updatedAt,
   };
+  // Only set when cloud actually has values — avoid default READY_ITEM wiping local MENU_ITEM
+  if (p.itemType) mapped.itemType = String(p.itemType).toUpperCase();
+  if (p.trackInventory !== undefined && p.trackInventory !== null) {
+    mapped.trackInventory = p.trackInventory !== false;
+  }
+  if (p.showInPos !== undefined && p.showInPos !== null) {
+    mapped.showInPos = p.showInPos !== false;
+  }
+  if (image) {
+    mapped.mainImage = image;
+    mapped.image = image;
+  }
+  return mapped;
 }
 
 async function seedFromLiveApis(accessToken, locationId) {
@@ -240,6 +281,14 @@ async function refreshCatalog(accessToken, locationId) {
     return offlineResult(conn);
   }
 
+  // Preserve POS-local images + restaurant item types across refresh
+  let localOverlay = null;
+  try {
+    localOverlay = masterSqlite.snapshotLocalPosOverlays();
+  } catch (err) {
+    console.warn('[sync] overlay snapshot failed:', err.message);
+  }
+
   let push = { success: true };
   try {
     push = await pushPendingCatalog(accessToken);
@@ -258,9 +307,17 @@ async function refreshCatalog(accessToken, locationId) {
     };
   }
 
-  masterSqlite.clearCatalog();
-  const snapshot = await syncMasterData(accessToken, locationId);
+  // Do NOT clearCatalog() — that wiped category/product images and MENU_ITEM types.
+  // Merge pull + live APIs, then restore any local-only overlays.
+  const snapshot = await syncMasterData(accessToken, locationId, { push: false });
   const live = await seedFromLiveApis(accessToken, locationId);
+  if (localOverlay) {
+    try {
+      masterSqlite.restoreLocalPosOverlays(localOverlay);
+    } catch (err) {
+      console.warn('[sync] overlay restore failed:', err.message);
+    }
+  }
   masterSqlite.reloadFromDisk();
   const counts = masterSqlite.counts();
   const tree = masterSqlite.getCategoryTree();

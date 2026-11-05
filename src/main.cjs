@@ -2173,11 +2173,136 @@ function registerIpc() {
 
 
   // ─── OFFLINE-FIRST: Queue sale locally ───────────────────────────────────
+  ipcMain.handle('pos:getRestaurantTokenSettings', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    // Apply daily reset if due so Settings preview matches next allocate
+    const settings = localDb.maybeResetRestaurantToken
+      ? localDb.maybeResetRestaurantToken(localDb.getRestaurantTokenSettings(), true)
+      : localDb.getRestaurantTokenSettings();
+    return {
+      success: true,
+      data: {
+        ...settings,
+        preview: localDb.previewRestaurantToken(settings),
+      },
+    };
+  });
+
+  ipcMain.handle('pos:saveRestaurantTokenSettings', async (_event, payload) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    const settings = localDb.saveRestaurantTokenSettings(payload || {});
+    return {
+      success: true,
+      data: {
+        ...settings,
+        preview: localDb.previewRestaurantToken(settings),
+      },
+      message: 'Token settings saved',
+    };
+  });
+
+  ipcMain.handle('pos:allocateRestaurantToken', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    const settings = localDb.getRestaurantTokenSettings();
+    if (!settings.enabled) {
+      return { success: false, code: 'TOKEN_DISABLED', message: 'Token flow is disabled in settings' };
+    }
+    const allocated = localDb.allocateRestaurantToken();
+    return {
+      success: true,
+      data: {
+        tokenNumber: allocated.tokenNumber,
+        settings: allocated.settings,
+        printCustomer: allocated.settings.printCustomer !== false,
+        printKitchen: allocated.settings.printKitchen !== false,
+        // Design/theme for receipt-style token slips (same printer as sales receipt)
+        design: allocated.settings,
+      },
+    };
+  });
+
+  ipcMain.handle('pos:resetRestaurantToken', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    const settings = localDb.resetRestaurantTokenCounter();
+    return {
+      success: true,
+      data: {
+        ...settings,
+        preview: localDb.previewRestaurantToken(settings),
+      },
+      message: 'Token counter reset to 1',
+    };
+  });
+
+  ipcMain.handle('pos:getInvoiceSerial', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    const serial = localDb.getInvoiceSerialSettings();
+    return {
+      success: true,
+      data: {
+        ...serial,
+        preview: localDb.previewInvoiceNumber(serial),
+      },
+    };
+  });
+
+  ipcMain.handle('pos:saveInvoiceSerial', async (_event, payload) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    const serial = localDb.saveInvoiceSerialSettings(payload || {});
+    return {
+      success: true,
+      data: {
+        ...serial,
+        preview: localDb.previewInvoiceNumber(serial),
+      },
+      message: 'Invoice serial settings saved',
+    };
+  });
+
+  ipcMain.handle('pos:renumberEmptyInvoices', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      masterSqlite.reloadFromDiskSafe();
+      const sales = masterSqlite.listAllLocalSales() || [];
+      // Oldest first so serials run chronologically
+      const needy = sales
+        .filter((s) => localDb.isPlaceholderInvoice(s.invoiceNumber))
+        .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+      let updated = 0;
+      for (const sale of needy) {
+        const { invoiceNumber } = localDb.allocateInvoiceNumber();
+        masterSqlite.updateLocalSalePayload(sale.id, { invoiceNumber });
+        try { localDb.patchSaleInQueue(sale.id, { invoiceNumber }); } catch { /* ignore */ }
+        updated += 1;
+      }
+      return {
+        success: true,
+        data: { updated, nextPreview: localDb.previewInvoiceNumber() },
+        message: updated
+          ? `Assigned serial numbers to ${updated} sale(s)`
+          : 'All sales already have proper invoice numbers',
+      };
+    } catch (err) {
+      return { success: false, message: err.message || 'Renumber failed' };
+    }
+  });
+
   ipcMain.handle('pos:completeSale', async (_event, payload) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
     if (!activeShift?.id) return { success: false, message: 'Open a shift first' };
     const enriched = stampScopedPayload(auth, payload);
+    // Always mint a proper serial when missing / placeholder (POS-L-timestamp etc.)
+    if (localDb.isPlaceholderInvoice(enriched.invoiceNumber)) {
+      enriched.invoiceNumber = localDb.allocateInvoiceNumber().invoiceNumber;
+    }
 
     // Customer tenders (store credit / points / on account) must be backed by a balance.
     let ledgerEntries = [];
@@ -2284,6 +2409,20 @@ function registerIpc() {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
     return posApi.createRestaurantOrder(auth.session.accessToken, payload || {});
+  });
+
+  ipcMain.handle('pos:getRecipe', async (_event, menuProductId) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    if (!menuProductId) return { success: false, message: 'Product id required' };
+    return posApi.getRecipe(auth.session.accessToken, menuProductId);
+  });
+
+  ipcMain.handle('pos:saveRecipe', async (_event, menuProductId, payload) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    if (!menuProductId) return { success: false, message: 'Product id required' };
+    return posApi.saveRecipe(auth.session.accessToken, menuProductId, payload || {});
   });
 
   ipcMain.handle('pos:getShiftHistory', async (_event, paramsString) => {
@@ -3224,15 +3363,39 @@ function registerIpc() {
         .filter((r) => inRange(r.createdAt));
       const customers = masterSqlite.searchCustomers({ query: '', limit: 1000000 })
         .map((c) => ({ id: c.id, name: c.name, phone: c.phone }));
+      const catNameById = {};
+      try {
+        for (const c of masterSqlite.getCategoryTree() || []) {
+          catNameById[c.id] = c.name || '';
+          for (const s of c.children || c.subCategories || []) {
+            catNameById[s.id] = s.name || '';
+          }
+        }
+      } catch { /* ignore */ }
       const products = {};
       for (const p of masterSqlite.listProducts() || []) {
         if (!p?.id) continue;
+        const catId = p.categoryId || p.category_id || '';
+        const subId = p.subcategoryId || p.subcategory_id || '';
         products[p.id] = {
-          categoryId: p.categoryId || p.category_id || '',
-          categoryName: p.categoryName || p.category_name || p.subcategoryName || 'Uncategorized',
+          categoryId: catId,
+          subcategoryId: subId,
+          categoryName:
+            p.categoryName ||
+            p.category_name ||
+            catNameById[subId] ||
+            catNameById[catId] ||
+            p.subcategoryName ||
+            'Uncategorized',
           costPrice: Number(p.costPrice ?? p.cost_price ?? 0) || 0,
+          sellingPrice: Number(p.sellingPrice ?? p.price ?? 0) || 0,
           name: p.name || '',
           sku: p.sku || '',
+          barcode: p.barcode || p.barcodeNumber || '',
+          supplierName: p.supplierName || p.supplier || '',
+          supplierId: p.supplierId || '',
+          currentStock: Number(p.currentStock ?? p.current_stock ?? 0) || 0,
+          taxRate: Number(p.taxRate ?? p.tax_rate ?? 0) || 0,
         };
       }
       return {
@@ -3685,30 +3848,108 @@ function registerIpc() {
   });
 
   // ── Local Stock Movements (offline-first inventory receiving) ─────────────
-  handle('pos:addStockIn', (_event, payload) => {
+  handle('pos:addStockIn', async (_event, payload) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
     try {
       const {
         productId, quantity, unitCost = 0, stockType = 'bulk',
-        reason = 'Stock In', supplierId = null, supplierName = null,
+        reason = 'Stock In', stockSourceReason,
+        supplierId = null, supplierName = null,
         reference = '', notes = '', boxCount, piecesPerBox,
+        unitName = null, productUnitId = null, conversionFactor = 1,
+        locationId = null, idempotencyKey = null, batchNumber = null, expiryDate = null,
       } = payload || {};
       if (!productId) return { success: false, message: 'Product ID is required' };
-      const qty = stockType === 'box'
-        ? (parseFloat(boxCount) || 0) * (parseFloat(piecesPerBox) || 0)
-        : parseFloat(quantity);
-      if (!qty || isNaN(qty) || qty <= 0) return { success: false, message: 'Valid quantity is required' };
 
-      const { previousStock, newStock, productName } = masterSqlite.adjustProductStockLocally(productId, qty);
+      const factor = Number(conversionFactor) > 0 ? Number(conversionFactor) : 1;
+      let enteredQty;
+      let baseQty;
+      if (stockType === 'box') {
+        enteredQty = parseFloat(boxCount) || 0;
+        const pcs = parseFloat(piecesPerBox) || factor;
+        baseQty = enteredQty * pcs;
+      } else {
+        enteredQty = parseFloat(quantity);
+        baseQty = enteredQty * factor;
+      }
+      if (!baseQty || isNaN(baseQty) || baseQty <= 0) {
+        return { success: false, message: 'Valid quantity is required' };
+      }
+
+      // Prefer server posting so inventory ledger + accounting stay authoritative
+      const token = auth.session?.accessToken || auth.result?.accessToken || auth.accessToken;
+      if (token && typeof posApi.addStockIn === 'function') {
+        const remote = await posApi.addStockIn(token, {
+          productId,
+          quantity: stockType === 'box' ? baseQty : enteredQty,
+          unitCost,
+          stockType,
+          stockSourceReason: stockSourceReason || (String(reason).toLowerCase().includes('opening') ? 'opening_stock' : 'supplier_credit'),
+          supplierId,
+          supplierName,
+          reference,
+          notes,
+          boxCount,
+          piecesPerBox,
+          unitName,
+          productUnitId,
+          conversionFactor: stockType === 'box' ? (parseFloat(piecesPerBox) || factor) : factor,
+          locationId,
+          idempotencyKey,
+          batchNumber,
+          expiryDate,
+        });
+        if (remote?.success) {
+          // Mirror base qty + movement into local cache for offline POS / Stock In history
+          try {
+            const { previousStock, newStock, productName, unit } =
+              masterSqlite.adjustProductStockLocally(productId, baseQty);
+            masterSqlite.addStockMovement({
+              productId,
+              productName,
+              type: 'stock_in',
+              quantity: baseQty,
+              previousStock,
+              newStock,
+              unit: unitName || unit || 'Pcs',
+              unitCost: parseFloat(unitCost) || 0,
+              stockType,
+              reason: reason || stockSourceReason || 'Stock In',
+              supplierId,
+              supplierName,
+              reference,
+              notes,
+            });
+          } catch (_) { /* ignore local mirror errors */ }
+          return remote;
+        }
+        // Fall through to local if offline / server rejected transiently
+        if (remote && !remote.retryable && remote.status && remote.status < 500) {
+          return remote;
+        }
+      }
+
+      const { previousStock, newStock, productName } = masterSqlite.adjustProductStockLocally(productId, baseQty);
       const product = masterSqlite.listProducts().find(p => p.id === productId);
-      const unit = product?.stockUnitName || product?.stockUnit || 'Pcs';
+      const unit = unitName || product?.stockUnitName || product?.stockUnit || 'Pcs';
       const movement = masterSqlite.addStockMovement({
-        productId, productName, type: 'stock_in', quantity: qty,
+        productId, productName, type: 'stock_in', quantity: baseQty,
         previousStock, newStock, unit, unitCost: parseFloat(unitCost) || 0,
         stockType, reason, supplierId, supplierName, reference, notes,
       });
-      return { success: true, data: { movement, previousStock, newStock } };
+      return {
+        success: true,
+        offline: true,
+        data: {
+          movement,
+          previousStock,
+          newStock,
+          enteredQuantity: enteredQty,
+          baseQuantity: baseQty,
+          conversionFactor: factor,
+        },
+      };
     } catch (err) {
       return { success: false, message: err.message || 'Stock In failed' };
     }

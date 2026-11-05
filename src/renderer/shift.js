@@ -122,9 +122,15 @@ async function boot() {
 
   const isAdmin = !!(session?.isAdmin || ['admin', 'owner', 'superadmin', 'company_admin'].includes(String(user.role || '').toLowerCase()));
   const adminBtn = document.getElementById('admin');
-  if (adminBtn && isAdmin) {
-    adminBtn.classList.remove('hidden');
-    adminBtn.addEventListener('click', () => api.pos.enterManagement());
+  if (adminBtn) {
+    if (isAdmin) {
+      adminBtn.classList.remove('hidden');
+      adminBtn.addEventListener('click', () => {
+        api.app?.openExternal?.('https://app.bisonstechs.com/pos/management');
+      });
+    } else {
+      adminBtn.classList.add('hidden');
+    }
   }
 
   const current = await api.pos.getCurrentShift();

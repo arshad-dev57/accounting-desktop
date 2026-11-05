@@ -9,15 +9,19 @@ const rptState = {
   preset: 'today',
   from: null,
   to: null,
-  report: 'summary',
+  report: 'items',
   data: null,
   prev: null,
   csv: null,
   title: '',
   itemQuery: '',
+  itemView: 'detail', // detail = line-level Item Sales; summary = aggregated
+  itemPage: 1,
+  itemPageSize: 10,
   chartType: 'bar',
   chartGroup: 'auto',
   metric: 'netSales',
+  advanceOpen: false,
 };
 
 const RPT_PRIMARY = new Set(['summary', 'items', 'categories', 'payments']);
@@ -66,6 +70,13 @@ function rptRangeFor(preset) {
       return [start, rptEndOfDay(now)];
     }
     case 'custom': {
+      const fromDt = document.getElementById('rpt-from-dt')?.value;
+      const toDt = document.getElementById('rpt-to-dt')?.value;
+      if (fromDt || toDt) {
+        const from = fromDt ? new Date(fromDt) : today;
+        const to = toDt ? new Date(toDt) : rptEndOfDay(now);
+        return from <= to ? [from, to] : [to, from];
+      }
       const f = document.getElementById('rpt-from')?.value;
       const t = document.getElementById('rpt-to')?.value;
       const from = f ? rptStartOfDay(new Date(`${f}T00:00:00`)) : today;
@@ -84,6 +95,35 @@ function rptFmtDate(d) {
 function rptDateInput(d) {
   const x = new Date(d);
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+}
+
+function rptDateTimeLocal(d) {
+  const x = new Date(d);
+  if (Number.isNaN(x.getTime())) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${x.getFullYear()}-${p(x.getMonth() + 1)}-${p(x.getDate())}T${p(x.getHours())}:${p(x.getMinutes())}`;
+}
+
+function rptSyncDateInputs() {
+  const fromDt = document.getElementById('rpt-from-dt');
+  const toDt = document.getElementById('rpt-to-dt');
+  const from = document.getElementById('rpt-from');
+  const to = document.getElementById('rpt-to');
+  if (fromDt && rptState.from) fromDt.value = rptDateTimeLocal(rptState.from);
+  if (toDt && rptState.to) toDt.value = rptDateTimeLocal(rptState.to);
+  if (from && rptState.from) from.value = rptDateInput(rptState.from);
+  if (to && rptState.to) to.value = rptDateInput(rptState.to);
+}
+
+function rptReadCustomRangeFromInputs() {
+  const fromDt = document.getElementById('rpt-from-dt')?.value;
+  const toDt = document.getElementById('rpt-to-dt')?.value;
+  if (fromDt || toDt) {
+    const from = fromDt ? new Date(fromDt) : rptStartOfDay(new Date());
+    const to = toDt ? new Date(toDt) : rptEndOfDay(new Date());
+    return from <= to ? [from, to] : [to, from];
+  }
+  return rptRangeFor('custom');
 }
 
 // ─── Catalog lookup ───────────────────────────────────────────────────────────
@@ -112,17 +152,26 @@ function rptTenderGroup(method) {
 function rptNormalizeSale(s, data) {
   const lines = (s.items || []).map((i) => {
     const qty = money(i.quantity);
-    const unitPrice = money(i.unitPrice);
+    const unitPrice = money(i.unitPrice ?? i.price ?? i.sellingPrice);
     const productId = i.productId || i.product_id || '';
     const info = rptProductInfo(data, productId);
     const unitCost = money(i.costPrice ?? i.cost ?? info?.costPrice ?? 0);
+    const sku = i.sku || info?.sku || '';
+    const barcode = i.barcode || i.barcodeNumber || info?.barcode || sku || '';
     return {
       key: String(productId || i.productName || i.name || 'item').toLowerCase(),
       productId: productId ? String(productId) : '',
       name: i.productName || i.name || info?.name || 'Item',
-      sku: i.sku || info?.sku || '',
+      sku,
+      barcode: barcode || 'N/A',
       categoryId: info?.categoryId || '',
-      categoryName: info?.categoryName || 'Uncategorized',
+      categoryName: info?.categoryName || i.categoryName || 'Uncategorized',
+      supplierName: info?.supplierName || i.supplierName || i.supplier || 'UNKNOWN',
+      stockLevel: Number(info?.currentStock ?? i.currentStock ?? 0) || 0,
+      unitPrice,
+      unitCost,
+      taxRate: money(i.taxRate ?? info?.taxRate ?? 0),
+      lineDiscount: money(i.discountAmount ?? i.lineDiscount ?? 0),
       qty,
       gross: qty * unitPrice,
       cost: qty * unitCost,
@@ -151,12 +200,12 @@ function rptNormalizeSale(s, data) {
     at: new Date(s.createdAt || 0),
     cashier: (typeof saleCashier === 'function' ? saleCashier(s) : s.cashierName) || 'Staff',
     customerId: s.customerId || '',
-    customerName: s.customerName || 'Walk-in Customer',
+    customerName: s.customerName || s.customer?.name || 'Walk-in Customer',
     lines,
     gross,
     cost,
-    discount: money(s.discountTotal),
-    tax: money(s.taxTotal),
+    discount: money(s.discountTotal ?? s.discount ?? 0),
+    tax: money(s.taxTotal ?? s.tax ?? 0),
     total,
     tenders,
     loyaltyEarned: money(s.loyaltyEarned),
@@ -508,22 +557,44 @@ function wireRptShellEvents() {
 }
 
 // ─── Item / category aggregations ─────────────────────────────────────────────
+function rptMarginPct(profit, sales) {
+  if (!sales) return 0;
+  return (profit / sales) * 100;
+}
+
+function rptMarkupPct(sales, cost) {
+  if (cost > 0) return ((sales - cost) / cost) * 100;
+  return sales > 0 ? 100 : 0;
+}
+
 function rptItems(agg) {
   const map = new Map();
   const get = (key, name, sku) => {
-    if (!map.has(key)) map.set(key, { key, name, sku, qty: 0, gross: 0, cost: 0, retQty: 0, retAmount: 0, tx: 0, disc: 0 });
+    if (!map.has(key)) {
+      map.set(key, {
+        key, name, sku, qty: 0, gross: 0, cost: 0, retQty: 0, retAmount: 0, tx: 0, disc: 0, tax: 0,
+        categoryName: 'Uncategorized', supplierName: 'UNKNOWN', stockLevel: 0, barcode: '',
+      });
+    }
     return map.get(key);
   };
   agg.sales.forEach((s) => {
     const share = s.gross > 0 ? s.discount / s.gross : 0;
+    const taxShare = s.gross > 0 ? s.tax / s.gross : 0;
     s.lines.forEach((l) => {
       const row = get(l.key, l.name, l.sku);
       row.qty += l.qty;
       row.gross += l.gross;
       row.cost += l.cost || 0;
-      row.disc += l.gross * share;
+      row.disc += (l.lineDiscount || 0) + l.gross * share;
+      row.tax += l.gross * taxShare;
       row.tx += 1;
       row.categoryName = l.categoryName || row.categoryName || 'Uncategorized';
+      row.supplierName = l.supplierName || row.supplierName || 'UNKNOWN';
+      row.stockLevel = l.stockLevel ?? row.stockLevel;
+      row.barcode = l.barcode || row.barcode || l.sku || '';
+      row.unitPrice = l.unitPrice;
+      row.unitCost = l.unitCost;
     });
   });
   agg.returns.forEach((r) => r.items.forEach((i) => {
@@ -531,13 +602,86 @@ function rptItems(agg) {
     row.retQty += i.qty;
     row.retAmount += i.amount;
   }));
-  return [...map.values()].map((r) => ({
-    ...r,
-    disc: r.disc || 0,
-    netQty: Math.round((r.qty - r.retQty) * 1000) / 1000,
-    net: r.gross - (r.disc || 0) - r.retAmount,
-    profit: (r.gross - (r.disc || 0) - r.retAmount) - (r.cost || 0),
-  })).sort((a, b) => b.net - a.net);
+  return [...map.values()].map((r) => {
+    const net = r.gross - (r.disc || 0) - r.retAmount;
+    const profit = net - (r.cost || 0);
+    return {
+      ...r,
+      disc: r.disc || 0,
+      netQty: Math.round((r.qty - r.retQty) * 1000) / 1000,
+      net,
+      profit,
+      margin: rptMarginPct(profit, net),
+      markup: rptMarkupPct(net, r.cost || 0),
+      balance: net + (r.tax || 0),
+      total: r.gross - (r.disc || 0) + (r.tax || 0),
+    };
+  }).sort((a, b) => b.net - a.net);
+}
+
+/** One row per sold line — matches professional Item Sales detail reports. */
+function rptItemSalesDetailLines(agg) {
+  const refundByInvItem = new Map();
+  agg.returns.forEach((r) => {
+    const inv = String(r.invoice || '').toLowerCase();
+    (r.items || []).forEach((i) => {
+      const k = `${inv}::${i.key}`;
+      const cur = refundByInvItem.get(k) || { qty: 0, amount: 0 };
+      cur.qty += i.qty;
+      cur.amount += i.amount;
+      refundByInvItem.set(k, cur);
+    });
+  });
+
+  const rows = [];
+  agg.sales.forEach((s) => {
+    const discShare = s.gross > 0 ? s.discount / s.gross : 0;
+    const taxShare = s.gross > 0 ? s.tax / s.gross : 0;
+    const invKey = String(s.invoice || '').toLowerCase();
+    s.lines.forEach((l) => {
+      const disc = (l.lineDiscount || 0) + l.gross * discShare;
+      const tax = l.gross * taxShare;
+      const refund = refundByInvItem.get(`${invKey}::${l.key}`) || { qty: 0, amount: 0 };
+      const netSales = l.gross - disc;
+      const profit = netSales - refund.amount - (l.cost || 0);
+      const total = netSales + tax;
+      const balance = total - refund.amount;
+      rows.push({
+        customerName: s.customerName || 'Walk-in Customer',
+        itemName: l.name,
+        stockCode: l.barcode || l.sku || 'N/A',
+        sold: l.qty,
+        category: l.categoryName || 'Uncategorized',
+        supplier: l.supplierName || 'UNKNOWN',
+        stockLevel: Number(l.stockLevel || 0),
+        price: l.unitPrice,
+        cost: l.unitCost,
+        profit,
+        margin: rptMarginPct(profit, Math.max(0, netSales - refund.amount)),
+        markup: rptMarkupPct(netSales - refund.amount, l.cost || 0),
+        discounts: disc,
+        tax,
+        total,
+        refundedQty: refund.qty,
+        refundTotal: refund.amount,
+        balance,
+        invoice: s.invoice,
+        at: s.at,
+        cashier: s.cashier,
+        sku: l.sku || '',
+      });
+    });
+  });
+  return rows.sort((a, b) => b.at - a.at);
+}
+
+function rptFmtNum(n, digits = 2) {
+  const v = Number(n) || 0;
+  return v.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function rptFmtPct(n) {
+  return `${rptFmtNum(n, 2)}%`;
 }
 
 function rptCategories(agg) {
@@ -643,40 +787,237 @@ function rptSummary(agg, prevAgg) {
 
 function rptItemsReport(agg, prevAgg) {
   const q = rptState.itemQuery.trim().toLowerCase();
-  const all = rptItems(agg);
-  const rows = all.filter((i) => !q || i.name.toLowerCase().includes(q) || String(i.sku).toLowerCase().includes(q));
-  const totalNet = all.reduce((n, i) => n + i.net, 0);
-  const topChart = all.slice(0, 12).map((i) => ({
+  const view = rptState.itemView === 'summary' ? 'summary' : 'detail';
+  const pageSize = Number(rptState.itemPageSize) || 10;
+  let page = Math.max(1, Number(rptState.itemPage) || 1);
+
+  const summaryAll = rptItems(agg);
+  const detailAll = rptItemSalesDetailLines(agg);
+
+  const filteredDetail = detailAll.filter((r) => {
+    if (!q) return true;
+    const hay = `${r.customerName} ${r.itemName} ${r.stockCode} ${r.sku} ${r.category} ${r.supplier} ${r.invoice}`.toLowerCase();
+    return hay.includes(q);
+  });
+  const filteredSummary = summaryAll.filter((i) => {
+    if (!q) return true;
+    const hay = `${i.name} ${i.sku} ${i.barcode} ${i.categoryName} ${i.supplierName}`.toLowerCase();
+    return hay.includes(q);
+  });
+
+  const source = view === 'detail' ? filteredDetail : filteredSummary;
+  const totalEntries = source.length;
+  const pages = Math.max(1, Math.ceil(totalEntries / pageSize));
+  if (page > pages) page = pages;
+  rptState.itemPage = page;
+  const start = (page - 1) * pageSize;
+  const pageRows = source.slice(start, start + pageSize);
+
+  const topChart = summaryAll.slice(0, 12).map((i) => ({
     label: i.name,
     short: i.name.length > 10 ? `${i.name.slice(0, 9)}…` : i.name,
     value: Math.max(0, i.net),
   }));
-  rptState.csv = [
-    ['Item', 'SKU', 'Category', 'Qty sold', 'Qty returned', 'Net qty', 'Gross sales', 'Discounts', 'Returns', 'Net sales', 'Cost', 'Gross profit', 'Share %'],
-    ...rows.map((i) => [i.name, i.sku, i.categoryName || '', i.qty, i.retQty, i.netQty, i.gross, i.disc, i.retAmount, i.net, i.cost || 0, i.profit, totalNet ? (i.net / totalNet) * 100 : 0]),
-  ];
-  const table = `
-    <div class="rpt-toolbar"><input type="search" class="inp-search" id="rpt-item-search" placeholder="Filter items…" value="${custEsc(rptState.itemQuery)}" /><span class="cust-count">${rows.length} item(s)</span></div>
-    ${rptTable(
-      [{ label: 'Item' }, { label: 'Category' }, { label: 'Sold', num: true }, { label: 'Returned', num: true }, { label: 'Gross sales', num: true }, { label: 'Discounts', num: true }, { label: 'Returns', num: true }, { label: 'Net sales', num: true }, { label: 'Gross profit', num: true }, { label: 'Share', num: true }],
-      rows.map((i) => ({ cells: [
-        `<b>${custEsc(i.name)}</b>${i.sku ? `<small>${custEsc(i.sku)}</small>` : ''}`,
+
+  const sumDetail = (rows, key) => rows.reduce((n, r) => n + (Number(r[key]) || 0), 0);
+  const pageTot = {
+    sold: sumDetail(pageRows, view === 'detail' ? 'sold' : 'qty'),
+    price: sumDetail(pageRows, view === 'detail' ? 'price' : 'unitPrice'),
+    cost: view === 'detail' ? sumDetail(pageRows, 'cost') : sumDetail(pageRows, 'cost'),
+    profit: sumDetail(pageRows, 'profit'),
+    discounts: sumDetail(pageRows, view === 'detail' ? 'discounts' : 'disc'),
+    tax: sumDetail(pageRows, 'tax'),
+    total: sumDetail(pageRows, 'total'),
+    refundQty: sumDetail(pageRows, view === 'detail' ? 'refundedQty' : 'retQty'),
+    refundTotal: sumDetail(pageRows, view === 'detail' ? 'refundTotal' : 'retAmount'),
+    balance: sumDetail(pageRows, 'balance'),
+  };
+  const grandTot = {
+    sold: sumDetail(source, view === 'detail' ? 'sold' : 'qty'),
+    price: sumDetail(source, view === 'detail' ? 'price' : 'unitPrice'),
+    cost: sumDetail(source, 'cost'),
+    profit: sumDetail(source, 'profit'),
+    discounts: sumDetail(source, view === 'detail' ? 'discounts' : 'disc'),
+    tax: sumDetail(source, 'tax'),
+    total: sumDetail(source, 'total'),
+    refundQty: sumDetail(source, view === 'detail' ? 'refundedQty' : 'retQty'),
+    refundTotal: sumDetail(source, view === 'detail' ? 'refundTotal' : 'retAmount'),
+    balance: sumDetail(source, 'balance'),
+  };
+  const pageMargin = rptMarginPct(pageTot.profit, Math.max(0, pageTot.total - pageTot.tax - pageTot.discounts));
+  const pageMarkup = rptMarkupPct(pageTot.total - pageTot.tax - pageTot.discounts, pageTot.cost);
+  const grandMargin = rptMarginPct(grandTot.profit, Math.max(0, grandTot.total - grandTot.tax - grandTot.discounts));
+  const grandMarkup = rptMarkupPct(grandTot.total - grandTot.tax - grandTot.discounts, grandTot.cost);
+
+  if (view === 'detail') {
+    rptState.csv = [
+      ['Customer Name', 'Item Name', 'Stock Code', '# Sold', 'Category', 'Supplier', 'Stock Level', 'Price', 'Cost', 'Profit', 'Margin %', 'Markup %', 'Discounts', 'Tax', 'Total', '# Refunded', 'Total (Refund)', 'Balance', 'Invoice', 'Date', 'Cashier'],
+      ...filteredDetail.map((r) => [
+        r.customerName, r.itemName, r.stockCode, r.sold, r.category, r.supplier, r.stockLevel,
+        r.price, r.cost, r.profit, r.margin, r.markup, r.discounts, r.tax, r.total,
+        r.refundedQty, r.refundTotal, r.balance, r.invoice, r.at?.toISOString?.() || '', r.cashier,
+      ]),
+    ];
+  } else {
+    rptState.csv = [
+      ['Item', 'Stock Code', 'Category', 'Supplier', 'Stock Level', '# Sold', '# Refunded', 'Price', 'Cost', 'Profit', 'Margin %', 'Markup %', 'Discounts', 'Tax', 'Total', 'Refund total', 'Balance'],
+      ...filteredSummary.map((i) => [
+        i.name, i.barcode || i.sku || 'N/A', i.categoryName, i.supplierName, i.stockLevel,
+        i.qty, i.retQty, i.unitPrice || 0, i.unitCost || 0, i.profit, i.margin, i.markup,
+        i.disc, i.tax, i.total, i.retAmount, i.balance,
+      ]),
+    ];
+  }
+
+  const headers = view === 'detail'
+    ? [
+      { label: 'Customer Name' }, { label: 'Item Name' }, { label: 'Stock Code' }, { label: '# Sold', num: true },
+      { label: 'Category' }, { label: 'Supplier' }, { label: 'Stock Level', num: true },
+      { label: 'Price', num: true }, { label: 'Cost', num: true }, { label: 'Profit', num: true },
+      { label: 'Margin', num: true }, { label: 'Markup', num: true }, { label: 'Discounts', num: true },
+      { label: 'Tax', num: true }, { label: 'Total', num: true }, { label: '# Refunded', num: true },
+      { label: 'Total (Refund)', num: true }, { label: 'Balance', num: true },
+    ]
+    : [
+      { label: 'Item Name' }, { label: 'Stock Code' }, { label: '# Sold', num: true },
+      { label: 'Category' }, { label: 'Supplier' }, { label: 'Stock Level', num: true },
+      { label: 'Price', num: true }, { label: 'Cost', num: true }, { label: 'Profit', num: true },
+      { label: 'Margin', num: true }, { label: 'Markup', num: true }, { label: 'Discounts', num: true },
+      { label: 'Tax', num: true }, { label: 'Total', num: true }, { label: '# Refunded', num: true },
+      { label: 'Total (Refund)', num: true }, { label: 'Balance', num: true },
+    ];
+
+  const bodyRows = view === 'detail'
+    ? pageRows.map((r) => ({
+      cells: [
+        custEsc(r.customerName),
+        `<a class="rpt-item-link" href="#">${custEsc(r.itemName)}</a><small>${custEsc(r.invoice || '')}</small>`,
+        custEsc(r.stockCode),
+        rptFmtNum(r.sold, r.sold % 1 ? 3 : 0),
+        custEsc(r.category),
+        custEsc(r.supplier),
+        rptFmtNum(r.stockLevel),
+        pkr(r.price),
+        pkr(r.cost),
+        `<b class="${r.profit >= 0 ? '' : 'neg'}">${pkr(r.profit)}</b>`,
+        rptFmtPct(r.margin),
+        rptFmtPct(r.markup),
+        r.discounts ? `−${pkr(r.discounts)}` : pkr(0),
+        pkr(r.tax),
+        `<b>${pkr(r.total)}</b>`,
+        r.refundedQty ? rptFmtNum(r.refundedQty, r.refundedQty % 1 ? 3 : 0) : '0',
+        r.refundTotal ? `−${pkr(r.refundTotal)}` : pkr(0),
+        `<b>${pkr(r.balance)}</b>`,
+      ],
+    }))
+    : pageRows.map((i) => ({
+      cells: [
+        `<b>${custEsc(i.name)}</b>`,
+        custEsc(i.barcode || i.sku || 'N/A'),
+        rptFmtNum(i.qty, i.qty % 1 ? 3 : 0),
         custEsc(i.categoryName || 'Uncategorized'),
-        Math.round(i.qty * 1000) / 1000, i.retQty || '—', pkr(i.gross), i.disc ? `−${pkr(i.disc)}` : '—',
-        i.retAmount ? `−${pkr(i.retAmount)}` : '—', `<b>${pkr(i.net)}</b>`, pkr(i.profit), rptPct(i.net, totalNet),
-      ] })),
-      { foot: ['<b>Total</b>', '', Math.round(rows.reduce((n, i) => n + i.qty, 0) * 1000) / 1000, rows.reduce((n, i) => n + i.retQty, 0) || '—',
-        pkr(rows.reduce((n, i) => n + i.gross, 0)), `−${pkr(rows.reduce((n, i) => n + i.disc, 0))}`,
-        `−${pkr(rows.reduce((n, i) => n + i.retAmount, 0))}`, `<b>${pkr(rows.reduce((n, i) => n + i.net, 0))}</b>`,
-        pkr(rows.reduce((n, i) => n + i.profit, 0)), ''] }
-    )}`;
+        custEsc(i.supplierName || 'UNKNOWN'),
+        rptFmtNum(i.stockLevel || 0),
+        pkr(i.unitPrice || 0),
+        pkr(i.unitCost || 0),
+        `<b class="${i.profit >= 0 ? '' : 'neg'}">${pkr(i.profit)}</b>`,
+        rptFmtPct(i.margin),
+        rptFmtPct(i.markup),
+        i.disc ? `−${pkr(i.disc)}` : pkr(0),
+        pkr(i.tax || 0),
+        `<b>${pkr(i.total)}</b>`,
+        i.retQty ? rptFmtNum(i.retQty, i.retQty % 1 ? 3 : 0) : '0',
+        i.retAmount ? `−${pkr(i.retAmount)}` : pkr(0),
+        `<b>${pkr(i.balance)}</b>`,
+      ],
+    }));
+
+  const makeFoot = (label, tot, margin, markup) => {
+    if (view === 'detail') {
+      return [
+        `<b>${label}</b>`, '', '',
+        rptFmtNum(tot.sold, 2), '', '', '',
+        '', pkr(tot.cost), `<b>${pkr(tot.profit)}</b>`,
+        rptFmtPct(margin), rptFmtPct(markup),
+        tot.discounts ? `−${pkr(tot.discounts)}` : pkr(0),
+        pkr(tot.tax), `<b>${pkr(tot.total)}</b>`,
+        rptFmtNum(tot.refundQty, 2),
+        tot.refundTotal ? `−${pkr(tot.refundTotal)}` : pkr(0),
+        `<b>${pkr(tot.balance)}</b>`,
+      ];
+    }
+    return [
+      `<b>${label}</b>`, '',
+      rptFmtNum(tot.sold, 2), '', '', '',
+      '', pkr(tot.cost), `<b>${pkr(tot.profit)}</b>`,
+      rptFmtPct(margin), rptFmtPct(markup),
+      tot.discounts ? `−${pkr(tot.discounts)}` : pkr(0),
+      pkr(tot.tax), `<b>${pkr(tot.total)}</b>`,
+      rptFmtNum(tot.refundQty, 2),
+      tot.refundTotal ? `−${pkr(tot.refundTotal)}` : pkr(0),
+      `<b>${pkr(tot.balance)}</b>`,
+    ];
+  };
+
+  const head = headers.map((h) => `<th class="${h.num ? 'num' : ''}">${h.label}</th>`).join('');
+  const body = bodyRows.length
+    ? bodyRows.map((r) => `<tr>${r.cells.map((c, i) => `<td class="${headers[i].num ? 'num' : ''}">${c}</td>`).join('')}</tr>`).join('')
+    : `<tr><td colspan="${headers.length}" class="cust-empty">No item sales for this period.</td></tr>`;
+  const footHtml = `
+    <tr class="rpt-foot-page">${makeFoot('Total', pageTot, pageMargin, pageMarkup).map((c, i) => `<td class="${headers[i].num ? 'num' : ''}">${c}</td>`).join('')}</tr>
+    <tr class="rpt-foot-grand">${makeFoot('Grand Total', grandTot, grandMargin, grandMarkup).map((c, i) => `<td class="${headers[i].num ? 'num' : ''}">${c}</td>`).join('')}</tr>`;
+
+  const pageBtns = [];
+  const maxBtn = Math.min(pages, 7);
+  let startBtn = Math.max(1, Math.min(page - 3, pages - maxBtn + 1));
+  for (let i = 0; i < maxBtn; i += 1) pageBtns.push(startBtn + i);
+
+  const pager = `
+    <div class="rpt-pager">
+      <span class="cust-count">Showing ${totalEntries ? start + 1 : 0} to ${Math.min(start + pageSize, totalEntries)} of ${totalEntries} entries</span>
+      <div class="rpt-pager-btns">
+        <button type="button" data-rpt-page="prev" ${page <= 1 ? 'disabled' : ''}>Previous</button>
+        ${pageBtns.map((n) => `<button type="button" data-rpt-page="${n}" class="${n === page ? 'active' : ''}">${n}</button>`).join('')}
+        <button type="button" data-rpt-page="next" ${page >= pages ? 'disabled' : ''}>Next</button>
+      </div>
+    </div>`;
+
+  const toolbar = `
+    <div class="rpt-toolbar rpt-item-toolbar">
+      <div class="rpt-seg" data-role="item-view">
+        <button type="button" data-item-view="detail" class="${view === 'detail' ? 'active' : ''}">Item detail</button>
+        <button type="button" data-item-view="summary" class="${view === 'summary' ? 'active' : ''}">By item</button>
+      </div>
+      <input type="search" class="inp-search" id="rpt-item-search" placeholder="Search customer, item, SKU, category…" value="${custEsc(rptState.itemQuery)}" />
+      <label class="rpt-show-label">Show
+        <select id="rpt-item-page-size">
+          ${[10, 25, 50, 100].map((n) => `<option value="${n}" ${n === pageSize ? 'selected' : ''}>${n}</option>`).join('')}
+        </select>
+      </label>
+      <span class="cust-count">${totalEntries} row(s)</span>
+    </div>`;
+
   return `
-    ${rptMetricStrip(agg, prevAgg)}
-    <div class="rpt-card rpt-chart-card">
-      ${rptChartToolbar('Top items by net sales')}
-      ${rptRenderChart(topChart, { format: pkr, title: 'Sales by item' })}
+    <div class="rpt-card rpt-item-sales-card">
+      <div class="rpt-card-head">
+        <h4>Item Sales</h4>
+        <span class="rpt-range-chip">${custEsc(rptState.from?.toLocaleString?.() || '')} – ${custEsc(rptState.to?.toLocaleString?.() || '')}</span>
+      </div>
+      ${toolbar}
+      <div class="rpt-table-scroll">
+        <table class="cust-table rpt-table rpt-item-detail-table">
+          <thead><tr>${head}</tr></thead>
+          <tbody>${body}</tbody>
+          <tfoot>${footHtml}</tfoot>
+        </table>
+      </div>
+      ${pager}
     </div>
-    <div class="rpt-card"><h4>Sales by item</h4>${table}</div>`;
+    <div class="rpt-card rpt-chart-card">
+      ${rptMetricStrip(agg, prevAgg)}
+      ${rptChartToolbar('Top items by net sales')}
+      ${rptRenderChart(topChart, { format: pkr, title: 'Item sales' })}
+    </div>`;
 }
 
 function rptCategoriesReport(agg, prevAgg) {
@@ -955,7 +1296,7 @@ async function rptShiftReport() {
 // ─── Controller ───────────────────────────────────────────────────────────────
 const RPT_TITLES = {
   summary: 'Sales summary',
-  items: 'Sales by item',
+  items: 'Item sales',
   categories: 'Sales by category',
   payments: 'Sales by payment type',
   time: 'Sales by time',
@@ -966,9 +1307,18 @@ const RPT_TITLES = {
 };
 
 async function loadReportsTab() {
-  const [from, to] = rptRangeFor(rptState.preset);
+  let from;
+  let to;
+  if (rptState.preset === 'custom') {
+    [from, to] = rptReadCustomRangeFromInputs();
+  } else {
+    [from, to] = rptRangeFor(rptState.preset);
+  }
   rptState.from = from;
   rptState.to = to;
+  rptSyncDateInputs();
+  const filterSel = document.getElementById('rpt-filter');
+  if (filterSel && filterSel.value !== rptState.report) filterSel.value = rptState.report;
   const span = to.getTime() - from.getTime() + 1;
   const prevFrom = new Date(from.getTime() - span);
   const prevTo = new Date(from.getTime() - 1);
@@ -978,7 +1328,11 @@ async function loadReportsTab() {
     rangeEl.textContent = same ? rptFmtDate(from) : `${rptFmtDate(from)} – ${rptFmtDate(to)}`;
   }
   const sub = document.getElementById('rpt-subtitle');
-  if (sub) sub.textContent = RPT_TITLES[rptState.report] || 'Sales performance for the selected period';
+  if (sub) {
+    const fromLabel = from.toLocaleString(undefined, { month: '2-digit', day: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const toLabel = to.toLocaleString(undefined, { month: '2-digit', day: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    sub.textContent = `${RPT_TITLES[rptState.report] || 'Report'} · ${fromLabel} – ${toLabel}`;
+  }
   const body = document.getElementById('rpt-body');
   if (body && !rptState.data) body.innerHTML = '<div class="cust-empty">Loading report…</div>';
   const [cur, prev] = await Promise.all([
@@ -1020,6 +1374,7 @@ async function renderReport() {
   if (search) {
     search.addEventListener('input', () => {
       rptState.itemQuery = search.value;
+      rptState.itemPage = 1;
       const pos = search.selectionStart;
       renderReport().then(() => {
         const again = document.getElementById('rpt-item-search');
@@ -1028,6 +1383,27 @@ async function renderReport() {
       });
     });
   }
+  document.querySelectorAll('[data-item-view]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      rptState.itemView = btn.dataset.itemView;
+      rptState.itemPage = 1;
+      renderReport();
+    });
+  });
+  document.getElementById('rpt-item-page-size')?.addEventListener('change', (e) => {
+    rptState.itemPageSize = Number(e.target.value) || 10;
+    rptState.itemPage = 1;
+    renderReport();
+  });
+  document.querySelectorAll('[data-rpt-page]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const v = btn.dataset.rptPage;
+      if (v === 'prev') rptState.itemPage = Math.max(1, (rptState.itemPage || 1) - 1);
+      else if (v === 'next') rptState.itemPage = (rptState.itemPage || 1) + 1;
+      else rptState.itemPage = Number(v) || 1;
+      renderReport();
+    });
+  });
 }
 
 function rptCsvCell(v) {
@@ -1084,23 +1460,31 @@ function printReport() {
   document.querySelectorAll('#rpt-presets [data-preset]').forEach((btn) => btn.addEventListener('click', () => {
     rptState.preset = btn.dataset.preset;
     document.querySelectorAll('#rpt-presets [data-preset]').forEach((b) => b.classList.toggle('active', b === btn));
-    const custom = document.getElementById('rpt-custom');
-    if (custom) custom.classList.toggle('open', rptState.preset === 'custom');
-    if (rptState.preset === 'custom') {
-      const from = document.getElementById('rpt-from');
-      const to = document.getElementById('rpt-to');
-      if (from && !from.value) from.value = rptDateInput(rptState.from || new Date());
-      if (to && !to.value) to.value = rptDateInput(rptState.to || new Date());
-      return;
-    }
     loadReportsTab();
   }));
-  document.getElementById('rpt-apply')?.addEventListener('click', loadReportsTab);
-  document.querySelectorAll('#rpt-nav [data-report]').forEach((btn) => btn.addEventListener('click', () => {
-    rptState.report = btn.dataset.report;
-    document.querySelectorAll('#rpt-nav [data-report]').forEach((b) => b.classList.toggle('active', b === btn));
+  document.getElementById('rpt-apply')?.addEventListener('click', () => {
+    rptState.preset = 'custom';
+    document.querySelectorAll('#rpt-presets [data-preset]').forEach((b) => b.classList.remove('active'));
+    loadReportsTab();
+  });
+  document.getElementById('rpt-from-dt')?.addEventListener('change', () => {
+    rptState.preset = 'custom';
+    document.querySelectorAll('#rpt-presets [data-preset]').forEach((b) => b.classList.remove('active'));
+  });
+  document.getElementById('rpt-to-dt')?.addEventListener('change', () => {
+    rptState.preset = 'custom';
+    document.querySelectorAll('#rpt-presets [data-preset]').forEach((b) => b.classList.remove('active'));
+  });
+  document.getElementById('rpt-btn-advance')?.addEventListener('click', () => {
+    rptState.preset = 'custom';
+    document.querySelectorAll('#rpt-presets [data-preset]').forEach((b) => b.classList.remove('active'));
+    loadReportsTab();
+  });
+  document.getElementById('rpt-filter')?.addEventListener('change', (e) => {
+    rptState.report = e.target.value || 'items';
+    rptState.itemPage = 1;
     renderReport();
-  }));
+  });
   document.getElementById('rpt-btn-refresh')?.addEventListener('click', loadReportsTab);
   document.getElementById('rpt-btn-csv')?.addEventListener('click', exportReportCsv);
   document.getElementById('rpt-btn-print')?.addEventListener('click', printReport);

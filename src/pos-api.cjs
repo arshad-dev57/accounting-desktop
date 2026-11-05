@@ -442,6 +442,22 @@ function getNotifications(token, query = {}) {
   return request(token, 'GET', `/api/notifications${buildQuery(query)}`);
 }
 
+function addStockIn(token, payload) {
+  return request(token, 'POST', '/api/warehouse/stock/in', payload);
+}
+
+function getRecipe(token, menuProductId) {
+  return request(token, 'GET', `/api/pos/recipes/${encodeURIComponent(menuProductId)}`);
+}
+
+function saveRecipe(token, menuProductId, payload) {
+  return request(token, 'PUT', `/api/pos/recipes/${encodeURIComponent(menuProductId)}`, payload || {});
+}
+
+function deleteRecipe(token, menuProductId) {
+  return request(token, 'DELETE', `/api/pos/recipes/${encodeURIComponent(menuProductId)}`);
+}
+
 module.exports = {
   setActiveCompanyId,
   getActiveCompanyId,
@@ -504,4 +520,8 @@ module.exports = {
   fetchSessionStatus,
   listCompanyUsers,
   updateCompanyUser,
+  addStockIn,
+  getRecipe,
+  saveRecipe,
+  deleteRecipe,
 };

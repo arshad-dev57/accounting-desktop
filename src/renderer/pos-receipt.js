@@ -778,6 +778,138 @@
     }
   }
 
+  /**
+   * Restaurant token slip (customer or kitchen).
+   * Same thermal receipt look (header / dashed rows / Courier) — short content only
+   * so the printer feeds only as much paper as the slip needs.
+   * `design` comes from POS Settings → Restaurant token flow.
+   */
+  function buildTokenHtml(payload, company, template, design) {
+    var tpl = template || loadReceiptTemplate();
+    var designCfg = Object.assign({
+      paperWidthMm: Number(tpl.thermalPaperWidthMm) === 58 ? 58 : 80,
+      showLogo: true,
+      showAddress: true,
+      showPhone: true,
+      showDateTime: true,
+      showTable: true,
+      showTicket: true,
+      showItemsOnCustomer: false,
+      showCashier: false,
+      headerCustomer: 'CUSTOMER TOKEN',
+      headerKitchen: 'KITCHEN TOKEN / KOT',
+      copyLabel: 'TOKEN COPY',
+      customerMessage: 'Please wait for your order',
+      customerHint: 'Show this token when collecting',
+      footerText: 'Thank you!',
+      poweredBy: tpl.poweredBy || 'Powered by BisonTechs POS',
+    }, design || {});
+
+    var comp = company || { name: 'Restaurant', logo: '', address: '', phone: '' };
+    var p = payload || {};
+    var kind = p.kind === 'kitchen' ? 'kitchen' : 'customer';
+    var token = p.tokenNumber || '—';
+    var widthMm = Number(designCfg.paperWidthMm) === 58 ? 58 : 80;
+    var paperWidth = widthMm === 58 ? 280 : 360;
+    var now = new Date(p.at || Date.now());
+    var dash = '<div style="border-top:1px dashed #000;margin:10px 0;"></div>';
+    var headerTitle = kind === 'kitchen' ? designCfg.headerKitchen : designCfg.headerCustomer;
+
+    var header = '';
+    if (designCfg.showLogo !== false && comp.logo) {
+      header += '<div style="text-align:center;margin-bottom:6px;"><img src="' + esc(comp.logo) + '" alt="' + esc(comp.name) + '" style="height:56px;max-width:160px;object-fit:contain;"/></div>';
+    }
+    header += '<div style="text-align:center;">';
+    header += '<div style="font-size:15px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;">' + esc(comp.name || 'Restaurant') + '</div>';
+    if (designCfg.showAddress !== false && comp.address) {
+      header += '<div style="font-size:12px;font-weight:400;margin-top:4px;">' + esc(comp.address) + '</div>';
+    }
+    if (designCfg.showPhone !== false && comp.phone) {
+      header += '<div style="font-size:12px;font-weight:400;">Tel: ' + esc(comp.phone) + '</div>';
+    }
+    header += '</div>';
+
+    var meta = '';
+    if (designCfg.showTable !== false && p.tableLabel) meta += row('Table', p.tableLabel);
+    if (p.orderType) meta += row('Type', String(p.orderType).replace(/_/g, ' '));
+    if (designCfg.showTicket !== false && p.ticketNumber) meta += row('Ticket', String(p.ticketNumber));
+    if (designCfg.showDateTime !== false) {
+      meta += row('Date', now.toLocaleDateString());
+      meta += row('Time', now.toLocaleTimeString());
+    }
+    if (designCfg.showCashier && p.cashierName) meta += row('Cashier', p.cashierName);
+
+    var body = '';
+    var lines = p.lines || [];
+    var showItems = kind === 'kitchen' || designCfg.showItemsOnCustomer;
+    if (showItems && lines.length) {
+      body += dash;
+      body += '<table style="width:100%;border-collapse:collapse;font-size:12px;font-weight:700;border-bottom:1px dashed #000;"><tbody><tr>' +
+        '<td style="padding:0 0 4px;text-align:left;">ITEM</td>' +
+        '<td style="padding:0 0 4px;text-align:right;width:56px;">QTY</td>' +
+        '</tr></tbody></table>';
+      lines.forEach(function (line) {
+        var qty = asNumber(line.quantity, 1);
+        var name = line.productName || line.name || 'Item';
+        var qtyLabel = Number.isInteger(qty) ? String(qty) : String(Math.round(qty * 1000) / 1000);
+        body += '<div style="margin:6px 0;"><div style="font-weight:700;text-transform:uppercase;">' + esc(name) + '</div>' +
+          '<table style="width:100%;border-collapse:collapse;font-size:12px;font-weight:400;"><tbody><tr>' +
+          '<td style="padding-top:2px;text-align:left;">Qty</td>' +
+          '<td style="padding-top:2px;text-align:right;width:56px;">' + esc(qtyLabel) + '</td>' +
+          '</tr></tbody></table></div>';
+        if (line.notes) {
+          body += '<div style="font-size:11px;font-weight:400;margin:-2px 0 4px 0;">* ' + esc(line.notes) + '</div>';
+        }
+      });
+    }
+
+    if (kind === 'kitchen' && p.notes) {
+      body += dash + '<div style="font-size:12px;font-weight:400;"><span style="font-weight:700;">Notes: </span>' + esc(p.notes) + '</div>';
+    }
+
+    if (kind === 'customer') {
+      body += dash;
+      if (designCfg.customerMessage) {
+        body += '<div style="text-align:center;font-size:12px;font-weight:700;">' + esc(designCfg.customerMessage) + '</div>';
+      }
+      if (designCfg.customerHint) {
+        body += '<div style="text-align:center;font-size:11px;font-weight:400;margin-top:4px;">' + esc(designCfg.customerHint) + '</div>';
+      }
+      if (p.itemCount) {
+        body += '<div style="text-align:center;font-size:11px;font-weight:400;margin-top:6px;">Items: ' + esc(String(p.itemCount)) + '</div>';
+      }
+    }
+
+    var lower = '';
+    if (designCfg.footerText) {
+      lower += '<div style="text-align:center;font-weight:400;margin-top:10px;">' + esc(designCfg.footerText) + '</div>';
+    }
+    if (designCfg.poweredBy) {
+      lower += '<div style="text-align:center;font-size:11px;font-weight:400;margin-top:4px;">' + esc(designCfg.poweredBy) + '</div>';
+    }
+
+    return '<div class="pos-receipt-paper" style="width:' + paperWidth + 'px;max-width:100%;margin:0 auto;background:#fff;color:#000;font-family:Courier New,Courier,monospace;">' +
+      '<div style="padding:14px 12px;font-size:13px;line-height:1.35;font-weight:400;color:#000;">' +
+      header + dash +
+      '<div style="text-align:center;font-weight:700;letter-spacing:1.4px;font-size:12px;">' + esc(headerTitle) + '</div>' +
+      (designCfg.copyLabel
+        ? '<div style="text-align:center;font-size:11px;font-weight:400;margin-top:2px;">' + esc(designCfg.copyLabel) + '</div>'
+        : '') +
+      dash +
+      '<div style="text-align:center;font-size:36px;font-weight:700;letter-spacing:2px;line-height:1.1;padding:8px 0;">' + esc(token) + '</div>' +
+      dash + meta +
+      body +
+      dash + lower +
+      '</div></div>';
+  }
+
+  function printHtmlAsReceipt(html, widthMm) {
+    var wrap = document.createElement('div');
+    wrap.innerHTML = html;
+    var node = wrap.firstElementChild || wrap;
+    printReceiptNode(node, widthMm || 80);
+  }
+
   global.PosReceipt = {
     DEFAULT_RECEIPT_TEMPLATE: DEFAULT_RECEIPT_TEMPLATE,
     loadReceiptTemplate: loadReceiptTemplate,
@@ -785,6 +917,8 @@
     syncReceiptTemplateFromCloud: syncReceiptTemplateFromCloud,
     resolveReceiptCompany: resolveReceiptCompany,
     buildReceiptHtml: buildReceiptHtml,
+    buildTokenHtml: buildTokenHtml,
+    printHtmlAsReceipt: printHtmlAsReceipt,
     sampleReceiptSale: sampleReceiptSale,
     receiptBarcodeValue: receiptBarcodeValue,
     saleMatchesReceiptScan: saleMatchesReceiptScan,
