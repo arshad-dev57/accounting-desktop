@@ -159,7 +159,26 @@
         background-color: #dc2626;
       }
       /* Sync button badge */
-      #btn-sync-offline #sync-count {
+      #cloud-sync-card .settings-kpi {
+        background: #f8fafc;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px 12px;
+      }
+      #cloud-sync-card .settings-kpi span {
+        display: block;
+        font-size: 11px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      #cloud-sync-card .settings-kpi b {
+        display: block;
+        margin-top: 4px;
+        font-size: 14px;
+        color: #0f172a;
+      }
+      #btn-sync-offline-removed #sync-count {
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -2103,8 +2122,8 @@
           <span id="cashier-meta">Cashier: ...</span>
           <div class="time-badge" id="live-clock">00:00:00</div>
                               <div class="top-actions">
+             <button class="btn-nav-action ghost hidden" id="btn-pos-admin" type="button">POS admin</button>
              <button class="btn-nav-action ghost hidden" id="btn-kitchen-display">Kitchen</button>
-             <button class="btn-nav-action ghost" id="btn-sync-offline">Sync</button>
              <button class="btn-nav-action ghost" id="btn-cash-flow">Cash In/Out</button>
              <button class="btn-nav-action accent" id="btn-suspend-shift">Suspend</button>
              <button class="btn-nav-action danger" id="btn-trigger-close-shift">Close Shift</button>
@@ -2146,6 +2165,9 @@
           </button>
           <button class="tab-btn" data-tab="reports">
             <span>Reports</span>
+          </button>
+          <button class="tab-btn" data-tab="accounts">
+            <span>Accounts</span>
           </button>
           <button class="tab-btn" data-tab="settings">
             <span>Settings</span>
@@ -2554,6 +2576,30 @@
                 <h2>POS settings</h2>
               </div>
               <div class="settings-stack">
+                <div class="settings-card" id="cloud-sync-card">
+                  <h3>Cloud Synchronization</h3>
+                  <p class="settings-muted">
+                    POS works offline first. Use <b>Push</b> to upload local pending records, and
+                    <b>Get</b> to download the latest catalog and ERP data. These never run together.
+                  </p>
+                  <div class="cloud-sync-status-grid" id="cloud-sync-status-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:12px 0;">
+                    <div class="settings-kpi"><span>Connection</span><b id="cloud-sync-connection">Checking…</b></div>
+                    <div class="settings-kpi"><span>Pending</span><b id="cloud-sync-pending">0</b></div>
+                    <div class="settings-kpi"><span>Failed</span><b id="cloud-sync-failed">0</b></div>
+                    <div class="settings-kpi"><span>Last push</span><b id="cloud-sync-last-push">—</b></div>
+                    <div class="settings-kpi"><span>Last get</span><b id="cloud-sync-last-get">—</b></div>
+                  </div>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 8px;">
+                    <button class="btn-add-custom" id="btn-push-to-cloud" type="button" style="background:#0f766e;">↑ Push to Cloud</button>
+                    <button class="btn-add-custom" id="btn-get-from-cloud" type="button" style="background:var(--brand);">↓ Get from Cloud</button>
+                    <button class="btn-add-custom" id="btn-retry-failed-sync" type="button" style="background:#b45309;">↻ Retry failed</button>
+                  </div>
+                  <p class="settings-muted" id="cloud-sync-status-msg" style="font-size:12px;margin:0 0 8px;"></p>
+                  <div id="cloud-sync-log" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:#f8fafc;padding:8px;font-size:12px;color:#334155;">
+                    <div class="settings-muted">No sync activity yet.</div>
+                  </div>
+                </div>
+
                 <div class="settings-card" id="print-settings-card">
                   <h3>Printing</h3>
                   <p class="settings-muted">Local print options for this POS terminal.</p>
@@ -2567,7 +2613,7 @@
                   <button class="btn-add-custom" id="btn-save-settings" type="button" style="margin-top:10px;">Save print settings</button>
                 </div>
 
-                <div class="settings-card" id="restaurant-token-card">
+                <div class="settings-card hidden" id="restaurant-token-card" data-restaurant-only="true">
                   <h3>Restaurant token flow</h3>
                   <p class="settings-muted">
                     Turn on <b>Enable token flow</b> (or Print customer / kitchen), then click
@@ -2833,6 +2879,264 @@
                     <button class="btn-add-custom" id="btn-renumber-invoices" type="button" style="background:#0f766e;">Fix empty / temp invoices</button>
                   </div>
                   <p class="settings-muted" id="invoice-serial-status" style="margin-top:8px;font-size:12px;"></p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ─── ACCOUNTS (advanced operational accounting) ──── -->
+          <div class="view-panel" id="tab-accounts">
+            <div class="acc-page">
+              <div class="mod-head">
+                <div>
+                  <h2>Accounts</h2>
+                  <p>Ledgers, cash books &amp; reports — offline first, Push to ERP when ready.</p>
+                </div>
+                <div class="mod-head-actions">
+                  <button type="button" class="btn-nav-action ghost" id="acc-btn-print">Print / PDF</button>
+                  <button type="button" class="btn-nav-action" id="acc-btn-refresh">Refresh</button>
+                </div>
+              </div>
+              <p id="acc-status-banner" class="hidden" style="font-size:12px;margin:0 0 10px;"></p>
+              <div class="acc-nav" id="acc-nav">
+                <button type="button" class="acc-nav-btn active" data-accounts-nav="dashboard">Dashboard</button>
+                <button type="button" class="acc-nav-btn" data-accounts-nav="daybook">Day Book</button>
+                <button type="button" class="acc-nav-btn" data-accounts-nav="cashbook">Cash Book</button>
+                <button type="button" class="acc-nav-btn" data-accounts-nav="bankbook">Bank Book</button>
+                <button type="button" class="acc-nav-btn" data-accounts-nav="ledgers">Ledgers</button>
+                <button type="button" class="acc-nav-btn" data-accounts-nav="cash">Cash &amp; Bank Entry</button>
+                <button type="button" class="acc-nav-btn" data-accounts-nav="expenses">Income / Expense</button>
+                <button type="button" class="acc-nav-btn" data-accounts-nav="customers">Receivables</button>
+                <button type="button" class="acc-nav-btn" data-accounts-nav="suppliers">Payables</button>
+                <button type="button" class="acc-nav-btn" data-accounts-nav="closing">Daily Closing</button>
+                <button type="button" class="acc-nav-btn" data-accounts-nav="reports">Reports</button>
+              </div>
+
+              <div class="acc-filters" id="acc-filters">
+                <label>From <input type="date" id="acc-from" class="mod-select" /></label>
+                <label>To <input type="date" id="acc-to" class="mod-select" /></label>
+                <button type="button" class="btn-nav-action ghost sm" id="acc-filter-today">Today</button>
+                <button type="button" class="btn-nav-action ghost sm" id="acc-filter-month">This month</button>
+                <button type="button" class="btn-nav-action ghost sm" id="acc-filter-apply">Apply</button>
+              </div>
+
+              <div id="accounts-dashboard" class="accounts-section">
+                <div class="mod-kpis" id="acc-kpi-row">
+                  <div class="kpi"><span>Cash in hand</span><b id="acc-kpi-cash">—</b></div>
+                  <div class="kpi"><span>Bank balance</span><b id="acc-kpi-bank">—</b></div>
+                  <div class="kpi"><span>Receivables</span><b id="acc-kpi-ar">—</b></div>
+                  <div class="kpi"><span>Payables</span><b id="acc-kpi-ap">—</b></div>
+                  <div class="kpi"><span>Period sales</span><b id="acc-kpi-income">—</b></div>
+                  <div class="kpi"><span>Period expenses</span><b id="acc-kpi-expense">—</b></div>
+                  <div class="kpi"><span>Gross profit est.</span><b id="acc-kpi-profit">—</b></div>
+                  <div class="kpi"><span>Pending sync</span><b id="acc-kpi-pending">—</b></div>
+                </div>
+                <div class="acc-grid-2">
+                  <div class="acc-card">
+                    <h3>Cash position</h3>
+                    <div id="acc-cashflow-summary" class="settings-muted">Loading…</div>
+                  </div>
+                  <div class="acc-card">
+                    <h3>Recent activity</h3>
+                    <div id="acc-recent-activity" class="settings-muted">Loading…</div>
+                  </div>
+                </div>
+              </div>
+
+              <div id="accounts-daybook" class="accounts-section hidden">
+                <div class="acc-card">
+                  <div class="acc-card-head"><h3>Day Book</h3><span class="settings-muted">All financial movements in date order</span></div>
+                  <div id="acc-daybook-table"></div>
+                </div>
+              </div>
+
+              <div id="accounts-cashbook" class="accounts-section hidden">
+                <div class="acc-card">
+                  <div class="acc-card-head"><h3>Cash Book</h3><span class="settings-muted">Running cash balance</span></div>
+                  <div id="acc-cashbook-table"></div>
+                </div>
+              </div>
+
+              <div id="accounts-bankbook" class="accounts-section hidden">
+                <div class="acc-card">
+                  <div class="acc-card-head"><h3>Bank Book</h3><span class="settings-muted">Card / bank / transfer activity</span></div>
+                  <div id="acc-bankbook-table"></div>
+                </div>
+              </div>
+
+              <div id="accounts-ledgers" class="accounts-section hidden">
+                <div class="acc-card">
+                  <div class="acc-card-head">
+                    <h3>Account Ledger</h3>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                      <select id="acc-ledger-type" class="mod-select">
+                        <option value="cash">Cash in Hand</option>
+                        <option value="bank">Bank</option>
+                        <option value="sales">Sales / Revenue</option>
+                        <option value="expense">Expenses</option>
+                        <option value="income">Other Income</option>
+                        <option value="customer">Customer (pick below)</option>
+                        <option value="supplier">Supplier (pick below)</option>
+                      </select>
+                      <select id="acc-ledger-party" class="mod-select" style="min-width:180px;display:none;"></select>
+                      <button type="button" class="btn-nav-action sm" id="acc-ledger-load">Load ledger</button>
+                    </div>
+                  </div>
+                  <div id="acc-ledger-summary" class="mod-kpis" style="margin-top:12px;"></div>
+                  <div id="acc-ledger-table"></div>
+                </div>
+              </div>
+
+              <div id="accounts-cash" class="accounts-section hidden">
+                <div class="acc-card">
+                  <h3>Cash &amp; Bank entry</h3>
+                  <p class="settings-muted">Deposits, withdrawals and transfers — saved locally first.</p>
+                  <form id="acc-cash-form" class="acc-form-grid">
+                    <label><span>Type</span>
+                      <select id="acc-cash-type" class="mod-select">
+                        <option value="deposit">Cash deposit to bank</option>
+                        <option value="withdrawal">Cash withdrawal from bank</option>
+                        <option value="transfer">Transfer (cash ↔ bank)</option>
+                      </select>
+                    </label>
+                    <label><span>Amount</span>
+                      <input id="acc-cash-amount" type="number" min="0.01" step="0.01" required class="mod-select" style="width:100%;" />
+                    </label>
+                    <label><span>Date</span>
+                      <input id="acc-cash-date" type="date" required class="mod-select" style="width:100%;" />
+                    </label>
+                    <label style="grid-column:1/-1;"><span>Notes / reference</span>
+                      <input id="acc-cash-notes" type="text" placeholder="Optional" class="mod-select" style="width:100%;" />
+                    </label>
+                    <div style="grid-column:1/-1;"><button class="btn-nav-action" type="submit">Save entry</button></div>
+                  </form>
+                  <div id="acc-cash-list" style="margin-top:14px;"></div>
+                </div>
+              </div>
+
+              <div id="accounts-expenses" class="accounts-section hidden">
+                <div class="acc-card">
+                  <h3>Income &amp; Expenses</h3>
+                  <form id="acc-expense-form" class="acc-form-grid">
+                    <label><span>Kind</span>
+                      <select id="acc-exp-kind" class="mod-select">
+                        <option value="expense">Expense</option>
+                        <option value="income">Other income</option>
+                      </select>
+                    </label>
+                    <label><span>Category</span>
+                      <input id="acc-exp-category" type="text" list="acc-exp-cats" placeholder="e.g. Utilities" required class="mod-select" style="width:100%;" />
+                      <datalist id="acc-exp-cats">
+                        <option value="Rent"></option><option value="Utilities"></option><option value="Salaries"></option>
+                        <option value="Transport"></option><option value="Supplies"></option><option value="Marketing"></option>
+                        <option value="Misc"></option><option value="Other Income"></option>
+                      </datalist>
+                    </label>
+                    <label><span>Amount</span>
+                      <input id="acc-exp-amount" type="number" min="0.01" step="0.01" required class="mod-select" style="width:100%;" />
+                    </label>
+                    <label><span>Payment method</span>
+                      <select id="acc-exp-method" class="mod-select">
+                        <option value="Cash">Cash</option>
+                        <option value="Card">Card</option>
+                        <option value="Bank">Bank</option>
+                      </select>
+                    </label>
+                    <label><span>Date</span>
+                      <input id="acc-exp-date" type="date" required class="mod-select" style="width:100%;" />
+                    </label>
+                    <label style="grid-column:1/-1;"><span>Description</span>
+                      <input id="acc-exp-desc" type="text" required class="mod-select" style="width:100%;" />
+                    </label>
+                    <div style="grid-column:1/-1;"><button class="btn-nav-action" type="submit">Save entry</button></div>
+                  </form>
+                  <div id="acc-expense-list" style="margin-top:14px;"></div>
+                </div>
+              </div>
+
+              <div id="accounts-customers" class="accounts-section hidden">
+                <div class="acc-card">
+                  <div class="acc-card-head">
+                    <h3>Accounts Receivable</h3>
+                    <span class="settings-muted">Customer balances &amp; ledgers</span>
+                  </div>
+                  <div id="acc-customer-list"></div>
+                  <div id="acc-customer-ledger-wrap" class="hidden" style="margin-top:16px;">
+                    <div class="acc-card-head"><h3 id="acc-customer-ledger-title">Customer ledger</h3>
+                      <button type="button" class="btn-nav-action ghost sm" id="acc-customer-ledger-back">Back to list</button>
+                    </div>
+                    <div id="acc-customer-ledger"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div id="accounts-suppliers" class="accounts-section hidden">
+                <div class="acc-grid-2">
+                  <div class="acc-card">
+                    <h3>Record supplier payment</h3>
+                    <form id="acc-supplier-form" class="acc-form-grid">
+                      <label><span>Supplier name</span>
+                        <input id="acc-sup-name" type="text" required class="mod-select" style="width:100%;" />
+                      </label>
+                      <label><span>Amount</span>
+                        <input id="acc-sup-amount" type="number" min="0.01" step="0.01" required class="mod-select" style="width:100%;" />
+                      </label>
+                      <label><span>Method</span>
+                        <select id="acc-sup-method" class="mod-select">
+                          <option value="Cash">Cash</option>
+                          <option value="Bank">Bank</option>
+                          <option value="Card">Card</option>
+                        </select>
+                      </label>
+                      <label><span>Date</span>
+                        <input id="acc-sup-date" type="date" required class="mod-select" style="width:100%;" />
+                      </label>
+                      <label style="grid-column:1/-1;"><span>Reference / notes</span>
+                        <input id="acc-sup-notes" type="text" class="mod-select" style="width:100%;" />
+                      </label>
+                      <div style="grid-column:1/-1;"><button class="btn-nav-action" type="submit">Save payment</button></div>
+                    </form>
+                  </div>
+                  <div class="acc-card">
+                    <h3>Supplier payment history</h3>
+                    <div id="acc-supplier-list"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div id="accounts-closing" class="accounts-section hidden">
+                <div class="acc-card">
+                  <h3>Daily cash closing</h3>
+                  <p class="settings-muted">Opening cash, sales mix, expenses and drawer variance.</p>
+                  <div id="acc-closing-summary" class="settings-muted">Loading…</div>
+                  <form id="acc-closing-form" class="acc-form-grid" style="margin-top:12px;">
+                    <label><span>Actual closing cash</span>
+                      <input id="acc-closing-actual" type="number" min="0" step="0.01" class="mod-select" style="width:100%;" />
+                    </label>
+                    <label style="grid-column:1/-1;"><span>Notes</span>
+                      <input id="acc-closing-notes" type="text" class="mod-select" style="width:100%;" />
+                    </label>
+                    <div style="grid-column:1/-1;"><button class="btn-nav-action" type="submit">Save closing snapshot</button></div>
+                  </form>
+                  <div id="acc-closing-history" style="margin-top:14px;"></div>
+                </div>
+              </div>
+
+              <div id="accounts-reports" class="accounts-section hidden">
+                <div class="acc-card">
+                  <div class="acc-card-head">
+                    <h3>Accounts reports</h3>
+                    <select id="acc-report-type" class="mod-select">
+                      <option value="profit">Profit summary</option>
+                      <option value="cashflow">Cash flow</option>
+                      <option value="expenses">Expense by category</option>
+                      <option value="salesmix">Sales by payment method</option>
+                      <option value="receivables">Receivables summary</option>
+                      <option value="payables">Payables summary</option>
+                      <option value="trial">Account balances</option>
+                    </select>
+                  </div>
+                  <div id="acc-report-body"></div>
                 </div>
               </div>
             </div>
@@ -3615,6 +3919,7 @@
     <script src="./product-codes.js"></script>
     <script src="./sell.js"></script>
     <script src="./pos-customers.js"></script>
+    <script src="./pos-accounts.js"></script>
     <script src="./pos-reports.js"></script>
   </body>
 </html>

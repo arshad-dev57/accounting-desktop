@@ -921,6 +921,7 @@
     DEFAULT_RECEIPT_TEMPLATE: DEFAULT_RECEIPT_TEMPLATE,
     loadReceiptTemplate: loadReceiptTemplate,
     saveReceiptTemplate: saveReceiptTemplate,
+    replaceReceiptTemplate: replaceReceiptTemplate,
     syncReceiptTemplateFromCloud: syncReceiptTemplateFromCloud,
     resolveReceiptCompany: resolveReceiptCompany,
     buildReceiptHtml: buildReceiptHtml,

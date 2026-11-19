@@ -125,9 +125,7 @@ async function boot() {
   if (adminBtn) {
     if (isAdmin) {
       adminBtn.classList.remove('hidden');
-      adminBtn.addEventListener('click', () => {
-        api.app?.openExternal?.('https://app.bisonstechs.com/pos/management');
-      });
+      adminBtn.addEventListener('click', () => api.pos.enterManagement());
     } else {
       adminBtn.classList.add('hidden');
     }

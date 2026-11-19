@@ -1,7 +1,5 @@
 const api = window.bisonDesktop;
-const TABS = ['Terminals', 'Users', 'Shifts', 'Sales', 'Returns', 'Receipt', 'Printer', 'Scanner', 'Payments', 'Tax', 'Audit Log'];
-const SETTINGS_KEY = 'pos_settings_v1';
-
+const TABS = ['Terminals', 'Users', 'Shifts', 'Sales', 'Returns', 'Receipt', 'Tax', 'Audit Log'];
 let page = 1;
 let currentTab = 'Terminals';
 let locations = [];
@@ -81,39 +79,6 @@ function renderTerminalUserOptions(users, locationId, selectedUserId) {
   ].join('');
 }
 
-function loadSettings() {
-  try {
-    return { ...defaultSettings(), ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
-  } catch {
-    return defaultSettings();
-  }
-}
-
-function saveSettings(next) {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
-}
-
-function defaultSettings() {
-  return {
-    receiptHeader: 'TAX INVOICE / SALES RECEIPT',
-    receiptFooter: 'Thank you for shopping with us! Please visit again.',
-    receiptReturnPolicy: 'Returns accepted within 7 days with original receipt.',
-    receiptNotes: 'This is a computer-generated receipt.',
-      thermalPaperWidthMm: 80,
-      thermalPrintMode: 'browser',
-      autoPrintOnSale: true,
-      enableBarcodeScanner: true,
-      soundOnScan: true,
-      autoAddOnScan: true,
-      enablePaymentTerminal: false,
-      paymentTerminalModel: 'CS30G',
-      paymentTerminalConnection: 'serial',
-      paymentTerminalHost: '192.168.1.100',
-      paymentTerminalPort: 8080,
-      askCashReceived: false,
-    };
-}
-
 function openModal(html) {
   document.getElementById('modal-body').innerHTML = html;
   document.getElementById('modal').classList.add('open');
@@ -137,9 +102,6 @@ function setTab(name) {
     Sales: 'panel-sales',
     Returns: 'panel-returns',
     Receipt: 'panel-receipt',
-    Printer: 'panel-printer',
-    Scanner: 'panel-scanner',
-    Payments: 'panel-payments',
     Tax: 'panel-tax',
     'Audit Log': 'panel-audit',
   }[name];
@@ -155,7 +117,6 @@ async function loadTab() {
   if (currentTab === 'Sales') return loadSales();
   if (currentTab === 'Returns') return loadReturns();
   if (currentTab === 'Receipt') return loadReceipt();
-  if (currentTab === 'Printer' || currentTab === 'Scanner' || currentTab === 'Payments') return loadDevice(currentTab);
   if (currentTab === 'Tax') return loadTax();
   if (currentTab === 'Audit Log') return loadAudit();
 }
@@ -539,141 +500,128 @@ async function loadReturns() {
 }
 
 async function loadReceipt() {
-  const wrap = document.getElementById('panel-receipt');
-  wrap.innerHTML = `
-    <div class="row">
-      <h2>Receipt template</h2>
-      <button class="btn btn-brand" id="receipt-sync">↻ Sync from web</button>
-    </div>
-    <div class="card" style="margin-bottom:16px;">
-      <p style="margin:0;line-height:1.5;">
-        Logo, store details, header/footer, and show/hide options are edited in
-        <b>Web app → POS → POS admin → Receipt</b>. This screen only syncs and previews
-        the company template. Sell-page print size and format stay unchanged.
-      </p>
-      <p class="muted" id="receipt-sync-status" style="margin:10px 0 0;font-size:12px;">Loading…</p>
-    </div>
-    <div class="muted" style="font-size:12px;font-weight:700;margin-bottom:8px;letter-spacing:.6px;">PREVIEW</div>
-    <div style="background:#e5e7eb;border-radius:14px;padding:12px;max-width:420px;">
-      <div id="receipt-preview"></div>
-    </div>`;
-
-  const status = wrap.querySelector('#receipt-sync-status');
-  const renderPreview = async () => {
-    let profile = null;
-    try { profile = (await api.pos.getProfile())?.data || null; } catch { /* ignore */ }
-    const template = window.PosReceipt.loadReceiptTemplate();
-    const comp = window.PosReceipt.resolveReceiptCompany(profile, template);
-    wrap.querySelector('#receipt-preview').innerHTML = window.PosReceipt.buildReceiptHtml(
-      window.PosReceipt.sampleReceiptSale(),
-      comp,
-      template
-    );
-  };
-
-  const sync = async () => {
-    status.textContent = 'Syncing…';
-    const res = await window.PosReceipt.syncReceiptTemplateFromCloud();
-    if (res?.success) {
-      status.textContent = res.fromCache
-        ? 'Using cached template (offline / last sync).'
-        : 'Synced from web POS admin.';
-    } else {
-      status.textContent = res?.message || 'Could not sync receipt template.';
-    }
-    await renderPreview();
-  };
-
-  wrap.querySelector('#receipt-sync').onclick = () => { void sync(); };
-  await sync();
-}
-
-function loadDevice(tab) {
-  const s = loadSettings();
-  const wrap = document.getElementById(`panel-${tab.toLowerCase()}`);
-  if (tab === 'Printer') {
-    wrap.innerHTML = `
-      <div class="row"><h2>Thermal printer</h2><button class="btn btn-brand" id="save">Save</button></div>
-      <div class="card">
-        <div class="toggle"><span>Auto print on sale</span><input type="checkbox" id="p-auto" ${s.autoPrintOnSale ? 'checked' : ''} /></div>
-        <div class="form-grid" style="margin-top:12px">
-          <select id="p-width"><option value="58">58mm</option><option value="80">80mm</option></select>
-          <select id="p-mode"><option value="browser">Browser print</option><option value="escpos">ESC/POS serial</option></select>
-        </div>
-      </div>`;
-    wrap.querySelector('#p-width').value = String(s.thermalPaperWidthMm || 80);
-    wrap.querySelector('#p-mode').value = s.thermalPrintMode || 'browser';
-    wrap.querySelector('#save').onclick = () => {
-      saveSettings({
-        ...loadSettings(),
-        autoPrintOnSale: wrap.querySelector('#p-auto').checked,
-        thermalPaperWidthMm: Number(wrap.querySelector('#p-width').value),
-        thermalPrintMode: wrap.querySelector('#p-mode').value,
-      });
-      alert('Printer settings saved on this desktop');
-    };
+  if (window.ManagementReceiptEditor?.load) {
+    return window.ManagementReceiptEditor.load();
   }
-  if (tab === 'Scanner') {
-    wrap.innerHTML = `
-      <div class="row"><h2>Barcode scanner</h2><button class="btn btn-brand" id="save">Save</button></div>
-      <div class="card">
-        <div class="toggle"><span>Enable scanner</span><input type="checkbox" id="sc-on" ${s.enableBarcodeScanner ? 'checked' : ''} /></div>
-        <div class="toggle"><span>Beep on scan</span><input type="checkbox" id="sc-sound" ${s.soundOnScan ? 'checked' : ''} /></div>
-        <div class="toggle"><span>Auto-add product</span><input type="checkbox" id="sc-auto" ${s.autoAddOnScan ? 'checked' : ''} /></div>
-      </div>`;
-    wrap.querySelector('#save').onclick = () => {
-      saveSettings({
-        ...loadSettings(),
-        enableBarcodeScanner: wrap.querySelector('#sc-on').checked,
-        soundOnScan: wrap.querySelector('#sc-sound').checked,
-        autoAddOnScan: wrap.querySelector('#sc-auto').checked,
-      });
-      alert('Scanner settings saved on this desktop');
-    };
-  }
-  if (tab === 'Payments') {
-    wrap.innerHTML = `
-      <div class="row"><h2>Payment terminal</h2><button class="btn btn-brand" id="save">Save</button></div>
-      <div class="card">
-        <div class="toggle"><span>Enable card terminal</span><input type="checkbox" id="pay-on" ${s.enablePaymentTerminal ? 'checked' : ''} /></div>
-        <div class="form-grid" style="margin-top:12px">
-          <select id="pay-model"><option>CS30G</option><option>Generic ECR</option></select>
-          <select id="pay-conn"><option value="serial">Serial</option><option value="network">Network</option><option value="sandbox">Sandbox</option></select>
-          <input id="pay-host" placeholder="Host" value="${s.paymentTerminalHost || ''}" />
-          <input id="pay-port" placeholder="Port" value="${s.paymentTerminalPort || 8080}" />
-        </div>
-      </div>`;
-    wrap.querySelector('#pay-model').value = s.paymentTerminalModel || 'CS30G';
-    wrap.querySelector('#pay-conn').value = s.paymentTerminalConnection || 'serial';
-    wrap.querySelector('#save').onclick = () => {
-      saveSettings({
-        ...loadSettings(),
-        enablePaymentTerminal: wrap.querySelector('#pay-on').checked,
-        paymentTerminalModel: wrap.querySelector('#pay-model').value,
-        paymentTerminalConnection: wrap.querySelector('#pay-conn').value,
-        paymentTerminalHost: wrap.querySelector('#pay-host').value,
-        paymentTerminalPort: Number(wrap.querySelector('#pay-port').value || 8080),
-      });
-      alert('Payment terminal settings saved on this desktop');
-    };
-  }
+  document.getElementById('panel-receipt').innerHTML =
+    '<p class="error">Receipt editor failed to load.</p>';
 }
 
 async function loadTax() {
   const wrap = document.getElementById('panel-tax');
   wrap.innerHTML = '<p class="muted">Loading tax context…</p>';
-  const res = await api.tax.getContext();
-  const ctx = res?.data || {};
+
+  const refresh = async () => {
+    const res = await api.tax.refreshContext().catch(() => api.tax.getContext());
+    return res?.data || {};
+  };
+
+  let ctx = {};
+  try {
+    const res = await api.tax.getContext();
+    ctx = res?.data || {};
+  } catch (err) {
+    wrap.innerHTML = `<p class="error">${err.message || 'Failed to load tax'}</p>`;
+    return;
+  }
+
+  const rates = Array.isArray(ctx.rates) ? ctx.rates : [];
+  const ratesHtml = rates.length
+    ? `<table style="margin-top:12px"><thead><tr><th>Type</th><th>Rate</th><th>Pricing</th></tr></thead><tbody>
+      ${rates
+        .map(
+          (r) => `<tr>
+            <td>${r.taxTypeName || r.taxTypeCode || '—'}</td>
+            <td>${Number(r.rate || 0)}%</td>
+            <td>${r.pricingModel || ctx.pricingModel || '—'}</td>
+          </tr>`
+        )
+        .join('')}</tbody></table>`
+  : '<p class="muted">No tax rates yet. Configure in Tax Compliance.</p>';
+
   wrap.innerHTML = `
-    <div class="row"><h2>POS tax compliance</h2></div>
-    <p class="muted">Rates and exemptions are managed in web Tax Compliance. If tax is OFF, POS will not add tax.</p>
-    <div class="kpi">
-      <div><small>TAX IN FLOW</small><div><b>${ctx.enabled ? 'ON' : 'OFF'}</b></div></div>
-      <div><small>CONFIGURED</small><div><b>${ctx.configured ? 'Yes' : 'Not yet'}</b></div></div>
-      <div><small>REGIME</small><div><b>${ctx.regime || '—'}</b></div></div>
-      <div><small>PRICING</small><div><b>${ctx.pricingModel || '—'}</b></div></div>
-      <div><small>DEFAULT RATE</small><div><b>${ctx.defaultRate?.rate ?? 0}%</b></div></div>
+    <div class="row">
+      <h2>POS tax compliance</h2>
+      <button type="button" class="btn btn-gray" id="tax-refresh">↻ Refresh</button>
+    </div>
+    <p class="muted" style="line-height:1.5;max-width:640px">
+      Rates, inclusive/exclusive pricing and exemptions are managed in Tax Compliance.
+      If taxation is <b>OFF</b>, POS will not add tax on sales.
+    </p>
+    <div class="card tax-toggle-card ${ctx.enabled ? 'tax-on' : ''}" id="tax-toggle-card">
+      <div class="tax-toggle-inner">
+        <div>
+          <p style="margin:0;font-weight:700;color:#0f172a">Use taxation in this company</p>
+          <p class="muted" id="tax-toggle-hint" style="margin:6px 0 0;font-size:13px"></p>
+        </div>
+        <button type="button" class="tax-switch ${ctx.enabled ? 'on' : ''}" id="tax-toggle" aria-pressed="${ctx.enabled ? 'true' : 'false'}">
+          <span class="tax-switch-knob"></span>
+        </button>
+      </div>
+      <p id="tax-toggle-err" class="hidden" style="margin:10px 0 0;font-size:13px;color:#dc2626"></p>
+    </div>
+    <div class="kpi" style="margin-top:16px">
+      <div><small>TAX IN FLOW</small><div><b id="tax-kpi-enabled">${ctx.enabled ? 'ON' : 'OFF'}</b></div></div>
+      <div><small>CONFIGURED</small><div><b id="tax-kpi-config">${ctx.configured ? 'Yes' : 'Not yet'}</b></div></div>
+      <div><small>REGIME</small><div><b id="tax-kpi-regime">${ctx.regime || '—'}</b></div></div>
+      <div><small>PRICING</small><div><b id="tax-kpi-pricing">${ctx.pricingModel || '—'}</b></div></div>
+      <div><small>DEFAULT RATE</small><div><b id="tax-kpi-rate">${ctx.defaultRate?.rate ?? 0}%</b></div></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h3 style="margin:0 0 8px;font-size:14px">Tax rates</h3>
+      ${ratesHtml}
+    </div>
+    <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
+      <button type="button" class="btn btn-brand" id="tax-open-web">Open Tax Compliance (web)</button>
     </div>`;
+
+  const hint = document.getElementById('tax-toggle-hint');
+  const setHint = (enabled) => {
+    hint.textContent = enabled
+      ? 'ON — VAT/GST/sales tax applies in POS, sales, purchases, inventory and accounting.'
+      : 'OFF — no tax is calculated or shown anywhere in this company’s flow.';
+  };
+  setHint(!!ctx.enabled);
+
+  const paint = (c) => {
+    document.getElementById('tax-kpi-enabled').textContent = c.enabled ? 'ON' : 'OFF';
+    document.getElementById('tax-kpi-config').textContent = c.configured ? 'Yes' : 'Not yet';
+    document.getElementById('tax-kpi-regime').textContent = c.regime || '—';
+    document.getElementById('tax-kpi-pricing').textContent = c.pricingModel || '—';
+    document.getElementById('tax-kpi-rate').textContent = `${c.defaultRate?.rate ?? 0}%`;
+    const card = document.getElementById('tax-toggle-card');
+    const sw = document.getElementById('tax-toggle');
+    card?.classList.toggle('tax-on', !!c.enabled);
+    sw?.classList.toggle('on', !!c.enabled);
+    sw?.setAttribute('aria-pressed', c.enabled ? 'true' : 'false');
+    setHint(!!c.enabled);
+  };
+
+  document.getElementById('tax-refresh')?.addEventListener('click', async () => {
+    ctx = await refresh();
+    paint(ctx);
+  });
+
+  document.getElementById('tax-toggle')?.addEventListener('click', async () => {
+    const errEl = document.getElementById('tax-toggle-err');
+    const btn = document.getElementById('tax-toggle');
+    errEl.classList.add('hidden');
+    const next = !ctx.enabled;
+    btn.disabled = true;
+    const res = await api.tax.setEnabled(next);
+    btn.disabled = false;
+    if (!res?.success) {
+      errEl.textContent = res?.message || 'Could not update tax setting';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    ctx = res.data || (await refresh());
+    paint(ctx);
+  });
+
+  document.getElementById('tax-open-web')?.addEventListener('click', () => {
+    api.app?.openExternal?.('https://app.bisonstechs.com/tax');
+  });
 }
 
 async function loadAudit() {
@@ -716,7 +664,15 @@ async function boot() {
   const tabs = document.getElementById('tabs');
   tabs.innerHTML = TABS.map((t) => `<button class="tab ${t === 'Terminals' ? 'active' : ''}" data-tab="${t}" type="button">${t}</button>`).join('');
   tabs.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
-  document.getElementById('btn-open-pos').onclick = () => api.pos.enterShift();
+  document.getElementById('btn-open-pos').onclick = async () => {
+    const shiftRes = await api.pos.getCurrentShift();
+    const open = shiftRes?.data?.status === 'Open';
+    if (open) {
+      await api.pos.enterSell();
+    } else {
+      await api.pos.enterShift();
+    }
+  };
   document.getElementById('btn-logout').onclick = () => api.auth.logout();
   await loadLocations();
   await loadTab();

@@ -41,6 +41,7 @@ const salesApi = require('./sales-api.cjs');
 const localDb = require('./local-db.cjs');
 const masterSqlite = require('./master-sqlite.cjs');
 const masterSync = require('./master-sync.cjs');
+const posAccountsSync = require('./pos-accounts-sync.cjs');
 const machineInfo = require('./machine-info.cjs');
 const driveBackup = require('./drive-backup/service.cjs');
 
@@ -1878,10 +1879,11 @@ function registerIpc() {
 
     // Company-wide catalog only — never prune by warehouse location
     const locationId = '';
+    const push = payload?.push !== false;
 
     if (payload && payload.refresh) {
-      const result = await masterSync.refreshCatalog(auth.session.accessToken, locationId);
-      console.log('[pos:syncMasterData] refresh', result?.counts, 'location all', result?.message || result?.success);
+      const result = await masterSync.refreshCatalog(auth.session.accessToken, locationId, { push });
+      console.log('[pos:syncMasterData] refresh', result?.counts, 'location all', result?.message || result?.success, 'push=', push);
       try {
         await refreshScopedCatalogCaches(auth.session.accessToken, auth.session.user);
       } catch (_) { /* ignore */ }
@@ -1892,7 +1894,7 @@ function registerIpc() {
       }
       return result;
     }
-    return masterSync.syncMasterData(auth.session.accessToken, locationId);
+    return masterSync.syncMasterData(auth.session.accessToken, locationId, { push });
   });
 
   handle('pos:pushMasterData', async () => {
@@ -2173,8 +2175,25 @@ function registerIpc() {
 
 
   // ─── OFFLINE-FIRST: Queue sale locally ───────────────────────────────────
-  ipcMain.handle('pos:getRestaurantTokenSettings', async () => {
+  function requireRestaurantPosMode() {
     const auth = requireAuth();
+    if (!auth.ok) return auth;
+    const mode = resolvePosMode(auth.session?.user);
+    if (mode !== 'restaurant') {
+      return {
+        ok: false,
+        result: {
+          success: false,
+          code: 'RESTAURANT_ONLY',
+          message: 'Token flow is only available for Restaurant management',
+        },
+      };
+    }
+    return auth;
+  }
+
+  ipcMain.handle('pos:getRestaurantTokenSettings', async () => {
+    const auth = requireRestaurantPosMode();
     if (!auth.ok) return auth.result;
     // Apply daily reset if due so Settings preview matches next allocate
     const settings = localDb.maybeResetRestaurantToken
@@ -2190,7 +2209,7 @@ function registerIpc() {
   });
 
   ipcMain.handle('pos:saveRestaurantTokenSettings', async (_event, payload) => {
-    const auth = requireAuth();
+    const auth = requireRestaurantPosMode();
     if (!auth.ok) return auth.result;
     const settings = localDb.saveRestaurantTokenSettings(payload || {});
     return {
@@ -2204,7 +2223,7 @@ function registerIpc() {
   });
 
   ipcMain.handle('pos:allocateRestaurantToken', async () => {
-    const auth = requireAuth();
+    const auth = requireRestaurantPosMode();
     if (!auth.ok) return auth.result;
     const settings = localDb.getRestaurantTokenSettings();
     if (!settings.enabled) {
@@ -2225,7 +2244,7 @@ function registerIpc() {
   });
 
   ipcMain.handle('pos:resetRestaurantToken', async () => {
-    const auth = requireAuth();
+    const auth = requireRestaurantPosMode();
     if (!auth.ok) return auth.result;
     const settings = localDb.resetRestaurantTokenCounter();
     return {
@@ -2350,6 +2369,18 @@ function registerIpc() {
     return { success: true };
   });
 
+  ipcMain.handle('pos:enterManagement', async () => {
+    const auth = requireAdmin();
+    if (!auth.ok) return auth.result;
+    const access = await validateSessionAccess(auth.session.accessToken);
+    if (!access.ok) {
+      await forceLogoutWithReason(access.code, access.message);
+      return { success: false, code: access.code, message: access.message };
+    }
+    showManagementScreen();
+    return { success: true };
+  });
+
   ipcMain.handle('pos:enterRestaurantPos', (_event, tab) => {
     if (!activeShift) activeShift = localDb.getActiveShift();
     if (!activeShift || activeShift.status !== 'Open') {
@@ -2462,18 +2493,35 @@ function registerIpc() {
   ipcMain.handle('pos:recordCashFlow', async (_event, payload) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
+    const flowId = `cashflow-${Date.now()}`;
+    const amount = Number(payload?.amount || 0);
+    const flowType = payload?.type || 'in';
     if (activeShift) {
       if (!activeShift.cashFlows) activeShift.cashFlows = [];
       activeShift.cashFlows.push({
-        id: `cashflow-${Date.now()}`,
-        amount: Number(payload?.amount || 0),
-        type: payload?.type || 'in',
+        id: flowId,
+        amount,
+        type: flowType,
         reason: payload?.reason || '',
         timestamp: new Date().toISOString(),
       });
       localDb.saveActiveShift(activeShift);
     }
     localDb.addShiftActionToQueue({ action: 'cashflow', payload });
+    try {
+      if (amount > 0) {
+        localDb.addAccountsEntry({
+          type: flowType === 'out' ? 'withdrawal' : 'deposit',
+          amount,
+          paymentMethod: 'Cash',
+          description: payload?.reason || (flowType === 'out' ? 'Cash out' : 'Cash in'),
+          sourceRef: `shift-cashflow:${flowId}`,
+          locationId: activeShift?.locationId || null,
+        });
+      }
+    } catch (err) {
+      console.warn('[accounts] cashflow enqueue failed', err.message);
+    }
     return { success: true, message: 'Cash flow recorded locally' };
   });
 
@@ -3332,13 +3380,29 @@ function registerIpc() {
       } else {
         return { success: false, message: 'Unknown action' };
       }
-      masterSqlite.addCustomerLedgerEntries([{
+      const ledgerId = masterSqlite.addCustomerLedgerEntries([{
         ...row,
         customerId,
         createdBy,
         reference: row.reference || `Manual ${new Date().toISOString().slice(0, 10)}`,
       }]);
-      return { success: true, data: masterSqlite.getCustomerBalances(customerId) };
+      if (action === 'PAYMENT') {
+        try {
+          const cust = masterSqlite.getCustomerById(customerId);
+          localDb.addAccountsEntry({
+            type: 'customer_payment',
+            amount,
+            paymentMethod: entry.method || 'Cash',
+            partyId: customerId,
+            partyName: cust?.name || '',
+            description: note || `Customer payment (${entry.method || 'Cash'})`,
+            sourceRef: `cust-pay:${customerId}:${Date.now()}`,
+          });
+        } catch (e) {
+          console.warn('[accounts] customer payment enqueue failed', e.message);
+        }
+      }
+      return { success: true, data: masterSqlite.getCustomerBalances(customerId), ledgerId };
     } catch (err) {
       return { success: false, message: err.message || 'Failed to post entry' };
     }
@@ -3728,13 +3792,28 @@ function registerIpc() {
   });
 
   ipcMain.handle('pos:saveReceiptSettings', async (_event, body) => {
-    const auth = requireAuth();
+    const auth = requireAdmin();
     if (!auth.ok) return auth.result;
+    const payload = { ...(body || {}) };
+    delete payload.askCashReceived;
     try {
-      localDb.saveReceiptSettings(body);
-      return { success: true, message: 'Receipt settings saved locally' };
+      const live = await posApi.saveReceiptSettings(auth.session.accessToken, payload);
+      if (!live?.success) {
+        return { success: false, message: live?.message || 'Failed to save receipt template' };
+      }
+      const saved = live.data && typeof live.data === 'object' ? live.data : payload;
+      try {
+        localDb.saveReceiptSettings(saved);
+      } catch {
+        /* ignore */
+      }
+      return {
+        success: true,
+        data: saved,
+        message: 'Receipt template saved. Desktop POS will use this on the next sync / print.',
+      };
     } catch (err) {
-      return { success: false, message: err.message || 'Failed to save settings' };
+      return { success: false, message: err.message || 'Failed to save receipt template' };
     }
   });
 
@@ -4121,28 +4200,778 @@ function registerIpc() {
     }
   });
 
+  ipcMain.handle('tax:setEnabled', async (_event, enabled) => {
+    const auth = requireAdmin();
+    if (!auth.ok) return auth.result;
+    try {
+      const live = await posApi.setTaxEnabled(auth.session.accessToken, !!enabled);
+      if (!live?.success) {
+        return { success: false, message: live?.message || 'Could not update tax setting' };
+      }
+      const refreshed = await posApi.fetchTaxContext(auth.session.accessToken);
+      if (refreshed?.success && refreshed.data) {
+        localDb.saveTaxContext(refreshed.data);
+        return { success: true, data: localDb.getTaxContext() };
+      }
+      return { success: true, data: localDb.getTaxContext() };
+    } catch (err) {
+      return { success: false, message: err.message || 'Tax toggle failed' };
+    }
+  });
+
   // ─── Offline sync status (pending queue counts) ───────────────────────────
-  ipcMain.handle('pos:getSyncStatus', () => {
+  handle('pos:getSyncStatus', () => {
     const sales = localDb.getSalesQueue();
     const returns = localDb.getReturnsQueue();
     const shifts = localDb.getShiftsQueue();
+    const accountsPending = localDb.getPendingAccounts({ retryFailed: true }).length;
+    const accountsFailed = localDb.getAccountsQueue().filter((r) => String(r.syncStatus).toLowerCase() === 'failed').length;
     const total = sales.length + returns.length + shifts.length;
-    let catalogPending;
+    let catalogPending = 0;
+    let catalogFailed = 0;
     try {
       const pc = masterSqlite.pendingCounts();
       catalogPending = (pc.categories || 0) + (pc.subcategories || 0) + (pc.products || 0);
-    } catch { catalogPending = 0; }
+      catalogFailed = Number(pc.failed || 0) || 0;
+    } catch { /* ignore */ }
+    const meta = localDb.getAccountsSyncMeta();
     return {
       success: true,
       data: {
         pendingSales: sales.length,
         pendingReturns: returns.length,
         pendingShifts: shifts.length,
+        accountsPending,
+        failedCount: accountsFailed + catalogFailed,
+        catalogFailed,
         totalPending: total,
         catalogPending,
-        totalPendingAll: total + catalogPending,
+        totalPendingAll: total + catalogPending + accountsPending,
+        lastPushAt: meta.lastPushAt || null,
+        lastGetAt: meta.lastGetAt || null,
+        online: true,
       },
     };
+  });
+
+  handle('pos:pushAccountsQueue', async (_event, payload = {}) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      const online = await posApi.checkConnectivity(auth.session.accessToken);
+      if (!online?.online) {
+        return { success: false, offline: true, message: online?.message || 'Offline', pushed: 0, failed: 0 };
+      }
+      return await posAccountsSync.pushAccountsQueue(auth.session.accessToken, {
+        retryFailed: !!payload.retryFailed,
+      });
+    } catch (err) {
+      return { success: false, message: err.message || 'Accounts push failed', pushed: 0, failed: 0 };
+    }
+  });
+
+  handle('pos:pullAccountsFromCloud', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      const online = await posApi.checkConnectivity(auth.session.accessToken);
+      if (!online?.online) {
+        return { success: false, offline: true, message: online?.message || 'Offline', imported: 0 };
+      }
+      return await posAccountsSync.pullAccountsFromCloud(auth.session.accessToken);
+    } catch (err) {
+      return { success: false, message: err.message || 'Accounts get failed', imported: 0 };
+    }
+  });
+
+  handle('pos:accountsDashboard', async (_event, params = {}) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const from = params.from || today;
+      const to = params.to || today;
+      const lines = buildAccountsDaybook({ from, to });
+      const allLines = buildAccountsDaybook({});
+      const cashAll = runningBook(allLines, 'Cash', 0);
+      const bankAll = runningBook(allLines, 'Bank', 0);
+      const cashPeriod = runningBook(lines, 'Cash', 0);
+      const bankPeriod = runningBook(lines, 'Bank', 0);
+
+      let sales = 0;
+      let expenses = 0;
+      let otherIncome = 0;
+      let refunds = 0;
+      let cashSales = 0;
+      let cardSales = 0;
+      let bankSales = 0;
+      for (const l of lines) {
+        if (l.account === 'Sales') sales += Number(l.credit) || 0;
+        if (l.account === 'Expense') expenses += Number(l.debit) || 0;
+        if (l.account === 'Other Income') otherIncome += Number(l.credit) || 0;
+        if (l.type === 'refund') refunds += Number(l.credit) || 0;
+        if (l.type === 'sale') {
+          const m = String(l.method || '').toLowerCase();
+          const a = Number(l.debit) || 0;
+          if (m.includes('card')) cardSales += a;
+          else if (m.includes('bank')) bankSales += a;
+          else cashSales += a;
+        }
+      }
+
+      masterSqlite.reloadFromDiskSafe();
+      const balances = masterSqlite.getAllCustomerBalances() || {};
+      let receivables = 0;
+      for (const b of Object.values(balances)) receivables += Math.max(0, Number(b.accountBalance) || 0);
+
+      const payables = (localDb.getAccountsLedger() || [])
+        .filter((r) => r.type === 'supplier_payment')
+        .reduce((n, r) => n + (Number(r.amount) || 0), 0);
+
+      const netSales = roundMoney(sales - refunds);
+      const profit = roundMoney(netSales + otherIncome - expenses);
+      const recent = lines.slice(-12).reverse();
+      const shift = localDb.getActiveShift() || {};
+
+      return {
+        success: true,
+        data: {
+          from,
+          to,
+          cashBalance: cashAll.closing,
+          bankBalance: bankAll.closing,
+          receivables: roundMoney(receivables),
+          payables: roundMoney(payables),
+          todayIncome: roundMoney(netSales + otherIncome),
+          todayExpenses: roundMoney(expenses),
+          profit,
+          cashSales: roundMoney(cashSales),
+          cardSales: roundMoney(cardSales),
+          bankSales: roundMoney(bankSales),
+          openingCash: Number(shift.openingCash) || 0,
+          pendingAccounts: localDb.getPendingAccounts({ retryFailed: true }).length,
+          periodCashIn: cashPeriod.rows.reduce((n, r) => n + (Number(r.debit) || 0), 0),
+          periodCashOut: cashPeriod.rows.reduce((n, r) => n + (Number(r.credit) || 0), 0),
+          periodBankIn: bankPeriod.rows.reduce((n, r) => n + (Number(r.debit) || 0), 0),
+          periodBankOut: bankPeriod.rows.reduce((n, r) => n + (Number(r.credit) || 0), 0),
+          recent,
+        },
+      };
+    } catch (err) {
+      return { success: false, message: err.message || 'Dashboard failed' };
+    }
+  });
+
+  handle('pos:accountsList', async (_event, params = {}) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    let rows = localDb.getAccountsLedger().filter((r) => r.type !== 'cloud_ref');
+    if (params.type) rows = rows.filter((r) => String(r.type) === String(params.type));
+    if (params.types && Array.isArray(params.types)) {
+      const set = new Set(params.types.map(String));
+      rows = rows.filter((r) => set.has(String(r.type)));
+    }
+    return { success: true, data: rows.slice(0, params.limit || 200) };
+  });
+
+  handle('pos:accountsCreate', async (_event, payload = {}) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      const type = String(payload.type || '').toLowerCase();
+      if (!type) return { success: false, message: 'Type is required' };
+      const amount = Number(payload.amount);
+      if (!(amount > 0) && type !== 'daily_closing') {
+        return { success: false, message: 'Amount must be greater than zero' };
+      }
+      const row = localDb.addAccountsEntry({
+        ...payload,
+        type,
+        amount,
+        locationId: payload.locationId || activeShift?.locationId || null,
+        companyId: localDb.getActiveCompanyId() || null,
+      });
+      return { success: true, data: row };
+    } catch (err) {
+      return { success: false, message: err.message || 'Failed to save accounts entry' };
+    }
+  });
+
+  handle('pos:accountsSaveClosing', async (_event, payload = {}) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      const shift = localDb.getActiveShift() || {};
+      let openingCash = Number(payload.openingCash);
+      let cashSales = Number(payload.cashSales);
+      let cardSales = Number(payload.cardSales);
+      let bankSales = Number(payload.bankSales);
+      let cashReceived = Number(payload.cashReceived);
+      let cashExpenses = Number(payload.cashExpenses);
+      let cashWithdrawals = Number(payload.cashWithdrawals);
+      let expectedCash = Number(payload.expectedCash);
+
+      if (!Number.isFinite(openingCash)) openingCash = Number(shift.openingCash) || 0;
+      const ledger = localDb.getAccountsLedger();
+      const today = new Date().toISOString().slice(0, 10);
+      if (!Number.isFinite(cashExpenses)) {
+        cashExpenses = ledger
+          .filter((r) => String(r.date).slice(0, 10) === today && r.type === 'expense' && String(r.paymentMethod || 'Cash').toLowerCase() === 'cash')
+          .reduce((n, r) => n + (Number(r.amount) || 0), 0);
+      }
+      if (!Number.isFinite(cashWithdrawals)) {
+        cashWithdrawals = ledger
+          .filter((r) => String(r.date).slice(0, 10) === today && (r.type === 'withdrawal' || r.type === 'cash_withdrawal'))
+          .reduce((n, r) => n + (Number(r.amount) || 0), 0);
+      }
+      if (!Number.isFinite(cashReceived)) {
+        cashReceived = ledger
+          .filter((r) => String(r.date).slice(0, 10) === today && r.type === 'customer_payment' && String(r.paymentMethod || 'Cash').toLowerCase() === 'cash')
+          .reduce((n, r) => n + (Number(r.amount) || 0), 0);
+      }
+
+      const sales = (masterSqlite.listAllLocalSales() || []).filter((s) => String(s.createdAt || '').slice(0, 10) === today);
+      if (!Number.isFinite(cashSales) || !Number.isFinite(cardSales) || !Number.isFinite(bankSales)) {
+        cashSales = 0; cardSales = 0; bankSales = 0;
+        for (const s of sales) {
+          for (const p of s.payments || []) {
+            const a = Number(p.amount) || 0;
+            const m = String(p.paymentMethod || '').toLowerCase();
+            if (m.includes('card')) cardSales += a;
+            else if (m.includes('bank')) bankSales += a;
+            else if (!(m.includes('credit') || m.includes('account') || m.includes('store'))) cashSales += a;
+          }
+        }
+      }
+      if (!Number.isFinite(expectedCash)) {
+        expectedCash = openingCash + cashSales + cashReceived - cashExpenses - cashWithdrawals;
+      }
+      const actualCash = Number(payload.actualCash);
+      if (!Number.isFinite(actualCash)) return { success: false, message: 'Enter actual closing cash' };
+      const difference = Math.round((actualCash - expectedCash) * 100) / 100;
+      const row = localDb.addDailyClosing({
+        openingCash,
+        cashSales,
+        cardSales,
+        bankSales,
+        cashReceived,
+        cashExpenses,
+        cashWithdrawals,
+        expectedCash,
+        actualCash,
+        difference,
+        notes: payload.notes || '',
+        shiftId: shift.id || null,
+        date: payload.date || today,
+      });
+      return { success: true, data: row };
+    } catch (err) {
+      return { success: false, message: err.message || 'Closing save failed' };
+    }
+  });
+
+  handle('pos:accountsClosingHistory', async () => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    return { success: true, data: localDb.getAccountsClosingHistory() };
+  });
+
+  /** Build unified day-book lines from sales + accounts ledger + returns. */
+  function buildAccountsDaybook({ from, to } = {}) {
+    const fromTs = from ? new Date(`${from}T00:00:00`).getTime() : 0;
+    const toTs = to ? new Date(`${to}T23:59:59.999`).getTime() : Date.now() + 86400000;
+    const inRange = (iso) => {
+      const t = new Date(iso || 0).getTime();
+      return t >= fromTs && t <= toTs;
+    };
+    const lines = [];
+
+    try { masterSqlite.reloadFromDiskSafe(); } catch { /* ignore */ }
+    const sales = masterSqlite.listAllLocalSales() || [];
+    for (const s of sales) {
+      if (!inRange(s.createdAt)) continue;
+      const total = roundMoney(saleGrandTotal(s));
+      const inv = s.invoiceNumber || s.id;
+      for (const p of s.payments || []) {
+        const amt = roundMoney(p.amount);
+        if (!(amt > 0)) continue;
+        const method = String(p.paymentMethod || 'Cash');
+        const m = method.toLowerCase();
+        const isCredit = m.includes('credit') || m.includes('account') || m.includes('store');
+        lines.push({
+          id: `sale:${s.id}:${method}`,
+          date: s.createdAt,
+          voucher: inv,
+          type: isCredit ? 'credit_sale' : 'sale',
+          particular: `Sale · ${method}${s.customerName ? ` · ${s.customerName}` : ''}`,
+          account: isCredit ? 'Receivable' : (m.includes('card') || m.includes('bank') ? 'Bank' : 'Cash'),
+          debit: isCredit ? 0 : amt,
+          credit: 0,
+          method,
+          partyName: s.customerName || '',
+          partyId: s.customerId || null,
+          source: 'sale',
+        });
+      }
+      // revenue recognition (memo for daybook)
+      lines.push({
+        id: `sale-rev:${s.id}`,
+        date: s.createdAt,
+        voucher: inv,
+        type: 'sale_revenue',
+        particular: `Sales revenue${s.customerName ? ` · ${s.customerName}` : ''}`,
+        account: 'Sales',
+        debit: 0,
+        credit: total,
+        method: '',
+        partyName: s.customerName || '',
+        partyId: s.customerId || null,
+        source: 'sale',
+      });
+    }
+
+    const returns = masterSqlite.listAllLocalReturns() || [];
+    for (const r of returns) {
+      if (!inRange(r.createdAt)) continue;
+      const amt = roundMoney(r.refundAmount || 0);
+      if (!(amt > 0)) continue;
+      const method = String(r.refundMethod || 'Cash');
+      const m = method.toLowerCase();
+      lines.push({
+        id: `ret:${r.id}`,
+        date: r.createdAt,
+        voucher: r.invoiceNumber || r.id,
+        type: 'refund',
+        particular: `Refund · ${method}`,
+        account: m.includes('card') || m.includes('bank') ? 'Bank' : 'Cash',
+        debit: 0,
+        credit: amt,
+        method,
+        source: 'return',
+      });
+    }
+
+    const ledger = (localDb.getAccountsLedger() || []).filter((r) => r.type !== 'cloud_ref');
+    for (const r of ledger) {
+      const dt = r.transactionDate || r.date || r.createdAt;
+      if (!inRange(dt)) continue;
+      const amt = roundMoney(r.amount);
+      const t = String(r.type || '');
+      const method = String(r.paymentMethod || 'Cash');
+      const m = method.toLowerCase();
+      const bankish = m.includes('card') || m.includes('bank');
+      let debit = 0;
+      let credit = 0;
+      let account = 'Cash';
+      if (t === 'expense') {
+        credit = amt;
+        account = bankish ? 'Bank' : 'Cash';
+      } else if (t === 'income' || t === 'customer_payment' || t === 'deposit' || t === 'cash_deposit') {
+        debit = amt;
+        account = bankish ? 'Bank' : 'Cash';
+      } else if (t === 'supplier_payment' || t === 'withdrawal' || t === 'cash_withdrawal') {
+        credit = amt;
+        account = bankish ? 'Bank' : 'Cash';
+      } else if (t === 'transfer') {
+        const toBank = String(r.direction || 'cash_to_bank') !== 'bank_to_cash';
+        lines.push({
+          id: `${r.id}:out`,
+          date: dt,
+          voucher: r.id,
+          type: t,
+          particular: r.description || r.notes || 'Transfer out',
+          account: toBank ? 'Cash' : 'Bank',
+          debit: 0,
+          credit: amt,
+          method,
+          partyName: r.partyName || '',
+          partyId: r.partyId || null,
+          source: 'accounts',
+          syncStatus: r.syncStatus,
+        });
+        lines.push({
+          id: `${r.id}:in`,
+          date: dt,
+          voucher: r.id,
+          type: t,
+          particular: r.description || r.notes || 'Transfer in',
+          account: toBank ? 'Bank' : 'Cash',
+          debit: amt,
+          credit: 0,
+          method,
+          partyName: r.partyName || '',
+          partyId: r.partyId || null,
+          source: 'accounts',
+          syncStatus: r.syncStatus,
+        });
+        continue;
+      } else {
+        continue;
+      }
+      lines.push({
+        id: r.id,
+        date: dt,
+        voucher: r.id,
+        type: t,
+        particular: r.description || r.notes || t,
+        account,
+        debit,
+        credit,
+        method,
+        category: r.category || '',
+        partyName: r.partyName || '',
+        partyId: r.partyId || null,
+        source: 'accounts',
+        syncStatus: r.syncStatus,
+      });
+      if (t === 'expense') {
+        lines.push({
+          id: `${r.id}:exp`,
+          date: dt,
+          voucher: r.id,
+          type: 'expense_pl',
+          particular: `Expense · ${r.category || 'General'}`,
+          account: 'Expense',
+          debit: amt,
+          credit: 0,
+          method,
+          category: r.category || '',
+          source: 'accounts',
+        });
+      }
+      if (t === 'income') {
+        lines.push({
+          id: `${r.id}:inc`,
+          date: dt,
+          voucher: r.id,
+          type: 'income_pl',
+          particular: `Other income · ${r.category || ''}`,
+          account: 'Other Income',
+          debit: 0,
+          credit: amt,
+          method,
+          category: r.category || '',
+          source: 'accounts',
+        });
+      }
+    }
+
+    lines.sort((a, b) => new Date(a.date) - new Date(b.date));
+    return lines;
+  }
+
+  function runningBook(lines, accountName, opening = 0) {
+    let bal = roundMoney(opening);
+    const rows = [];
+    for (const l of lines) {
+      if (String(l.account) !== accountName) continue;
+      bal = roundMoney(bal + (Number(l.debit) || 0) - (Number(l.credit) || 0));
+      rows.push({ ...l, balance: bal });
+    }
+    return { opening: roundMoney(opening), closing: bal, rows };
+  }
+
+  handle('pos:accountsDaybook', async (_event, params = {}) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      const lines = buildAccountsDaybook(params);
+      return { success: true, data: { lines, count: lines.length } };
+    } catch (err) {
+      return { success: false, message: err.message || 'Day book failed' };
+    }
+  });
+
+  handle('pos:accountsBook', async (_event, params = {}) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      const book = String(params.book || 'cash').toLowerCase();
+      const account = book === 'bank' ? 'Bank' : 'Cash';
+      const lines = buildAccountsDaybook(params);
+      const data = runningBook(lines, account, Number(params.opening) || 0);
+      return { success: true, data: { account, ...data } };
+    } catch (err) {
+      return { success: false, message: err.message || 'Book failed' };
+    }
+  });
+
+  handle('pos:accountsLedger', async (_event, params = {}) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      const kind = String(params.kind || 'cash').toLowerCase();
+      const lines = buildAccountsDaybook(params);
+
+      if (kind === 'customer' && params.partyId) {
+        masterSqlite.reloadFromDiskSafe();
+        const ledger = masterSqlite.listCustomerLedger(params.partyId, 1000) || [];
+        const fromTs = params.from ? new Date(`${params.from}T00:00:00`).getTime() : 0;
+        const toTs = params.to ? new Date(`${params.to}T23:59:59.999`).getTime() : Date.now() + 86400000;
+        let bal = 0;
+        const rows = [];
+        for (const e of ledger) {
+          const dt = e.createdAt || e.date;
+          const t = new Date(dt || 0).getTime();
+          if (t < fromTs || t > toTs) continue;
+          const amt = Number(e.amount) || 0;
+          const pts = Number(e.points) || 0;
+          if (e.kind === 'ACCOUNT') bal = roundMoney(bal + amt);
+          rows.push({
+            date: dt,
+            particular: e.note || `${e.kind}:${e.type}`,
+            reference: e.reference || '',
+            debit: amt > 0 ? amt : 0,
+            credit: amt < 0 ? Math.abs(amt) : 0,
+            points: pts,
+            balance: bal,
+            kind: e.kind,
+            type: e.type,
+          });
+        }
+        const cust = masterSqlite.getCustomerById(params.partyId);
+        const balances = masterSqlite.getCustomerBalances(params.partyId);
+        return {
+          success: true,
+          data: {
+            title: cust?.name || 'Customer',
+            kind: 'customer',
+            opening: 0,
+            closing: balances.accountBalance,
+            balances,
+            rows,
+          },
+        };
+      }
+
+      if (kind === 'supplier') {
+        const name = String(params.partyName || '').trim().toLowerCase();
+        const rows = [];
+        let bal = 0;
+        for (const l of lines) {
+          if (l.type !== 'supplier_payment') continue;
+          if (name && String(l.partyName || '').toLowerCase() !== name) continue;
+          bal = roundMoney(bal + (Number(l.credit) || 0));
+          rows.push({ ...l, balance: bal });
+        }
+        return {
+          success: true,
+          data: { title: params.partyName || 'Suppliers', kind: 'supplier', opening: 0, closing: bal, rows },
+        };
+      }
+
+      const map = {
+        cash: 'Cash',
+        bank: 'Bank',
+        sales: 'Sales',
+        expense: 'Expense',
+        income: 'Other Income',
+      };
+      const account = map[kind] || 'Cash';
+      const data = runningBook(lines, account, 0);
+      return { success: true, data: { title: account, kind, ...data } };
+    } catch (err) {
+      return { success: false, message: err.message || 'Ledger failed' };
+    }
+  });
+
+  handle('pos:accountsReport', async (_event, params = {}) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    try {
+      const report = String(params.report || 'profit').toLowerCase();
+      const lines = buildAccountsDaybook(params);
+      const from = params.from || null;
+      const to = params.to || null;
+
+      if (report === 'profit') {
+        let sales = 0;
+        let otherIncome = 0;
+        let expenses = 0;
+        let refunds = 0;
+        for (const l of lines) {
+          if (l.account === 'Sales') sales += Number(l.credit) || 0;
+          if (l.account === 'Other Income') otherIncome += Number(l.credit) || 0;
+          if (l.account === 'Expense') expenses += Number(l.debit) || 0;
+          if (l.type === 'refund') refunds += Number(l.credit) || 0;
+        }
+        sales = roundMoney(sales);
+        otherIncome = roundMoney(otherIncome);
+        expenses = roundMoney(expenses);
+        refunds = roundMoney(refunds);
+        const netSales = roundMoney(sales - refunds);
+        const profit = roundMoney(netSales + otherIncome - expenses);
+        return {
+          success: true,
+          data: {
+            report: 'profit',
+            from,
+            to,
+            rows: [
+              { label: 'Gross sales', amount: sales },
+              { label: 'Less: refunds', amount: -refunds },
+              { label: 'Net sales', amount: netSales },
+              { label: 'Other income', amount: otherIncome },
+              { label: 'Less: expenses', amount: -expenses },
+              { label: 'Estimated profit', amount: profit, emphasize: true },
+            ],
+            totals: { sales, refunds, netSales, otherIncome, expenses, profit },
+          },
+        };
+      }
+
+      if (report === 'cashflow') {
+        const cash = runningBook(lines, 'Cash', Number(params.openingCash) || 0);
+        const bank = runningBook(lines, 'Bank', Number(params.openingBank) || 0);
+        return {
+          success: true,
+          data: {
+            report: 'cashflow',
+            from,
+            to,
+            cash,
+            bank,
+            rows: [
+              { label: 'Cash opening', amount: cash.opening },
+              { label: 'Cash closing', amount: cash.closing },
+              { label: 'Bank opening', amount: bank.opening },
+              { label: 'Bank closing', amount: bank.closing },
+              { label: 'Net cash movement', amount: roundMoney(cash.closing - cash.opening) },
+              { label: 'Net bank movement', amount: roundMoney(bank.closing - bank.opening) },
+            ],
+          },
+        };
+      }
+
+      if (report === 'expenses') {
+        const byCat = {};
+        for (const l of lines) {
+          if (l.account !== 'Expense') continue;
+          const cat = l.category || 'Uncategorized';
+          byCat[cat] = roundMoney((byCat[cat] || 0) + (Number(l.debit) || 0));
+        }
+        const rows = Object.entries(byCat)
+          .map(([label, amount]) => ({ label, amount }))
+          .sort((a, b) => b.amount - a.amount);
+        const total = rows.reduce((n, r) => n + r.amount, 0);
+        return { success: true, data: { report: 'expenses', from, to, rows, total: roundMoney(total) } };
+      }
+
+      if (report === 'salesmix') {
+        const byMethod = {};
+        for (const l of lines) {
+          if (l.type !== 'sale' && l.type !== 'credit_sale') continue;
+          const m = l.method || 'Other';
+          byMethod[m] = roundMoney((byMethod[m] || 0) + (Number(l.debit) || 0));
+        }
+        // credit sales don't debit cash — count from credit_sale using revenue side
+        for (const l of lines) {
+          if (l.type !== 'credit_sale') continue;
+          // already counted via debit 0 — use particular? Better recount from sales payments in daybook sale lines only
+        }
+        const rows = Object.entries(byMethod)
+          .map(([label, amount]) => ({ label, amount }))
+          .sort((a, b) => b.amount - a.amount);
+        // Add on-account from credit_sale by looking at sale_revenue paired? Simpler: scan sales again
+        let credit = 0;
+        for (const l of lines) {
+          if (l.type === 'credit_sale') {
+            // no debit — skip
+          }
+        }
+        try {
+          masterSqlite.reloadFromDiskSafe();
+          const fromTs = from ? new Date(`${from}T00:00:00`).getTime() : 0;
+          const toTs = to ? new Date(`${to}T23:59:59.999`).getTime() : Date.now() + 86400000;
+          for (const s of masterSqlite.listAllLocalSales() || []) {
+            const t = new Date(s.createdAt || 0).getTime();
+            if (t < fromTs || t > toTs) continue;
+            for (const p of s.payments || []) {
+              const m = String(p.paymentMethod || '').toLowerCase();
+              if (m.includes('credit') || m.includes('account') || m.includes('store')) {
+                credit = roundMoney(credit + (Number(p.amount) || 0));
+              }
+            }
+          }
+        } catch { /* ignore */ }
+        if (credit > 0) rows.push({ label: 'On Account / Credit', amount: credit });
+        const total = rows.reduce((n, r) => n + r.amount, 0);
+        return { success: true, data: { report: 'salesmix', from, to, rows, total: roundMoney(total) } };
+      }
+
+      if (report === 'receivables') {
+        masterSqlite.reloadFromDiskSafe();
+        const balances = masterSqlite.getAllCustomerBalances() || {};
+        const customers = masterSqlite.searchCustomers({ query: '', limit: 100000 }) || [];
+        const rows = customers
+          .map((c) => ({
+            id: c.id,
+            label: c.name || c.id,
+            phone: c.phone || '',
+            amount: roundMoney(balances[c.id]?.accountBalance || 0),
+            storeCredit: roundMoney(balances[c.id]?.storeCredit || 0),
+          }))
+          .filter((r) => r.amount > 0.009)
+          .sort((a, b) => b.amount - a.amount);
+        const total = rows.reduce((n, r) => n + r.amount, 0);
+        return { success: true, data: { report: 'receivables', rows, total: roundMoney(total) } };
+      }
+
+      if (report === 'payables') {
+        const bySup = {};
+        for (const l of lines) {
+          if (l.type !== 'supplier_payment') continue;
+          const name = l.partyName || 'Supplier';
+          bySup[name] = roundMoney((bySup[name] || 0) + (Number(l.credit) || Number(l.amount) || 0));
+        }
+        // Also from raw ledger amounts
+        for (const r of localDb.getAccountsLedger() || []) {
+          if (r.type !== 'supplier_payment') continue;
+          const dt = r.transactionDate || r.date || r.createdAt;
+          const t = new Date(dt || 0).getTime();
+          const fromTs = from ? new Date(`${from}T00:00:00`).getTime() : 0;
+          const toTs = to ? new Date(`${to}T23:59:59.999`).getTime() : Date.now() + 86400000;
+          if (t < fromTs || t > toTs) continue;
+          const name = r.partyName || 'Supplier';
+          if (!bySup[name]) bySup[name] = 0;
+        }
+        const rows = Object.entries(bySup)
+          .map(([label, amount]) => ({ label, amount }))
+          .sort((a, b) => b.amount - a.amount);
+        const total = rows.reduce((n, r) => n + r.amount, 0);
+        return { success: true, data: { report: 'payables', from, to, rows, total: roundMoney(total), note: 'Payments recorded in POS (not open AP bills)' } };
+      }
+
+      // trial / account balances
+      const cash = runningBook(lines, 'Cash', 0);
+      const bank = runningBook(lines, 'Bank', 0);
+      const sales = runningBook(lines, 'Sales', 0);
+      const expense = runningBook(lines, 'Expense', 0);
+      const income = runningBook(lines, 'Other Income', 0);
+      let ar = 0;
+      try {
+        const balances = masterSqlite.getAllCustomerBalances() || {};
+        for (const b of Object.values(balances)) ar += Math.max(0, Number(b.accountBalance) || 0);
+      } catch { /* ignore */ }
+      return {
+        success: true,
+        data: {
+          report: 'trial',
+          from,
+          to,
+          rows: [
+            { label: 'Cash in Hand', debit: Math.max(0, cash.closing), credit: Math.max(0, -cash.closing) },
+            { label: 'Bank', debit: Math.max(0, bank.closing), credit: Math.max(0, -bank.closing) },
+            { label: 'Accounts Receivable', debit: roundMoney(ar), credit: 0 },
+            { label: 'Sales / Revenue', debit: 0, credit: sales.closing },
+            { label: 'Other Income', debit: 0, credit: income.closing },
+            { label: 'Expenses', debit: expense.closing, credit: 0 },
+          ],
+        },
+      };
+    } catch (err) {
+      return { success: false, message: err.message || 'Report failed' };
+    }
   });
 
   ipcMain.handle('app:getInfo', () => {

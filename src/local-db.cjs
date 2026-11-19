@@ -21,6 +21,10 @@ const DATA_FILES = [
   'queue_returns.json',
   'queue_shifts.json',
   'queue_held.json',
+  'queue_accounts.json',
+  'accounts_ledger.json',
+  'accounts_closing.json',
+  'accounts_sync_meta.json',
   'active_shift.json',
   'history_shifts.json',
   'receipt_settings.json',
@@ -596,6 +600,178 @@ function resetRestaurantTokenCounter() {
   });
 }
 
+// ─── POS ACCOUNTS (local-first operational accounting) ────────────────────────
+function getAccountsQueue() {
+  return readJson('queue_accounts.json', []);
+}
+
+function saveAccountsQueue(list) {
+  return writeJson('queue_accounts.json', Array.isArray(list) ? list : []);
+}
+
+function getAccountsLedger() {
+  return readJson('accounts_ledger.json', []);
+}
+
+function saveAccountsLedger(list) {
+  return writeJson('accounts_ledger.json', Array.isArray(list) ? list : []);
+}
+
+function getAccountsClosingHistory() {
+  return readJson('accounts_closing.json', []);
+}
+
+function saveAccountsClosingHistory(list) {
+  return writeJson('accounts_closing.json', Array.isArray(list) ? list : []);
+}
+
+function getAccountsSyncMeta() {
+  return readJson('accounts_sync_meta.json', {
+    lastPushAt: null,
+    lastGetAt: null,
+    lastError: null,
+  });
+}
+
+function saveAccountsSyncMeta(patch = {}) {
+  const cur = getAccountsSyncMeta();
+  const next = { ...cur, ...patch };
+  writeJson('accounts_sync_meta.json', next);
+  return next;
+}
+
+function newAccountsId(prefix = 'acc') {
+  return `local-${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+}
+
+/**
+ * Persist an operational accounts record locally (ledger + pending sync queue).
+ * Dedupes by id / sourceRef when re-posting the same POS event.
+ */
+function addAccountsEntry(payload = {}) {
+  const now = new Date().toISOString();
+  const id = payload.id || newAccountsId(payload.type || 'txn');
+  const sourceRef = payload.sourceRef ? String(payload.sourceRef) : null;
+
+  const ledger = getAccountsLedger();
+  if (sourceRef) {
+    const existing = ledger.find((r) => String(r.sourceRef || '') === sourceRef && r.type === payload.type);
+    if (existing) return existing;
+  }
+
+  const row = {
+    id,
+    clientId: id,
+    type: String(payload.type || 'expense'),
+    amount: Number(payload.amount) || 0,
+    date: payload.date || now.slice(0, 10),
+    transactionDate: payload.transactionDate || payload.date || now,
+    paymentMethod: payload.paymentMethod || 'Cash',
+    category: payload.category || '',
+    description: payload.description || payload.notes || '',
+    notes: payload.notes || '',
+    partyName: payload.partyName || '',
+    partyId: payload.partyId || null,
+    direction: payload.direction || null,
+    sourceRef,
+    locationId: payload.locationId || null,
+    companyId: payload.companyId || activeCompanyId || null,
+    expectedCash: payload.expectedCash,
+    actualCash: payload.actualCash,
+    difference: payload.difference,
+    syncStatus: 'pending',
+    cloudId: null,
+    failCount: 0,
+    lastError: null,
+    createdAt: now,
+    updatedAt: now,
+    ...payload,
+    id,
+    clientId: id,
+    syncStatus: 'pending',
+  };
+
+  ledger.unshift(row);
+  saveAccountsLedger(ledger.slice(0, 5000));
+
+  const queue = getAccountsQueue();
+  if (!queue.some((q) => String(q.id) === String(id))) {
+    queue.push(row);
+    saveAccountsQueue(queue);
+  }
+  return row;
+}
+
+function patchAccountsEntry(id, patch = {}) {
+  const ledger = getAccountsLedger();
+  const li = ledger.findIndex((r) => String(r.id) === String(id));
+  if (li >= 0) {
+    ledger[li] = { ...ledger[li], ...patch, updatedAt: new Date().toISOString() };
+    saveAccountsLedger(ledger);
+  }
+  const queue = getAccountsQueue();
+  const qi = queue.findIndex((r) => String(r.id) === String(id));
+  if (qi >= 0) {
+    queue[qi] = { ...queue[qi], ...patch, updatedAt: new Date().toISOString() };
+    saveAccountsQueue(queue);
+  }
+  return li >= 0 ? ledger[li] : qi >= 0 ? queue[qi] : null;
+}
+
+function removeFromAccountsQueue(ids) {
+  const idSet = new Set(Array.isArray(ids) ? ids.map(String) : [String(ids)]);
+  const queue = getAccountsQueue().filter((r) => !idSet.has(String(r.id)));
+  saveAccountsQueue(queue);
+  return queue.length;
+}
+
+function getPendingAccounts(opts = {}) {
+  const retryFailed = !!opts.retryFailed;
+  return getAccountsQueue().filter((r) => {
+    const st = String(r.syncStatus || 'pending').toLowerCase();
+    if (st === 'synced') return false;
+    if (st === 'failed') return retryFailed || (Number(r.failCount) || 0) < 8;
+    return true;
+  });
+}
+
+function addDailyClosing(snapshot = {}) {
+  const now = new Date().toISOString();
+  const row = {
+    id: snapshot.id || newAccountsId('closing'),
+    date: snapshot.date || now.slice(0, 10),
+    openingCash: Number(snapshot.openingCash) || 0,
+    cashSales: Number(snapshot.cashSales) || 0,
+    cardSales: Number(snapshot.cardSales) || 0,
+    bankSales: Number(snapshot.bankSales) || 0,
+    cashReceived: Number(snapshot.cashReceived) || 0,
+    cashExpenses: Number(snapshot.cashExpenses) || 0,
+    cashWithdrawals: Number(snapshot.cashWithdrawals) || 0,
+    expectedCash: Number(snapshot.expectedCash) || 0,
+    actualCash: Number(snapshot.actualCash) || 0,
+    difference: Number(snapshot.difference) || 0,
+    notes: snapshot.notes || '',
+    shiftId: snapshot.shiftId || null,
+    createdAt: now,
+  };
+  const hist = getAccountsClosingHistory();
+  hist.unshift(row);
+  saveAccountsClosingHistory(hist.slice(0, 365));
+  addAccountsEntry({
+    id: row.id,
+    type: 'daily_closing',
+    amount: Math.abs(row.difference) || 0.01,
+    date: row.date,
+    description: `Daily closing · expected ${row.expectedCash} actual ${row.actualCash}`,
+    notes: row.notes,
+    expectedCash: row.expectedCash,
+    actualCash: row.actualCash,
+    difference: row.difference,
+    sourceRef: `closing:${row.date}:${row.shiftId || 'manual'}`,
+  });
+  return row;
+}
+
 module.exports = {
   initialize,
   setCompanyScope,
@@ -649,4 +825,18 @@ module.exports = {
   allocateRestaurantToken,
   maybeResetRestaurantToken,
   resetRestaurantTokenCounter,
+  getAccountsQueue,
+  saveAccountsQueue,
+  getAccountsLedger,
+  saveAccountsLedger,
+  getAccountsClosingHistory,
+  saveAccountsClosingHistory,
+  getAccountsSyncMeta,
+  saveAccountsSyncMeta,
+  addAccountsEntry,
+  patchAccountsEntry,
+  removeFromAccountsQueue,
+  getPendingAccounts,
+  addDailyClosing,
+  newAccountsId,
 };

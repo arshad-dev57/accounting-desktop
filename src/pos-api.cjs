@@ -299,6 +299,10 @@ function fetchTaxContext(token) {
   return request(token, 'GET', '/api/tax/context');
 }
 
+function setTaxEnabled(token, enabled) {
+  return request(token, 'PUT', '/api/tax/enabled', { enabled: !!enabled });
+}
+
 // ─── Customers (Warehouse) ───────────────────────────────────────────────────
 function searchCustomers(token, q, limit = 10) {
   return request(token, 'GET', `/api/warehouse/customers/search?q=${encodeURIComponent(q)}&limit=${limit}`);
@@ -458,6 +462,19 @@ function deleteRecipe(token, menuProductId) {
   return request(token, 'DELETE', `/api/pos/recipes/${encodeURIComponent(menuProductId)}`);
 }
 
+function syncPosAccounts(token, body) {
+  return request(token, 'POST', '/api/pos/accounts/sync', body || { records: [] });
+}
+
+function getPosAccountMappings(token) {
+  return request(token, 'GET', '/api/pos/accounts/mappings');
+}
+
+function listSyncedPosAccounts(token, since) {
+  const qs = since ? `?since=${encodeURIComponent(since)}` : '';
+  return request(token, 'GET', `/api/pos/accounts/synced${qs}`);
+}
+
 module.exports = {
   setActiveCompanyId,
   getActiveCompanyId,
@@ -516,6 +533,7 @@ module.exports = {
   fetchAllSuppliers,
   fetchAllCustomers,
   fetchTaxContext,
+  setTaxEnabled,
   checkUserStatus,
   fetchSessionStatus,
   listCompanyUsers,
@@ -524,4 +542,7 @@ module.exports = {
   getRecipe,
   saveRecipe,
   deleteRecipe,
+  syncPosAccounts,
+  getPosAccountMappings,
+  listSyncedPosAccounts,
 };

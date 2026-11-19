@@ -77,6 +77,24 @@
       .kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
       .kpi div { background: #f8fafc; border-radius: 10px; padding: 12px; }
       .kpi small { color: var(--muted); font-size: 11px; }
+      .rcp-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 380px); gap: 20px; align-items: start; }
+      @media (max-width: 960px) { .rcp-grid { grid-template-columns: 1fr; } }
+      .rcp-section h3 { margin: 0 0 14px; font-size: 14px; }
+      .rcp-section input, .rcp-section select, .rcp-section textarea { width: 100%; margin-bottom: 10px; }
+      .rcp-label { display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px; }
+      .rcp-toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .rcp-toggle-row { display: flex; align-items: center; justify-content: space-between; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 13px; cursor: pointer; }
+      .rcp-logo-preview { height: 56px; max-width: 140px; object-fit: contain; border: 1px solid var(--line); border-radius: 8px; padding: 6px; background: #f8fafc; }
+      .rcp-preview-label { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 8px; letter-spacing: 0.6px; }
+      .rcp-preview-wrap { background: #e5e7eb; border-radius: 14px; padding: 12px; max-height: 75vh; overflow: auto; position: sticky; top: 8px; }
+      .tax-toggle-card { border-radius: 14px; border: 1px solid var(--line); background: #fff; }
+      .tax-toggle-card.tax-on { border-color: #a7f3d0; background: #ecfdf5; }
+      .tax-toggle-inner { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+      .tax-switch { position: relative; width: 48px; height: 28px; border: 0; border-radius: 999px; background: #d1d5db; cursor: pointer; flex-shrink: 0; padding: 0; }
+      .tax-switch.on { background: #014582; }
+      .tax-switch-knob { position: absolute; top: 2px; left: 2px; width: 24px; height: 24px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2); transition: transform 0.15s ease; }
+      .tax-switch.on .tax-switch-knob { transform: translateX(20px); }
+      .tax-switch:disabled { opacity: 0.5; cursor: not-allowed; }
     </style>
   </head>
   <body>
@@ -84,7 +102,7 @@
       <div class="top">
         <div>
           <h1>Point of Sale Management</h1>
-          <p id="subtitle">Admin only · Terminals · Shifts · Sales · Returns</p>
+          <p id="subtitle">Admin · Terminals · Users · Shifts · Sales · Returns · Receipt · Tax · Audit</p>
         </div>
         <div class="top-actions">
           <button class="btn-pos" id="btn-open-pos" type="button">Open POS</button>
@@ -100,9 +118,6 @@
         <div class="panel" id="panel-sales"></div>
         <div class="panel" id="panel-returns"></div>
         <div class="panel" id="panel-receipt"></div>
-        <div class="panel" id="panel-printer"></div>
-        <div class="panel" id="panel-scanner"></div>
-        <div class="panel" id="panel-payments"></div>
         <div class="panel" id="panel-tax"></div>
         <div class="panel" id="panel-audit"></div>
       </div>
@@ -112,6 +127,7 @@
     </div>
     <script src="./session-guard.js"></script>
     <script src="./pos-receipt.js"></script>
+    <script src="./management-receipt-editor.js"></script>
     <script src="./management.js"></script>
   </body>
 </html>

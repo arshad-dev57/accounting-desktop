@@ -54,6 +54,17 @@ const ALLOWED_CHANNELS = new Set([
   'pos:deleteHeldSale',
   'pos:syncOfflineSales',
   'pos:getSyncStatus',
+  'pos:pushAccountsQueue',
+  'pos:pullAccountsFromCloud',
+  'pos:accountsDashboard',
+  'pos:accountsList',
+  'pos:accountsCreate',
+  'pos:accountsSaveClosing',
+  'pos:accountsClosingHistory',
+  'pos:accountsDaybook',
+  'pos:accountsBook',
+  'pos:accountsLedger',
+  'pos:accountsReport',
   'pos:processReturn',
   'pos:listLocalSales',
   'pos:listLocalReturns',
@@ -127,6 +138,7 @@ const ALLOWED_CHANNELS = new Set([
   'products:list',
   'tax:getContext',
   'tax:refreshContext',
+  'tax:setEnabled',
 ]);
 
 function invoke(channel, payload) {
@@ -265,6 +277,17 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
     deleteHeldSale: (id) => invoke('pos:deleteHeldSale', id),
         syncOfflineSales: () => invoke('pos:syncOfflineSales'),
     getSyncStatus: () => invoke('pos:getSyncStatus'),
+    pushAccountsQueue: (payload) => invoke('pos:pushAccountsQueue', payload || {}),
+    pullAccountsFromCloud: () => invoke('pos:pullAccountsFromCloud'),
+    accountsDashboard: (params) => invoke('pos:accountsDashboard', params || {}),
+    accountsList: (params) => invoke('pos:accountsList', params || {}),
+    accountsCreate: (payload) => invoke('pos:accountsCreate', payload),
+    accountsSaveClosing: (payload) => invoke('pos:accountsSaveClosing', payload || {}),
+    accountsClosingHistory: () => invoke('pos:accountsClosingHistory'),
+    accountsDaybook: (params) => invoke('pos:accountsDaybook', params || {}),
+    accountsBook: (params) => invoke('pos:accountsBook', params || {}),
+    accountsLedger: (params) => invoke('pos:accountsLedger', params || {}),
+    accountsReport: (params) => invoke('pos:accountsReport', params || {}),
     processReturn: (payload) => invoke('pos:processReturn', payload),
     listLocalSales: () => invoke('pos:listLocalSales'),
     listLocalReturns: () => invoke('pos:listLocalReturns'),
@@ -349,6 +372,7 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
   tax: {
     getContext: () => invoke('tax:getContext'),
     refreshContext: () => invoke('tax:refreshContext'),
+    setEnabled: (enabled) => invoke('tax:setEnabled', enabled),
   },
   kitchen: {
     onNewOrder: (callback) => {

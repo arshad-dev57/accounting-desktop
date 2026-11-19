@@ -1,0 +1,424 @@
+/* Bisonstechs POS — login & auth layout (lg-* classes; shared with shift page) */
+
+:root {
+  --lg-ink: #0f172a;
+  --lg-muted: #64748b;
+  --lg-line: #e2e8f0;
+  --lg-field: #f8fafc;
+  --lg-accent: #014582;
+  --lg-accent-2: #023a6b;
+  --lg-danger: #b91c1c;
+  --lg-danger-bg: #fef2f2;
+  --lg-danger-line: #fecaca;
+  --lg-warn: #92400e;
+  --lg-warn-bg: #fffbeb;
+  --lg-warn-line: #fde68a;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body.lg-body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: #fff;
+  color: var(--lg-ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.lg {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+/* ---------- Left hero ---------- */
+.lg-hero {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 44px 56px;
+  color: #e6ebf6;
+  background:
+    radial-gradient(900px 520px at 8% -10%, rgba(1, 69, 130, 0.55), transparent 60%),
+    radial-gradient(700px 520px at 110% 110%, rgba(2, 58, 107, 0.45), transparent 60%),
+    linear-gradient(160deg, #0b1224, #0f1b3d);
+}
+
+.lg-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(ellipse at 30% 30%, #000 15%, transparent 75%);
+  mask-image: radial-gradient(ellipse at 30% 30%, #000 15%, transparent 75%);
+  pointer-events: none;
+}
+
+.lg-hero > * {
+  position: relative;
+}
+
+.lg-hero-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.lg-mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--lg-accent), var(--lg-accent-2));
+  box-shadow: 0 6px 18px rgba(37, 99, 235, 0.45);
+}
+
+.lg-mark svg {
+  width: 20px;
+  height: 20px;
+}
+
+.lg-hero-name {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.lg-hero-name b {
+  font-weight: 600;
+  color: #93b4ff;
+}
+
+.lg-hero-body {
+  max-width: 440px;
+}
+
+.lg-hero-body h2 {
+  margin: 0 0 16px;
+  font-size: clamp(32px, 3.4vw, 44px);
+  line-height: 1.12;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: #fff;
+}
+
+.lg-hero-body p {
+  margin: 0 0 28px;
+  font-size: 15.5px;
+  line-height: 1.6;
+  color: #a9b6d3;
+}
+
+.lg-points {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.lg-points li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14.5px;
+  color: #d5ddf0;
+}
+
+.lg-tick {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: #93b4ff;
+  background: rgba(99, 140, 255, 0.16);
+  border: 1px solid rgba(147, 180, 255, 0.3);
+}
+
+.lg-tick svg {
+  width: 12px;
+  height: 12px;
+}
+
+.lg-hero-foot {
+  font-size: 12.5px;
+  color: #7886a8;
+}
+
+/* ---------- Right panel ---------- */
+.lg-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 28px;
+  background: #fff;
+}
+
+.lg-card {
+  width: 100%;
+  max-width: 400px;
+  animation: lg-rise 0.45s ease both;
+}
+
+.lg-brand {
+  margin-bottom: 30px;
+}
+
+.lg-brand img {
+  display: block;
+  width: 96px;
+  height: auto;
+  margin: 0 0 22px;
+}
+
+.lg-brand h1 {
+  margin: 0 0 6px;
+  font-size: 27px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--lg-ink);
+}
+
+.lg-brand .sub {
+  margin: 0;
+  font-size: 14px;
+  color: var(--lg-muted);
+}
+
+.lg-field {
+  margin-bottom: 18px;
+}
+
+.lg-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.lg-control {
+  position: relative;
+}
+
+.lg-ico {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  transform: translateY(-50%);
+  color: #94a3b8;
+  pointer-events: none;
+  transition: color 0.15s ease;
+}
+
+.lg-control:focus-within .lg-ico {
+  color: var(--lg-accent);
+}
+
+.lg-input {
+  width: 100%;
+  height: 46px;
+  padding: 0 44px 0 42px;
+  border: 1px solid var(--lg-line);
+  border-radius: 10px;
+  background: var(--lg-field);
+  font: inherit;
+  font-size: 14px;
+  color: var(--lg-ink);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.lg-input::placeholder {
+  color: #a3aebf;
+}
+
+.lg-input:hover {
+  border-color: #cbd5e1;
+}
+
+.lg-input:focus {
+  background: #fff;
+  border-color: var(--lg-accent);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.14);
+}
+
+/* password show/hide */
+.lg-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.lg-toggle:hover {
+  color: var(--lg-ink);
+  background: #eef2f7;
+}
+
+.lg-toggle:focus-visible {
+  outline: 2px solid var(--lg-accent);
+  outline-offset: 1px;
+}
+
+.lg-toggle svg {
+  width: 18px;
+  height: 18px;
+}
+
+.lg-toggle .lg-eye-off {
+  display: none;
+}
+
+.lg-toggle.is-on .lg-eye {
+  display: none;
+}
+
+.lg-toggle.is-on .lg-eye-off {
+  display: block;
+}
+
+/* messages (JS toggles display) */
+.lg-msg {
+  display: none;
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.lg-error {
+  color: var(--lg-danger);
+  background: var(--lg-danger-bg);
+  border: 1px solid var(--lg-danger-line);
+}
+
+.lg-blocked {
+  color: var(--lg-warn);
+  background: var(--lg-warn-bg);
+  border: 1px solid var(--lg-warn-line);
+}
+
+/* button */
+.lg-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  height: 46px;
+  margin-top: 4px;
+  border: 0;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #fff;
+  background: linear-gradient(135deg, var(--lg-accent), var(--lg-accent-2));
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.28);
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+
+.lg-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.36);
+}
+
+.lg-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.lg-btn:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.35);
+  outline-offset: 2px;
+}
+
+.lg-btn:disabled {
+  opacity: 0.8;
+  cursor: not-allowed;
+}
+
+.lg-btn:disabled::before {
+  content: "";
+  width: 15px;
+  height: 15px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: lg-spin 0.7s linear infinite;
+}
+
+.lg-hint {
+  margin: 18px 0 0;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--lg-muted);
+}
+
+/* ---------- Motion ---------- */
+@keyframes lg-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes lg-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lg-card,
+  .lg-btn:disabled::before {
+    animation: none;
+  }
+}
+
+/* ---------- Narrow windows ---------- */
+@media (max-width: 860px) {
+  .lg {
+    grid-template-columns: 1fr;
+  }
+  .lg-hero {
+    display: none;
+  }
+}
+

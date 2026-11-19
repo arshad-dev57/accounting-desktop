@@ -368,8 +368,17 @@ function loadLocalSettings() {
   if (thermal) thermal.checked = !!posSettings.autoPrintOnSale;
   fillReceiptSettingsForm();
   void loadInvoiceSerialSettings();
-  void loadRestaurantTokenSettings();
+  if (isRestaurantPos) void loadRestaurantTokenSettings();
+  else hideRestaurantTokenSettings();
   void syncReceiptSettingsFromWeb({ quiet: true });
+}
+
+function hideRestaurantTokenSettings() {
+  document.getElementById('restaurant-token-card')?.classList.add('hidden');
+}
+
+function showRestaurantTokenSettings() {
+  document.getElementById('restaurant-token-card')?.classList.remove('hidden');
 }
 
 function saveLocalSettings() {
@@ -477,6 +486,11 @@ let cachedTokenDesign = null;
 let lastSaleTokenPrint = null;
 
 async function loadRestaurantTokenSettings() {
+  if (!isRestaurantPos) {
+    hideRestaurantTokenSettings();
+    return;
+  }
+  showRestaurantTokenSettings();
   try {
     const res = await api.pos.getRestaurantTokenSettings();
     if (!res?.success || !res.data) return;
@@ -488,6 +502,10 @@ async function loadRestaurantTokenSettings() {
 }
 
 async function saveRestaurantTokenSettings() {
+  if (!isRestaurantPos) {
+    showToast('Token flow is only available in Restaurant POS', 'error');
+    return;
+  }
   const status = document.getElementById('token-settings-status');
   try {
     const res = await api.pos.saveRestaurantTokenSettings(tokenSettingsPayloadFromForm());
@@ -506,6 +524,10 @@ async function saveRestaurantTokenSettings() {
 }
 
 async function resetRestaurantTokenNow() {
+  if (!isRestaurantPos) {
+    showToast('Token flow is only available in Restaurant POS', 'error');
+    return;
+  }
   if (!confirm('Reset token counter to 1 for a new sequence?')) return;
   const status = document.getElementById('token-settings-status');
   try {
@@ -627,6 +649,10 @@ async function allocateAndPrintRestaurantTokens({
 }
 
 function previewCustomerToken() {
+  if (!isRestaurantPos) {
+    showToast('Token flow is only available in Restaurant POS', 'error');
+    return;
+  }
   if (!window.PosReceipt?.buildTokenHtml) {
     showToast('Token preview unavailable', 'error');
     return;
@@ -956,6 +982,22 @@ async function boot() {
     applyCompanyBranding(companyProfile);
   }
 
+  try {
+    const session = await api.auth.getSession();
+    const user = session?.user || {};
+    const admin = !!session?.isAdmin || isAdminRole(user.role);
+    const mgmtBtn = document.getElementById('btn-pos-admin');
+    if (mgmtBtn && admin) {
+      mgmtBtn.classList.remove('hidden');
+      if (!mgmtBtn.dataset.bound) {
+        mgmtBtn.dataset.bound = '1';
+        mgmtBtn.addEventListener('click', () => api.pos.enterManagement());
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
   // Get Tax context (company Tax Compliance from web → local cache)
   const taxRes = await api.tax.getContext();
   window.__bootSteps.push('getTaxContext done: ' + taxRes?.success + ' enabled=' + taxRes?.data?.enabled);
@@ -1008,6 +1050,8 @@ async function setupRestaurantUi() {
 
   isRestaurantPos = true;
   applyRestaurantBranding(user);
+  showRestaurantTokenSettings();
+  void loadRestaurantTokenSettings();
 
   if (isKitchenRole(user.role)) {
     await api.pos.enterRestaurantPos('kitchen');
@@ -1404,7 +1448,20 @@ function setupTabs() {
       if (targetTab === 'settings') {
         try { fillReceiptSettingsForm(); } catch (e) { console.warn('fillReceiptSettingsForm not defined', e); }
         try { void loadInvoiceSerialSettings(); } catch (e) { console.warn('loadInvoiceSerialSettings not defined', e); }
-        try { void loadRestaurantTokenSettings(); } catch (e) { console.warn('loadRestaurantTokenSettings not defined', e); }
+        try {
+          if (isRestaurantPos) void loadRestaurantTokenSettings();
+          else hideRestaurantTokenSettings();
+        } catch (e) { console.warn('loadRestaurantTokenSettings not defined', e); }
+        try { void updateOfflineCount(); } catch (e) { console.warn('updateOfflineCount', e); }
+      }
+      if (targetTab === 'accounts') {
+        try {
+          if (typeof window.PosAccounts?.refresh === 'function') {
+            void window.PosAccounts.refresh();
+          } else {
+            console.warn('[accounts] PosAccounts not loaded — check pos-accounts.js');
+          }
+        } catch (e) { console.warn('PosAccounts.refresh', e); }
       }
       if (targetTab === 'stock') { try { loadStockPanel(); } catch (e) { console.warn('loadStockPanel not defined', e); } }
       if (targetTab === 'expiry') { try { loadExpiryPanel(); } catch (e) { console.warn('loadExpiryPanel not defined', e); } }
@@ -1417,114 +1474,213 @@ function setupTabs() {
   });
 }
 
-// Offline sync helper — reads pending queue counts from main process
+function appendCloudSyncLog(line, tone = 'info') {
+  const log = document.getElementById('cloud-sync-log');
+  if (!log) return;
+  if (log.querySelector('.settings-muted') && log.children.length === 1) log.innerHTML = '';
+  const row = document.createElement('div');
+  row.style.marginBottom = '4px';
+  row.style.color = tone === 'error' ? '#b91c1c' : tone === 'success' ? '#047857' : '#334155';
+  row.textContent = `${new Date().toLocaleTimeString()} · ${line}`;
+  log.prepend(row);
+}
+
+function setCloudSyncMsg(text) {
+  const el = document.getElementById('cloud-sync-status-msg');
+  if (el) el.textContent = text || '';
+}
+
+function formatSyncTs(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return '—';
+  }
+}
+
+// Offline sync helper — updates Settings → Cloud Synchronization KPIs
 async function updateOfflineCount() {
   try {
     const res = await api.pos.getSyncStatus();
     const data = res?.data || {};
-    const count = data.catalogPending || data.totalPending || 0;
-    const btnSync = document.getElementById('btn-sync-offline');
-    if (!btnSync) return;
-    btnSync.style.display = 'flex';
-    const badge = document.getElementById('sync-count');
-    if (badge) {
-      if (count > 0) {
-        badge.textContent = count;
-        badge.style.display = 'inline-flex';
-      } else {
-        badge.style.display = 'none';
-      }
+    const pending =
+      Number(data.totalPendingAll || 0) ||
+      Number(data.pendingSales || 0) +
+        Number(data.pendingReturns || 0) +
+        Number(data.catalogPending || 0) +
+        Number(data.accountsPending || 0);
+    const failed = Number(data.failedCount || data.catalogFailed || 0);
+    const pendingEl = document.getElementById('cloud-sync-pending');
+    const failedEl = document.getElementById('cloud-sync-failed');
+    const connEl = document.getElementById('cloud-sync-connection');
+    const lastPushEl = document.getElementById('cloud-sync-last-push');
+    const lastGetEl = document.getElementById('cloud-sync-last-get');
+    if (pendingEl) pendingEl.textContent = String(pending);
+    if (failedEl) failedEl.textContent = String(failed);
+    if (lastPushEl) lastPushEl.textContent = formatSyncTs(data.lastPushAt || localStorage.getItem('pos_last_push_at'));
+    if (lastGetEl) lastGetEl.textContent = formatSyncTs(data.lastGetAt || localStorage.getItem('pos_last_get_at'));
+    if (connEl) {
+      connEl.textContent = data.online === false ? 'Offline' : 'Online / ready';
+      connEl.style.color = data.online === false ? '#b91c1c' : '#047857';
     }
   } catch (err) {
     console.warn('[sync] getSyncStatus error:', err);
+    const connEl = document.getElementById('cloud-sync-connection');
+    if (connEl) {
+      connEl.textContent = 'Unknown';
+      connEl.style.color = '#b45309';
+    }
   }
 }
 
-// Wire up the Sync button
-(function wireSync() {
-  const btnSync = document.getElementById('btn-sync-offline');
-  if (!btnSync) return;
-  btnSync.addEventListener('click', async () => {
-    const overlay = document.getElementById('sync-overlay');
-    const msg = document.getElementById('sync-overlay-msg');
-    btnSync.disabled = true;
-    if (overlay) overlay.classList.add('show');
+async function runPushToCloud({ retryFailed = false } = {}) {
+  const overlay = document.getElementById('sync-overlay');
+  const msg = document.getElementById('sync-overlay-msg');
+  const btnPush = document.getElementById('btn-push-to-cloud');
+  const btnRetry = document.getElementById('btn-retry-failed-sync');
+  if (btnPush) btnPush.disabled = true;
+  if (btnRetry) btnRetry.disabled = true;
+  if (overlay) overlay.classList.add('show');
+  setCloudSyncMsg(retryFailed ? 'Retrying failed uploads…' : 'Pushing local records to cloud…');
+  appendCloudSyncLog(retryFailed ? 'Retry failed started' : 'Push to Cloud started');
 
+  try {
+    if (msg) msg.textContent = 'Uploading pending sales & returns…';
+    let salesResult = null;
     try {
-      // ── STEP 1: Upload all queued offline sales FIRST ──────────────────────
-      if (msg) msg.textContent = 'Uploading pending sales to the cloud…';
-      let salesResult = null;
-      try {
-        salesResult = await api.pos.syncOfflineSales();
-      } catch (_) { /* ignore — e.g. no internet */ }
-
-      // ── STEP 2: Refresh catalog (skipReload so main process does not
-      //   issue its own reloadIgnoringCache before sales upload finishes) ────
-      if (msg) msg.textContent = 'Pulling the latest catalog from the cloud…';
-      const catalog = await api.pos.syncMasterData({
-        refresh: true,
-        skipReload: true,
-      });
-
-      if (catalog?.offline || catalog?.code === 'OFFLINE') {
-        showToast(catalog?.message || 'Cannot reach the API server. Sync skipped.', 'error');
-        if (overlay) overlay.classList.remove('show');
-        await updateOfflineCount();
-        return;
-      }
-
-      if (catalog?.success) {
-        const n = catalog.counts?.products || 0;
-        const c = catalog.counts?.categories || 0;
-        const u = catalog.counts?.customers || 0;
-
-        // Build sales sync summary for toast
-        let salesToast = '';
-        const saleResults = Array.isArray(salesResult?.data?.sales?.data)
-          ? salesResult.data.sales.data
-          : [];
-        if (saleResults.length > 0) {
-          const synced  = saleResults.filter(r => r.status === 'success').length;
-          const skipped = saleResults.filter(r => r.status === 'skipped').length;
-          const failed  = saleResults.filter(r => r.status === 'failed').length;
-          if (synced > 0 || skipped > 0) {
-            salesToast = ` · ${synced} sale(s) uploaded`;
-            if (skipped > 0) salesToast += `, ${skipped} already on cloud`;
-          }
-          if (failed > 0) salesToast += `, ${failed} failed (will retry)`;
-        }
-
-        // Build returns sync summary for toast
-        const returnResults = Array.isArray(salesResult?.data?.returns?.data)
-          ? salesResult.data.returns.data
-          : [];
-        if (returnResults.length > 0) {
-          const rSynced  = returnResults.filter(r => r.status === 'success').length;
-          const rSkipped = returnResults.filter(r => r.status === 'skipped').length;
-          const rFailed  = returnResults.filter(r => r.status === 'failed').length;
-          if (rSynced > 0 || rSkipped > 0) {
-            salesToast += ` · ${rSynced} return(s) uploaded`;
-            if (rSkipped > 0) salesToast += `, ${rSkipped} already on cloud`;
-          }
-          if (rFailed > 0) salesToast += `, ${rFailed} return(s) failed (will retry)`;
-        }
-
-        showToast(`Cloud catalog synced · ${c} categories, ${n} products, ${u} customers${salesToast}`, 'success');
-        if (overlay) overlay.classList.remove('show');
-        await applySyncedCatalog(catalog);
-        try { await refreshCompanyTaxContext(); } catch (_) { /* ignore */ }
-        window.location.replace(`./sell.html?ts=${Date.now()}`);
-        return;
-      } else {
-        showToast(catalog?.message || 'Sync incomplete', 'error');
-      }
-    } catch (err) {
-      showToast(err.message || 'Sync failed', 'error');
-    } finally {
-      if (overlay) overlay.classList.remove('show');
-      btnSync.disabled = false;
-      await updateOfflineCount();
+      salesResult = await api.pos.syncOfflineSales();
+    } catch (e) {
+      appendCloudSyncLog(`Sales upload: ${e.message || 'failed'}`, 'error');
     }
+
+    if (msg) msg.textContent = 'Uploading pending catalog changes…';
+    let catalogPush = null;
+    try {
+      catalogPush = await api.pos.pushMasterData();
+    } catch (e) {
+      appendCloudSyncLog(`Catalog push: ${e.message || 'failed'}`, 'error');
+    }
+
+    if (msg) msg.textContent = 'Uploading pending accounts entries…';
+    let accountsPush = null;
+    try {
+      if (typeof api.pos.pushAccountsQueue === 'function') {
+        accountsPush = await api.pos.pushAccountsQueue({ retryFailed });
+      }
+    } catch (e) {
+      appendCloudSyncLog(`Accounts push: ${e.message || 'failed'}`, 'error');
+    }
+
+    if (catalogPush?.offline || catalogPush?.code === 'OFFLINE' || salesResult?.offline) {
+      const offlineMsg = catalogPush?.message || salesResult?.message || 'Cannot reach the API server.';
+      showToast(offlineMsg, 'error');
+      setCloudSyncMsg(offlineMsg);
+      appendCloudSyncLog(offlineMsg, 'error');
+      return;
+    }
+
+    const saleResults = Array.isArray(salesResult?.data?.sales?.data) ? salesResult.data.sales.data : [];
+    const returnResults = Array.isArray(salesResult?.data?.returns?.data) ? salesResult.data.returns.data : [];
+    const saleOk = saleResults.filter((r) => r.status === 'success' || r.status === 'skipped').length;
+    const saleFail = saleResults.filter((r) => r.status === 'failed').length;
+    const retOk = returnResults.filter((r) => r.status === 'success' || r.status === 'skipped').length;
+    const retFail = returnResults.filter((r) => r.status === 'failed').length;
+    const catPushed = Number(catalogPush?.pushed || catalogPush?.data?.pushed || 0);
+    const accPushed = Number(accountsPush?.pushed || accountsPush?.data?.pushed || 0);
+    const accFailed = Number(accountsPush?.failed || accountsPush?.data?.failed || 0);
+
+    const summary = `Push done · sales ${saleOk}/${saleResults.length || 0}, returns ${retOk}/${returnResults.length || 0}, catalog ${catPushed}, accounts ${accPushed}${saleFail || retFail || accFailed ? ` · failed ${saleFail + retFail + accFailed}` : ''}`;
+    localStorage.setItem('pos_last_push_at', new Date().toISOString());
+    showToast(summary, saleFail || retFail || accFailed ? 'error' : 'success');
+    setCloudSyncMsg(summary);
+    appendCloudSyncLog(summary, saleFail || retFail || accFailed ? 'error' : 'success');
+  } catch (err) {
+    showToast(err.message || 'Push failed', 'error');
+    setCloudSyncMsg(err.message || 'Push failed');
+    appendCloudSyncLog(err.message || 'Push failed', 'error');
+  } finally {
+    if (overlay) overlay.classList.remove('show');
+    if (btnPush) btnPush.disabled = false;
+    if (btnRetry) btnRetry.disabled = false;
+    await updateOfflineCount();
+  }
+}
+
+async function runGetFromCloud() {
+  const overlay = document.getElementById('sync-overlay');
+  const msg = document.getElementById('sync-overlay-msg');
+  const btnGet = document.getElementById('btn-get-from-cloud');
+  if (btnGet) btnGet.disabled = true;
+  if (overlay) overlay.classList.add('show');
+  setCloudSyncMsg('Downloading cloud records…');
+  appendCloudSyncLog('Get from Cloud started');
+
+  try {
+    if (msg) msg.textContent = 'Pulling catalog & master data from the cloud…';
+    const catalog = await api.pos.syncMasterData({
+      refresh: true,
+      skipReload: true,
+      push: false,
+    });
+
+    if (catalog?.offline || catalog?.code === 'OFFLINE') {
+      const offlineMsg = catalog?.message || 'Cannot reach the API server. Get skipped.';
+      showToast(offlineMsg, 'error');
+      setCloudSyncMsg(offlineMsg);
+      appendCloudSyncLog(offlineMsg, 'error');
+      return;
+    }
+
+    let accountsGet = null;
+    try {
+      if (typeof api.pos.pullAccountsFromCloud === 'function') {
+        if (msg) msg.textContent = 'Pulling ERP accounts references…';
+        accountsGet = await api.pos.pullAccountsFromCloud();
+      }
+    } catch (e) {
+      appendCloudSyncLog(`Accounts get: ${e.message || 'failed'}`, 'error');
+    }
+
+    if (catalog?.success) {
+      const n = catalog.counts?.products || 0;
+      const c = catalog.counts?.categories || 0;
+      const u = catalog.counts?.customers || 0;
+      const accN = Number(accountsGet?.imported || 0);
+      const summary = `Get done · ${c} categories, ${n} products, ${u} customers${accN ? `, ${accN} accounts refs` : ''}`;
+      localStorage.setItem('pos_last_get_at', new Date().toISOString());
+      showToast(summary, 'success');
+      setCloudSyncMsg(summary);
+      appendCloudSyncLog(summary, 'success');
+      await applySyncedCatalog(catalog);
+      try { await refreshCompanyTaxContext(); } catch (_) { /* ignore */ }
+      if (typeof window.PosAccounts?.refresh === 'function') {
+        try { await window.PosAccounts.refresh(); } catch (_) { /* ignore */ }
+      }
+      return;
+    }
+    showToast(catalog?.message || 'Get incomplete', 'error');
+    appendCloudSyncLog(catalog?.message || 'Get incomplete', 'error');
+  } catch (err) {
+    showToast(err.message || 'Get failed', 'error');
+    setCloudSyncMsg(err.message || 'Get failed');
+    appendCloudSyncLog(err.message || 'Get failed', 'error');
+  } finally {
+    if (overlay) overlay.classList.remove('show');
+    if (btnGet) btnGet.disabled = false;
+    await updateOfflineCount();
+  }
+}
+
+(function wireCloudSyncSettings() {
+  document.getElementById('btn-push-to-cloud')?.addEventListener('click', () => {
+    void runPushToCloud();
+  });
+  document.getElementById('btn-get-from-cloud')?.addEventListener('click', () => {
+    void runGetFromCloud();
+  });
+  document.getElementById('btn-retry-failed-sync')?.addEventListener('click', () => {
+    void runPushToCloud({ retryFailed: true });
   });
 })();
 

@@ -6,45 +6,82 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline' 'self'; script-src 'self';"
     />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Login — Bisonstechs POS</title>
     <link rel="stylesheet" href="./shared.css" />
+    <link rel="stylesheet" href="./login.css" />
   </head>
-  <body>
-    <div class="auth-wrap">
-      <form class="auth-card" id="login-form">
-        <div class="auth-brand">
-          <img src="../../assets/icon.png" alt="Bisonstechs" width="52" height="52" />
-          <h1>Bisonstechs POS</h1>
-          <p class="sub">Sign in with your company account</p>
+  <body class="lg-body">
+    <main class="lg">
+      <!-- Left: brand / value panel -->
+      <section class="lg-hero" aria-hidden="true">
+        <div class="lg-hero-brand">
+          <span class="lg-mark">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h7l-1 8 9-12h-7z" /></svg>
+          </span>
+          <span class="lg-hero-name">Bisonstechs <b>POS</b></span>
         </div>
 
-        <label class="auth-label" for="email">Email</label>
-        <input class="auth-input" id="email" type="email" autocomplete="username" required placeholder="you@company.com" />
+        <div class="lg-hero-body">
+          <h2>Sell faster.<br />Run smarter.</h2>
+          <p>Billing, inventory and reporting in one fast, reliable point of sale built for busy counters.</p>
 
-        <label class="auth-label" for="password">Password</label>
-        <div class="auth-password-wrap">
-          <input class="auth-input" id="password" type="password" autocomplete="current-password" required minlength="6" placeholder="••••••••" />
-          <button type="button" class="auth-eye-btn" id="toggle-password" aria-label="Show password" title="Show password">
-            <svg class="eye-open" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
-            <svg class="eye-closed hidden" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-              <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-              <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-              <line x1="1" y1="1" x2="23" y2="23" />
-            </svg>
-          </button>
+          <ul class="lg-points">
+            <li>
+              <span class="lg-tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10" /></svg></span>
+              Quick billing and checkout
+            </li>
+            <li>
+              <span class="lg-tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10" /></svg></span>
+              Live inventory and stock tracking
+            </li>
+            <li>
+              <span class="lg-tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10" /></svg></span>
+              Sales reports you can trust
+            </li>
+          </ul>
         </div>
 
-        <div class="error auth-msg error" id="error"></div>
-        <div class="auth-msg blocked" id="blocked-banner" style="display:none"></div>
+        <div class="lg-hero-foot">© Bisonstechs. All rights reserved.</div>
+      </section>
 
-        <button class="btn-primary" type="submit" id="submit">Sign in</button>
-        <p class="auth-hint">Sign in with your email and password.</p>
-      </form>
-    </div>
+      <!-- Right: sign-in form -->
+      <section class="lg-panel">
+        <form class="lg-card" id="login-form">
+          <div class="lg-brand">
+            <img src="../../assets/icon.png" alt="Bisonstechs" width="180" height="120" />
+            <h1>Welcome back</h1>
+            <p class="sub">Sign in with your company account to continue</p>
+          </div>
+
+          <div class="lg-field">
+            <label class="lg-label" for="email">Email</label>
+            <div class="lg-control">
+              <svg class="lg-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></svg>
+              <input class="lg-input" id="email" type="email" autocomplete="username" required placeholder="you@company.com" />
+            </div>
+          </div>
+
+          <div class="lg-field">
+            <label class="lg-label" for="password">Password</label>
+            <div class="lg-control">
+              <svg class="lg-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
+              <input class="lg-input" id="password" type="password" autocomplete="current-password" required minlength="6" placeholder="••••••••" />
+              <button class="lg-toggle" id="toggle-password" type="button" aria-label="Show password" aria-pressed="false">
+                <svg class="lg-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></svg>
+                <svg class="lg-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17.9 17.9A10.9 10.9 0 0 1 12 19C5.5 19 2 12 2 12a18 18 0 0 1 4.1-5.1M9.9 5.2A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a18 18 0 0 1-2.2 3.2" /><path d="M1 1l22 22" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="lg-msg lg-error" id="error" role="alert" aria-live="polite"></div>
+          <div class="lg-msg lg-blocked" id="blocked-banner" style="display:none" role="alert"></div>
+
+          <button class="lg-btn" type="submit" id="submit">Sign in</button>
+          <p class="lg-hint">Trouble signing in? Contact your administrator.</p>
+        </form>
+      </section>
+    </main>
     <script src="./login.js"></script>
   </body>
 </html>

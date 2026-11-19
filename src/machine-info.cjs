@@ -107,6 +107,8 @@ function collect(app, userDataPath) {
     'queue_returns.json',
     'queue_shifts.json',
     'queue_held.json',
+    'queue_accounts.json',
+    'accounts_ledger.json',
   ];
   const sessionFiles = ['session.bin', 'session.json', 'window-state.json'];
 

@@ -14,15 +14,12 @@ function showError(message) {
 
 if (togglePasswordBtn && passwordEl) {
   togglePasswordBtn.addEventListener('click', () => {
-    const showing = passwordEl.type === 'text';
-    passwordEl.type = showing ? 'password' : 'text';
-    const openIcon = togglePasswordBtn.querySelector('.eye-open');
-    const closedIcon = togglePasswordBtn.querySelector('.eye-closed');
-    openIcon?.classList.toggle('hidden', !showing);
-    closedIcon?.classList.toggle('hidden', showing);
-    const label = showing ? 'Show password' : 'Hide password';
-    togglePasswordBtn.setAttribute('aria-label', label);
-    togglePasswordBtn.title = label;
+    const show = passwordEl.type === 'password';
+    passwordEl.type = show ? 'text' : 'password';
+    togglePasswordBtn.classList.toggle('is-on', show);
+    togglePasswordBtn.setAttribute('aria-pressed', String(show));
+    togglePasswordBtn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+    passwordEl.focus();
   });
 }
 

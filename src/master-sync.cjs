@@ -275,7 +275,7 @@ async function syncMasterData(accessToken, locationId, opts = {}) {
   }
 }
 
-async function refreshCatalog(accessToken, locationId) {
+async function refreshCatalog(accessToken, locationId, opts = {}) {
   const conn = await checkOnline(accessToken);
   if (!conn.online) {
     return offlineResult(conn);
@@ -289,22 +289,24 @@ async function refreshCatalog(accessToken, locationId) {
     console.warn('[sync] overlay snapshot failed:', err.message);
   }
 
-  let push = { success: true };
-  try {
-    push = await pushPendingCatalog(accessToken);
-  } catch (err) {
-    push = { success: false, retryable: true, code: 'PUSH_FAILED', message: err.message };
-  }
-  if (!push.success) {
-
-    console.warn('[sync] refresh aborted — push failed, local unsynced data preserved:', push.message);
-    return {
-      success: false,
-      retryable: push.retryable !== false && push.status !== 401,
-      status: push.status,
-      code: push.code || 'PUSH_FAILED',
-      message: `Sync failed before refresh (${push.message || 'upload error'}). Local unsynced records are preserved and will retry on the next sync.`,
-    };
+  // Get-from-Cloud sets push:false so download never uploads pending rows.
+  if (opts.push !== false) {
+    let push = { success: true };
+    try {
+      push = await pushPendingCatalog(accessToken);
+    } catch (err) {
+      push = { success: false, retryable: true, code: 'PUSH_FAILED', message: err.message };
+    }
+    if (!push.success) {
+      console.warn('[sync] refresh aborted — push failed, local unsynced data preserved:', push.message);
+      return {
+        success: false,
+        retryable: push.retryable !== false && push.status !== 401,
+        status: push.status,
+        code: push.code || 'PUSH_FAILED',
+        message: `Sync failed before refresh (${push.message || 'upload error'}). Local unsynced records are preserved and will retry on the next sync.`,
+      };
+    }
   }
 
   // Do NOT clearCatalog() — that wiped category/product images and MENU_ITEM types.

@@ -6,63 +6,114 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'none'; img-src 'self' data: blob: http: https:; style-src 'self' 'unsafe-inline'; script-src 'self';"
     />
-    <title>Open Shift</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Open Shift — Bisonstechs POS</title>
     <link rel="stylesheet" href="./shared.css" />
-    <style>
-      .wrap { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 32px 16px; }
-      .card { width: 100%; max-width: 520px; background: #fff; border-radius: 16px; box-shadow: 0 12px 40px rgba(1, 69, 130, 0.12); padding: 28px; }
-      .brand { text-align: center; margin-bottom: 20px; }
-      .brand img { width: 64px; height: 64px; object-fit: contain; }
-      h1 { margin: 10px 0 4px; font-size: 22px; }
-      p.sub { margin: 0; color: var(--muted); font-size: 13px; }
-      .user { text-align: center; font-size: 13px; color: var(--muted); margin-bottom: 16px; }
-      .list { display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow: auto; }
-      .term {
-        border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; text-align: left; background: #fff;
-      }
-      .term:hover, .term.active { border-color: var(--brand); background: #f0f7fc; }
-      .term b { display: block; font-size: 14px; }
-      .term span { font-size: 12px; color: var(--muted); }
-      label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 6px; }
-      input {
-        width: 100%; height: 44px; border: 1px solid var(--line); border-radius: 10px; padding: 0 12px; font-size: 14px;
-      }
-      .actions { display: flex; gap: 8px; margin-top: 18px; }
-      .actions button { flex: 1; height: 46px; border: 0; border-radius: 10px; font-weight: 700; }
-      .primary { background: var(--brand); color: #fff; }
-      .ghost { background: #e8eef4; color: var(--navy); }
-      .logout { margin-top: 16px; width: 100%; height: 40px; border: 0; background: transparent; color: var(--muted); }
-    </style>
+    <link rel="stylesheet" href="./login.css" />
+    <link rel="stylesheet" href="./shift.css" />
   </head>
-  <body>
-    <div class="wrap">
-      <div class="card">
-        <div class="brand">
-          <img id="company-logo" src="../../assets/icon.png" alt="Company" />
-          <h1 id="company-title">Open Shift</h1>
-          <p class="sub">Select a terminal, then enter opening cash in the drawer (required)</p>
+  <body class="lg-body">
+    <main class="lg">
+      <!-- Left: brand / value panel -->
+      <section class="lg-hero" aria-hidden="true">
+        <div class="lg-hero-brand">
+          <span class="lg-mark">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h7l-1 8 9-12h-7z" /></svg>
+          </span>
+          <span class="lg-hero-name">Bisonstechs <b>POS</b></span>
         </div>
-        <div class="user" id="user"></div>
-        <p class="sub" id="sync-status">Syncing products…</p>
-        <div id="resume-box" class="hidden">
-          <p class="sub">A suspended shift was found.</p>
-          <div class="actions">
-            <button class="primary" id="resume" type="button">Resume shift</button>
+
+        <div class="lg-hero-body">
+          <h2>Ready to sell.<br />Start your shift.</h2>
+          <p>Select your assigned terminal, count your drawer cash, and begin checkout with full stock sync.</p>
+
+          <ul class="lg-points">
+            <li>
+              <span class="lg-tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10" /></svg></span>
+              Drawer opening cash tracking
+            </li>
+            <li>
+              <span class="lg-tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10" /></svg></span>
+              Offline and cloud inventory sync
+            </li>
+            <li>
+              <span class="lg-tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10" /></svg></span>
+              Fast shift and register settlement
+            </li>
+          </ul>
+        </div>
+
+        <div class="lg-hero-foot">© Bisonstechs. All rights reserved.</div>
+      </section>
+
+      <!-- Right: terminal selection & shift setup -->
+      <section class="lg-panel">
+        <div class="lg-card lg-shift-card">
+          <div class="lg-company-header">
+            <img id="company-logo" src="../../assets/icon.png" alt="Company" class="lg-company-logo" />
+            <div class="lg-company-info">
+              <h1 id="company-title">Open Shift</h1>
+              <div class="lg-user-chip">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                <span id="user">Loading user…</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="lg-status-bar">
+            <span class="lg-status-dot"></span>
+            <span class="sub" id="sync-status">Syncing products…</span>
+          </div>
+
+          <!-- Suspended Shift Resume -->
+          <div id="resume-box" class="hidden lg-resume-box">
+            <div class="lg-resume-content">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              <div>
+                <b>Suspended Shift Found</b>
+                <p class="sub">You have an ongoing suspended shift ready to resume.</p>
+              </div>
+            </div>
+            <button class="lg-btn" id="resume" type="button">Resume shift</button>
+          </div>
+
+          <!-- Terminal Box -->
+          <div id="terminal-box">
+            <label class="lg-term-label">Select Terminal</label>
+            <div class="list" id="terminals"></div>
+
+            <div class="lg-field">
+              <label class="lg-label" for="cash">Opening cash <span style="color:var(--lg-danger);">*</span></label>
+              <div class="lg-cash-control">
+                <span class="lg-currency-tag">PKR</span>
+                <input class="lg-input lg-input-cash" id="cash" type="number" min="0.01" step="0.01" placeholder="0.00" required />
+              </div>
+            </div>
+
+            <div class="lg-msg lg-error hidden" id="error" role="alert" aria-live="polite"></div>
+
+            <div style="margin-top: 18px;">
+              <button class="lg-btn" id="open" type="button">
+                <span>Start selling</span>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Utilities Footer -->
+          <div class="lg-foot-actions">
+            <button class="lg-link-btn hidden" id="admin" type="button">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+              POS Management (Admin)
+            </button>
+            <button class="lg-link-btn danger" id="logout" type="button">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+              Sign out
+            </button>
           </div>
         </div>
-        <div id="terminal-box">
-          <div class="list" id="terminals"></div>
-          <label for="cash">Opening cash <span style="color:#dc2626">*</span></label>
-          <input id="cash" type="number" min="0.01" step="0.01" placeholder="Enter cash in drawer" required />
-          <div class="error hidden" id="error"></div>
-          <div class="actions">
-            <button class="primary" id="open" type="button">Start selling</button>
-          </div>
-        </div>
-        <button class="logout hidden" id="admin" type="button">Admin</button>
-        <button class="logout" id="logout" type="button">Sign out</button>
-      </div>
-    </div>
+      </section>
+    </main>
     <script src="./session-guard.js"></script>
     <script src="./location.js"></script>
     <script src="./shift.js"></script>

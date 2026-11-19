@@ -1,0 +1,285 @@
+/* Bisonstechs POS — shift & terminal selection page */
+
+.lg-shift-card {
+  width: 100%;
+  max-width: 460px;
+  animation: lg-rise 0.45s ease both;
+}
+
+.lg-company-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.lg-company-logo {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  object-fit: contain;
+  background: #f8fafc;
+  border: 1px solid var(--lg-line);
+  padding: 4px;
+  flex-shrink: 0;
+}
+
+.lg-company-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.lg-company-info h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--lg-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lg-user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--lg-muted);
+}
+
+.lg-user-chip svg {
+  color: var(--lg-accent);
+  flex-shrink: 0;
+}
+
+.lg-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--lg-field);
+  border: 1px solid var(--lg-line);
+  margin: 14px 0 20px;
+}
+
+.lg-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+  flex-shrink: 0;
+}
+
+.lg-status-bar .sub {
+  margin: 0;
+  font-size: 12px;
+  color: var(--lg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Terminal List */
+.lg-term-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-bottom: 18px;
+  padding-right: 2px;
+}
+
+.list::-webkit-scrollbar {
+  width: 5px;
+}
+
+.list::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+.term {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1.5px solid var(--lg-line);
+  border-radius: 12px;
+  background: var(--lg-field);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+  font: inherit;
+}
+
+.term:hover:not(:disabled) {
+  border-color: #93b4ff;
+  background: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.08);
+}
+
+.term.active {
+  border-color: var(--lg-accent);
+  background: #eff6ff;
+  box-shadow: 0 0 0 1px var(--lg-accent), 0 4px 14px rgba(37, 99, 235, 0.12);
+}
+
+.term b {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--lg-ink);
+  letter-spacing: -0.01em;
+}
+
+.term.active b::after {
+  content: "Selected";
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--lg-accent);
+  color: #fff;
+}
+
+.term span {
+  display: block;
+  font-size: 12px;
+  color: var(--lg-muted);
+  margin-top: 3px;
+}
+
+.term:disabled {
+  cursor: default;
+  opacity: 0.95;
+}
+
+/* Cash input */
+.lg-cash-control {
+  position: relative;
+}
+
+.lg-currency-tag {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--lg-muted);
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+.lg-input-cash {
+  padding-left: 54px !important;
+  font-size: 15px !important;
+  font-weight: 600 !important;
+}
+
+/* Resume Shift Box */
+.lg-resume-box {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.lg-resume-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+  color: #1e40af;
+}
+
+.lg-resume-content svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.lg-resume-content b {
+  display: block;
+  font-size: 14px;
+  color: #1e3a8a;
+  margin-bottom: 2px;
+}
+
+.lg-resume-content .sub {
+  margin: 0;
+  font-size: 12px;
+  color: #3b82f6;
+}
+
+/* Error message override for shift.js */
+#error:not(.hidden) {
+  display: block !important;
+  margin-top: 14px;
+}
+
+/* Footer / utility actions */
+.lg-foot-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--lg-line);
+}
+
+.lg-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--lg-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.lg-link-btn:hover {
+  background: #f1f5f9;
+  color: var(--lg-ink);
+}
+
+.lg-link-btn.danger:hover {
+  background: #fef2f2;
+  color: var(--lg-danger);
+}
+
+.lg-link-btn svg {
+  flex-shrink: 0;
+}
+
