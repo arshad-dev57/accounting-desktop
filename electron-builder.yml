@@ -38,6 +38,8 @@ nsis:
 mac:
   icon: assets/icon.png
   category: public.app-category.business
+  # Unsigned CI builds — set identity only when CSC_* secrets exist
+  identity: null
   target:
     - target: dmg
       arch:
