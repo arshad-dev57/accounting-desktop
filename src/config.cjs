@@ -10,7 +10,8 @@ dotenv.config({ path: path.join(__dirname, '..', '.env.local'), override: true }
 
 const DEFAULT_LOCAL = 'http://127.0.0.1:3000';
 const DEFAULT_PROD = 'https://app.bisonstechs.com';
-const DEFAULT_API = 'https://accountbackend-production-eaf5.up.railway.app';
+/** Packaged builds have no .env — this must be the live Bisonstechs Railway API. */
+const DEFAULT_API = 'https://bisonstechserpbackend-production.up.railway.app';
 
 function stripSlash(url) {
   return String(url || '').trim().replace(/\/+$/, '');
