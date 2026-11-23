@@ -50,23 +50,20 @@
       td { padding: 10px 16px; border-top: 1px solid #f1f5f9; }
       .empty { padding: 36px; text-align: center; color: var(--muted); }
       .icon-btn { border: 0; background: transparent; cursor: pointer; font-size: 14px; }
-      
-      /* Form Modal */
-      .overlay {
-        display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45);
-        align-items: center; justify-content: center; z-index: 50;
+
+      /* List / form page swap (no modal) */
+      .view { display: none; flex-direction: column; flex: 1; min-height: 0; }
+      .view.show { display: flex; }
+      .form-page {
+        background: #fff; border: 1px solid var(--line); border-radius: 14px;
+        padding: 20px; overflow: auto; flex: 1; min-height: 0; position: relative;
       }
-      .overlay.show { display: flex; }
-      .modal { 
-        background: #fff; width: 900px; max-width: 95vw; max-height: 90vh; 
-        border-radius: 16px; padding: 20px; overflow: auto; position: relative;
-      }
-      .modal h3 { margin: 0 0 14px; font-size: 16px; }
-      .form-tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--line); }
+      .form-page h3 { margin: 0 0 14px; font-size: 18px; }
+      .form-tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--line); overflow-x: auto; }
       .form-tab {
         border: none; background: transparent; padding: 10px 14px;
         font-weight: 600; font-size: 12px; color: var(--muted);
-        border-bottom: 2px solid transparent;
+        border-bottom: 2px solid transparent; white-space: nowrap;
       }
       .form-tab.active { color: var(--brand); border-bottom-color: var(--brand); }
       .form-panel { display: none; }
@@ -88,7 +85,7 @@
       .checkbox-group { display: flex; align-items: center; gap: 8px; }
       .checkbox-group input[type="checkbox"] { width: auto; }
       .checkbox-group label { margin: 0; font-size: 13px; }
-      .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+      .form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
       .err { color: #b91c1c; font-size: 12px; margin-bottom: 8px; }
       .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; }
       .ok-badge { background: #d1fae5; color: #047857; }
@@ -187,29 +184,32 @@
         </div>
       </div>
       <div class="main">
-        <div class="toolbar">
-          <input id="search" type="text" placeholder="Search by name, SKU, or barcode..." />
-          <button class="btn-ghost" id="btn-scan" type="button">📷 Scan QR/Barcode</button>
-          <button class="btn-brand" id="btn-add" type="button">+ Add Product</button>
+        <div class="view show" id="list-view">
+          <div class="toolbar">
+            <input id="search" type="text" placeholder="Search by name, SKU, or barcode..." />
+            <button class="btn-ghost" id="btn-scan" type="button">📷 Scan QR/Barcode</button>
+            <button class="btn-brand" id="btn-add" type="button">+ Add Product</button>
+          </div>
+          <div class="panel" id="table-wrap"></div>
         </div>
-        <div class="panel" id="table-wrap"></div>
+
+        <div class="view" id="form-view">
+          <div class="form-page" id="form-page">
+            <div class="err" id="form-error"></div>
+            <div id="form-container"></div>
+          </div>
+        </div>
       </div>
     </div>
-    
-    <div class="overlay" id="overlay">
-      <div class="modal" id="modal-body">
-        <div class="err" id="form-error"></div>
-        <div id="form-container"></div>
-        <div class="mini-overlay" id="quick-add-overlay">
-          <div class="mini-card">
-            <h4 id="quick-add-title">Add category</h4>
-            <input id="quick-add-name" type="text" placeholder="Name *" autocomplete="off" />
-            <div class="mini-err" id="quick-add-error"></div>
-            <div class="mini-actions">
-              <button type="button" class="btn btn-gray" id="quick-add-cancel">Cancel</button>
-              <button type="button" class="btn btn-brand" id="quick-add-save">Add &amp; select</button>
-            </div>
-          </div>
+
+    <div class="mini-overlay" id="quick-add-overlay">
+      <div class="mini-card">
+        <h4 id="quick-add-title">Add category</h4>
+        <input id="quick-add-name" type="text" placeholder="Name *" autocomplete="off" />
+        <div class="mini-err" id="quick-add-error"></div>
+        <div class="mini-actions">
+          <button type="button" class="btn btn-gray" id="quick-add-cancel">Cancel</button>
+          <button type="button" class="btn btn-brand" id="quick-add-save">Add &amp; select</button>
         </div>
       </div>
     </div>

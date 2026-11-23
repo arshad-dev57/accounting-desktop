@@ -268,6 +268,18 @@ async function fetchAllSuppliers(token) {
   return { success: true, data: all };
 }
 
+function createSupplier(token, payload) {
+  return request(token, 'POST', '/api/warehouse/supplier', payload);
+}
+
+function updateSupplier(token, id, payload) {
+  return request(token, 'PUT', `/api/warehouse/supplier/${encodeURIComponent(id)}`, payload);
+}
+
+function deleteSupplier(token, id) {
+  return request(token, 'DELETE', `/api/warehouse/supplier/${encodeURIComponent(id)}`);
+}
+
 async function fetchAllCustomers(token) {
   const all = [];
   for (let page = 1; page <= 100; page += 1) {
@@ -531,6 +543,9 @@ module.exports = {
   createRestaurantOrder,
   getNotifications,
   fetchAllSuppliers,
+  createSupplier,
+  updateSupplier,
+  deleteSupplier,
   fetchAllCustomers,
   fetchTaxContext,
   setTaxEnabled,

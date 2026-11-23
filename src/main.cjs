@@ -3887,13 +3887,27 @@ function registerIpc() {
     return { success: true, data: masterSqlite.listCatalog() };
   });
 
-  handle('catalog:listSuppliers', async () => {
+  handle('catalog:listSuppliers', async (_event, opts) => {
     const auth = requireAuth();
     if (!auth.ok) return auth.result;
     await ensureCatalogOpen(auth.session.user);
     masterSqlite.reloadFromDiskSafe();
-    const rows = masterSqlite.listSuppliers();
+    const rows = masterSqlite.listSuppliers(opts || {});
     return { success: true, data: rows };
+  });
+
+  handle('catalog:saveSupplier', async (_event, payload) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    await ensureCatalogOpen(auth.session.user);
+    return masterSqlite.saveSupplier(payload || {});
+  });
+
+  handle('catalog:deleteSupplier', async (_event, id) => {
+    const auth = requireAuth();
+    if (!auth.ok) return auth.result;
+    await ensureCatalogOpen(auth.session.user);
+    return masterSqlite.deleteSupplier(id);
   });
 
   handle('catalog:saveCategory', (_event, payload) => {
@@ -4273,7 +4287,7 @@ function registerIpc() {
     let catalogFailed = 0;
     try {
       const pc = masterSqlite.pendingCounts();
-      catalogPending = (pc.categories || 0) + (pc.subcategories || 0) + (pc.products || 0);
+      catalogPending = (pc.categories || 0) + (pc.subcategories || 0) + (pc.products || 0) + (pc.suppliers || 0);
       catalogFailed = Number(pc.failed || 0) || 0;
     } catch { /* ignore */ }
     const meta = localDb.getAccountsSyncMeta();

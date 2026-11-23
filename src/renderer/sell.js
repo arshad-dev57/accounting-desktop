@@ -1602,6 +1602,13 @@ function setupTabs() {
           }
         } catch (e) { console.warn('PosAccounts.refresh', e); }
       }
+      if (targetTab === 'suppliers') {
+        try {
+          if (typeof window.PosSuppliers?.load === 'function') {
+            void window.PosSuppliers.load();
+          }
+        } catch (e) { console.warn('PosSuppliers.load', e); }
+      }
       if (targetTab === 'stock') { try { loadStockPanel(); } catch (e) { console.warn('loadStockPanel not defined', e); } }
       if (targetTab === 'expiry') { try { loadExpiryPanel(); } catch (e) { console.warn('loadExpiryPanel not defined', e); } }
       if (targetTab === 'returns') { try { loadReturnHistory(); } catch (e) { console.warn('loadReturnHistory not defined', e); } }
@@ -1751,6 +1758,11 @@ async function runPushToCloud({ retryFailed = false } = {}) {
     } else if (salesResult?.message && (saleFail || retFail)) {
       appendCloudSyncLog(salesResult.message, 'error');
     }
+    try { await refreshLocalSuppliers(); } catch (_) { /* ignore */ }
+    if (typeof window.PosSuppliers?.load === 'function'
+        && document.getElementById('tab-suppliers')?.classList.contains('active')) {
+      try { await window.PosSuppliers.load(); } catch (_) { /* ignore */ }
+    }
   } catch (err) {
     showToast(err.message || 'Push failed', 'error');
     setCloudSyncMsg(err.message || 'Push failed');
@@ -1809,9 +1821,14 @@ async function runGetFromCloud() {
       setCloudSyncMsg(summary);
       appendCloudSyncLog(summary, 'success');
       await applySyncedCatalog(catalog);
+      try { await refreshLocalSuppliers(); } catch (_) { /* ignore */ }
       try { await refreshCompanyTaxContext(); } catch (_) { /* ignore */ }
       if (typeof window.PosAccounts?.refresh === 'function') {
         try { await window.PosAccounts.refresh(); } catch (_) { /* ignore */ }
+      }
+      if (typeof window.PosSuppliers?.load === 'function'
+          && document.getElementById('tab-suppliers')?.classList.contains('active')) {
+        try { await window.PosSuppliers.load(); } catch (_) { /* ignore */ }
       }
       return;
     }
@@ -5260,6 +5277,18 @@ var localSuppliers = [];
 let catTab = 'cats';
 let catEditing = null;
 
+async function refreshLocalSuppliers() {
+  try {
+    const suppRes = await api.catalog.listSuppliers();
+    localSuppliers = Array.isArray(suppRes?.data) ? suppRes.data : [];
+  } catch (err) {
+    console.warn('[suppliers] refresh failed', err);
+    localSuppliers = [];
+  }
+  return localSuppliers;
+}
+window.refreshLocalSuppliers = refreshLocalSuppliers;
+
 function renderLocalCatalog() {
   const wrap = document.getElementById('cat-table');
   if (!wrap) return;
@@ -5292,8 +5321,7 @@ function renderLocalCatalog() {
 async function loadLocalCatalog() {
   const res = await api.catalog.list();
   localCatalog = Array.isArray(res?.data) ? res.data : [];
-  const suppRes = await api.catalog.listSuppliers();
-  localSuppliers = Array.isArray(suppRes?.data) ? suppRes.data : [];
+  await refreshLocalSuppliers();
   renderLocalCatalog();
 }
 
@@ -5886,7 +5914,7 @@ function openProdForm(row) {
     syncRestaurantProductFormUi();
     recipeDraftRows = [];
     renderRecipeDraft();
-    document.getElementById('prod-overlay').style.display = 'flex';
+    openProdFormPage();
     void refreshProductCodePreviews();
     return;
   }
@@ -5990,8 +6018,17 @@ function openProdForm(row) {
   syncExpiryFormSections();
   syncRestaurantProductFormUi();
   void loadRecipeForProduct(row.id);
-  document.getElementById('prod-overlay').style.display = 'flex';
+  openProdFormPage();
   void refreshProductCodePreviews();
+}
+
+function openProdFormPage() {
+  const overlay = document.getElementById('prod-overlay');
+  if (!overlay) return;
+  overlay.classList.add('prod-page-overlay', 'is-open');
+  overlay.style.display = 'flex';
+  const list = document.getElementById('prod-list-view');
+  if (list) list.style.display = 'none';
 }
 
 function syncExpiryFormSections() {
@@ -6022,7 +6059,13 @@ function autoCalcExpiryFromShelfLife() {
 
 function closeProdForm() {
   document.getElementById('prod-quick-overlay').style.display = 'none';
-  document.getElementById('prod-overlay').style.display = 'none';
+  const overlay = document.getElementById('prod-overlay');
+  if (overlay) {
+    overlay.classList.remove('is-open');
+    overlay.style.display = 'none';
+  }
+  const list = document.getElementById('prod-list-view');
+  if (list) list.style.display = '';
   prodEditing = null;
 }
 

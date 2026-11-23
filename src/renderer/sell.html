@@ -1411,16 +1411,42 @@
       .icon-btn.del:hover {
         background: #fef2f2;
       }
-      .prod-modal { width: 880px; max-width: 94vw; max-height: 92vh; padding: 0; overflow: hidden; display: flex; flex-direction: column; }
-      .prod-form-head { padding: 16px 20px 8px; }
-      .prod-tabs { display: flex; overflow-x: auto; border-bottom: 1px solid var(--line); padding: 0 12px; }
+      /* Product add/edit = full-screen page (not a floating centered modal) */
+      #prod-overlay.prod-page-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 110;
+        display: none;
+        align-items: stretch;
+        justify-content: stretch;
+        background: #f1f5f9 !important;
+        padding: 0;
+        margin: 0;
+      }
+      #prod-overlay.prod-page-overlay.is-open { display: flex !important; }
+      #prod-overlay.prod-page-overlay .prod-modal {
+        width: 100%;
+        max-width: none;
+        max-height: none;
+        height: 100%;
+        border-radius: 0;
+        box-shadow: none;
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        background: #fff;
+      }
+      .prod-form-head { padding: 16px 20px 8px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+      .prod-form-head h3 { margin: 0; font-size: 18px; }
+      .prod-tabs { display: flex; overflow-x: auto; border-bottom: 1px solid var(--line); padding: 0 12px; flex-shrink: 0; }
       .prod-tab {
         height: 40px; border: 0; background: transparent; padding: 0 12px;
         font-size: 12px; font-weight: 700; color: var(--muted); white-space: nowrap;
         border-bottom: 2px solid transparent;
       }
       .prod-tab.active { color: var(--brand); border-bottom-color: var(--brand); }
-      .prod-form-body { padding: 16px 20px; overflow-y: auto; max-height: 58vh; }
+      .prod-form-body { padding: 16px 20px; overflow-y: auto; flex: 1; min-height: 0; max-height: none; }
       .prod-pane { display: none; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
       .prod-pane.active { display: grid; }
       .pf-span { grid-column: 1 / -1; }
@@ -1456,15 +1482,41 @@
         background: #014582;
         color: #fff;
       }
-      .prod-form-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px 16px; border-top: 1px solid var(--line); }
-      .prod-form-body .btn-nav-action.ghost {
-        background: #fff;
-        color: #014582;
-        border: 1px solid #014582;
+      .prod-form-actions {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 20px;
+        border-top: 1px solid var(--line);
+        background: #f8fafc;
+        flex-shrink: 0;
       }
-      .prod-form-body .btn-nav-action.accent {
-        background: #014582;
-        color: #fff;
+      .prod-form-body .btn-nav-action.ghost,
+      #prod-overlay .prod-form-actions .btn-nav-action.ghost,
+      #prod-overlay .prod-form-head .btn-nav-action.ghost {
+        background: #fff !important;
+        color: #014582 !important;
+        border: 1px solid #014582 !important;
+        min-height: 40px;
+        padding: 0 18px;
+        font-weight: 700;
+      }
+      .prod-form-body .btn-nav-action.accent,
+      #prod-overlay .prod-form-actions .btn-nav-action.accent {
+        background: #014582 !important;
+        color: #fff !important;
+        border: 1px solid #014582 !important;
+        min-height: 40px;
+        padding: 0 18px;
+        font-weight: 700;
+      }
+      #prod-overlay .prod-form-actions .btn-nav-action.ghost:hover,
+      #prod-overlay .prod-form-head .btn-nav-action.ghost:hover {
+        background: #eff6ff !important;
+      }
+      #prod-overlay .prod-form-actions .btn-nav-action.accent:hover {
+        background: #01366a !important;
       }
       .pf-imgs { display: flex; flex-wrap: wrap; gap: 8px; }
       .pf-img { width: 72px; height: 72px; border-radius: 10px; overflow: hidden; position: relative; border: 1px solid var(--line); background: #f8fafc; }
@@ -2395,6 +2447,9 @@
           <button class="tab-btn" data-tab="customers">
             <span>Customers</span>
           </button>
+          <button class="tab-btn" data-tab="suppliers">
+            <span>Suppliers</span>
+          </button>
           <button class="tab-btn" data-tab="sales">
             <span>Sales</span>
           </button>
@@ -2674,6 +2729,54 @@
             </div>
           </div>
 
+          <!-- ─── SUPPLIERS ─────────────────────────────────────────── -->
+          <div class="view-panel" id="tab-suppliers">
+            <div class="panel-content cust-page supp-page">
+              <div class="mod-head">
+                <div>
+                  <h2>Suppliers</h2>
+                  <p>Vendor directory — synced with cloud on Push / Pull</p>
+                </div>
+                <div class="mod-head-actions">
+                  <button class="btn-nav-action ghost" id="supp-btn-refresh" type="button">↻ Refresh</button>
+                  <button class="btn-nav-action" id="supp-btn-new" type="button">+ Add Supplier</button>
+                </div>
+              </div>
+              <div class="mod-kpis" id="supp-kpis"></div>
+              <div class="cust-layout" id="supp-list-layout">
+                <div class="cust-list-card" style="flex:1;">
+                  <div class="cust-toolbar">
+                    <input type="search" class="inp-search" id="supp-search" placeholder="Search suppliers…" autocomplete="off" />
+                    <div class="chip-row" id="supp-filters">
+                      <button type="button" class="chip active" data-filter="all">All</button>
+                      <button type="button" class="chip" data-filter="active">Active</button>
+                      <button type="button" class="chip" data-filter="inactive">Inactive</button>
+                    </div>
+                    <span class="cust-count" id="supp-count"></span>
+                  </div>
+                  <div class="cust-table-wrap">
+                    <table class="cust-table">
+                      <thead>
+                        <tr>
+                          <th>Supplier</th>
+                          <th>Company</th>
+                          <th>Phone</th>
+                          <th>Email</th>
+                          <th>City</th>
+                          <th>Status</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody id="supp-table-body"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+              <div id="supp-form-wrap" class="supp-form-wrap hidden"></div>
+              <div id="supp-detail-modal" class="supp-modal hidden" aria-hidden="true"></div>
+            </div>
+          </div>
+
           <div class="view-panel" id="tab-reports">
             <div class="panel-content rpt-page">
               <div class="rpt-filter-bar" id="rpt-filter-bar">
@@ -2815,18 +2918,20 @@
 
           <!-- ─── PRODUCTS ─────────────────────────────────────── -->
           <div class="view-panel" id="tab-products">
-            <div class="panel-content">
-              <div class="panel-header">
-                <h2>Products</h2>
-              </div>
-              <div class="cat-toolbar" style="display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px;">
-                <div style="display:flex;gap:8px;align-items:center;flex:1;">
-                  <input id="prod-search" type="text" placeholder="Search name, SKU, barcode..." style="height: 36px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; min-width: 200px; flex:1; background: #fff;" />
-                  <input id="prod-barcode-scan" type="text" data-pos-scan="1" autocomplete="off" placeholder="🔍 Scan barcode..." style="height: 36px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; width: 180px; background: #fff; font-size:13px;" />
+            <div class="panel-content" id="prod-panel-content" style="display:flex;flex-direction:column;min-height:0;flex:1;position:relative;">
+              <div id="prod-list-view">
+                <div class="panel-header">
+                  <h2>Products</h2>
                 </div>
-                <button class="btn-add-custom" id="prod-add" type="button" style="height: 36px; border: 0; background: var(--brand); color: #fff; border-radius: 8px; padding: 0 14px; font-weight: 700; display: flex; align-items: center; gap: 6px;">+ Add Product</button>
+                <div class="cat-toolbar" style="display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px;">
+                  <div style="display:flex;gap:8px;align-items:center;flex:1;">
+                    <input id="prod-search" type="text" placeholder="Search name, SKU, barcode..." style="height: 36px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; min-width: 200px; flex:1; background: #fff;" />
+                    <input id="prod-barcode-scan" type="text" data-pos-scan="1" autocomplete="off" placeholder="🔍 Scan barcode..." style="height: 36px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; width: 180px; background: #fff; font-size:13px;" />
+                  </div>
+                  <button class="btn-add-custom" id="prod-add" type="button" style="height: 36px; border: 0; background: var(--brand); color: #fff; border-radius: 8px; padding: 0 14px; font-weight: 700; display: flex; align-items: center; gap: 6px;">+ Add Product</button>
+                </div>
+                <div id="prod-table"></div>
               </div>
-              <div id="prod-table"></div>
             </div>
           </div>
 
@@ -3173,7 +3278,7 @@
                         <b>Is backup mein sab connected data hai:</b>
                         <ul style="margin:8px 0 0;padding-left:18px;">
                           <li>Products · stock · categories · subcategories</li>
-                          <li>Customers · suppliers · customer ledger / loyalty balances</li>
+                          <li>Customers · suppliers (directory) · customer ledger / loyalty balances</li>
                           <li>Sales · returns · held sales · shifts</li>
                           <li>Accounts ledger · day closing</li>
                           <li>Receipt template options · invoice serial · restaurant token settings</li>
@@ -4002,12 +4107,12 @@
       </div>
     </div>
 
-    <div class="modal-overlay" id="prod-overlay">
+    <div class="modal-overlay prod-page-overlay" id="prod-overlay">
       <div class="modal-box prod-modal">
-        <form id="prod-form">
+        <form id="prod-form" style="display:flex;flex-direction:column;flex:1;min-height:0;height:100%;">
           <div class="modal-box-header prod-form-head">
             <h3 id="prod-form-title">Add Product</h3>
-            <button type="button" class="modal-close-btn" id="prod-form-cancel">✕</button>
+            <button type="button" class="btn-nav-action ghost" id="prod-form-cancel">← Back to list</button>
           </div>
           <div class="prod-tabs" id="prod-tabs">
             <button type="button" class="prod-tab active" data-prod-tab="basic">Basic Info</button>
@@ -4260,7 +4365,7 @@
           </div>
           <div class="prod-form-actions">
             <button type="button" class="btn-nav-action ghost" id="prod-form-no">Cancel</button>
-            <button type="submit" class="btn-nav-action accent">Save Product</button>
+            <button type="submit" class="btn-nav-action accent" id="prod-form-save">Save Product</button>
           </div>
         </form>
       </div>
@@ -4296,6 +4401,7 @@
     <script src="./product-codes.js"></script>
     <script src="./sell.js"></script>
     <script src="./pos-customers.js"></script>
+    <script src="./pos-suppliers.js"></script>
     <script src="./pos-accounts.js"></script>
     <script src="./pos-reports.js"></script>
   </body>

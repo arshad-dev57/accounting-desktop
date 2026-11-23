@@ -43,12 +43,29 @@ function defaultCompanyTaxType() {
 
 const tableWrap = document.getElementById('table-wrap');
 const searchInp = document.getElementById('search');
-const overlay = document.getElementById('overlay');
-const modalBody = document.getElementById('modal-body');
+const listView = document.getElementById('list-view');
+const formView = document.getElementById('form-view');
 const formContainer = document.getElementById('form-container');
 const formError = document.getElementById('form-error');
 const btnAdd = document.getElementById('btn-add');
 const btnScan = document.getElementById('btn-scan');
+const pageTitle = document.querySelector('.top h1');
+
+function isFormOpen() {
+  return formView?.classList.contains('show');
+}
+
+function showListView() {
+  listView?.classList.add('show');
+  formView?.classList.remove('show');
+  if (pageTitle) pageTitle.textContent = 'Products';
+}
+
+function showFormView(title) {
+  listView?.classList.remove('show');
+  formView?.classList.add('show');
+  if (pageTitle) pageTitle.textContent = title || 'Product';
+}
 
 function q() {
   return (searchInp.value || '').trim().toLowerCase();
@@ -413,8 +430,11 @@ function renderForm() {
   const qrValue = editing?.qrCode || editing?.qr_code || '';
 
   formContainer.innerHTML = `
-    <h3>${editing ? 'Edit Product' : 'Add Product'}</h3>
-    
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;">
+      <h3 style="margin:0;">${editing ? 'Edit Product' : 'Add Product'}</h3>
+      <button type="button" class="btn btn-gray" id="btn-back-list">← Back to list</button>
+    </div>
+
     <div class="form-tabs">
       <button class="form-tab ${currentFormTab === 'basic' ? 'active' : ''}" data-tab="basic">Basic Info</button>
       <button class="form-tab ${currentFormTab === 'pricing' ? 'active' : ''}" data-tab="pricing">Pricing & Stock</button>
@@ -916,7 +936,7 @@ function renderForm() {
         </div>
       </div>
       
-      <div class="modal-actions">
+      <div class="form-actions">
         <button type="button" class="btn btn-gray" id="btn-cancel">Cancel</button>
         <button type="submit" class="btn btn-brand">${editing ? 'Update Product' : 'Save Product'}</button>
       </div>
@@ -931,6 +951,7 @@ function renderForm() {
 
   document.getElementById('product-form').addEventListener('submit', handleFormSubmit);
   document.getElementById('btn-cancel').addEventListener('click', closeForm);
+  document.getElementById('btn-back-list')?.addEventListener('click', closeForm);
 
   const printBtn = document.getElementById('btn-print-barcode');
   if (printBtn) {
@@ -972,16 +993,16 @@ function renderForm() {
 function openForm(product) {
   editing = product;
   currentFormTab = 'basic';
-  formError.textContent = '';
-  overlay.classList.add('show');
+  if (formError) formError.textContent = '';
+  showFormView(product ? 'Edit Product' : 'Add Product');
   renderForm();
 }
 
 function closeForm() {
   closeQuickAdd();
-  overlay.classList.remove('show');
   editing = null;
   currentFormTab = 'basic';
+  showListView();
 }
 
 async function handleFormSubmit(e) {
@@ -1076,7 +1097,7 @@ async function handleFormSubmit(e) {
     closeForm();
     await reload();
   } catch (err) {
-    formError.textContent = err.message || 'Save failed';
+    if (formError) formError.textContent = err.message || 'Save failed';
   }
 }
 
@@ -1148,7 +1169,7 @@ btnScan.addEventListener('click', () => {
 let scanBuffer = '';
 let scanTimeout = null;
 document.addEventListener('keydown', (e) => {
-  if (overlay.classList.contains('show')) return;
+  if (isFormOpen()) return;
   clearTimeout(scanTimeout);
   scanTimeout = setTimeout(() => { scanBuffer = ''; }, 100);
   if (e.key === 'Enter' && scanBuffer.length > 0) {
@@ -1186,10 +1207,6 @@ document.getElementById('quick-add-name')?.addEventListener('keydown', (e) => {
 });
 document.getElementById('quick-add-overlay')?.addEventListener('click', (e) => {
   if (e.target.id === 'quick-add-overlay') closeQuickAdd();
-});
-
-overlay.addEventListener('click', (e) => {
-  if (e.target === overlay) closeForm();
 });
 
 // ─── BOOT ───────────────────────────────────────────────────────────────────

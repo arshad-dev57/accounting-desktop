@@ -282,10 +282,14 @@ async function open(userDataPath, options = {}) {
   addColumnIfMissing('products', 'sync_status', 'TEXT');
   addColumnIfMissing('products', 'last_synced_at', 'TEXT');
   addColumnIfMissing('products', 'stock_unit_name', 'TEXT');
+  addColumnIfMissing('suppliers', 'sync_id', 'TEXT');
+  addColumnIfMissing('suppliers', 'sync_status', 'TEXT');
+  addColumnIfMissing('suppliers', 'last_synced_at', 'TEXT');
   // Ensure existing rows are treated as synced (they originate from the cloud).
   run(`UPDATE categories SET sync_status = 'SYNCED' WHERE sync_status IS NULL`);
   run(`UPDATE subcategories SET sync_status = 'SYNCED' WHERE sync_status IS NULL`);
   run(`UPDATE products SET sync_status = 'SYNCED' WHERE sync_status IS NULL`);
+  run(`UPDATE suppliers SET sync_status = 'SYNCED' WHERE sync_status IS NULL`);
   persist();
   activeCompanyId = nextScope;
 }
@@ -616,12 +620,31 @@ function upsertSupplier(row) {
   if (!id) return;
   const name = row.name || row.companyName || '';
   if (!name) return;
+  const existing = get('SELECT sync_status, sync_id, payload FROM suppliers WHERE id = ?', [id]);
+  // Keep unsynced local edits — cloud pull must not overwrite PENDING/FAILED rows.
+  if (
+    existing
+    && (existing.sync_status === 'PENDING' || existing.sync_status === 'FAILED')
+    && row.syncStatus !== 'PENDING'
+    && row.syncStatus !== 'FAILED'
+    && !row._forceCloudOverwrite
+  ) {
+    return;
+  }
   const inactive = row.isActive === false || row.isDeleted || String(row.status || '').toLowerCase() === 'inactive';
+  const rawSync = String(row.syncStatus || '').toUpperCase();
+  const syncStatus = rawSync === 'PENDING' || rawSync === 'FAILED' ? rawSync : 'SYNCED';
+  const syncId = String(row.syncId || existing?.sync_id || crypto.randomUUID()).trim();
+  const payloadObj = { ...(parseJson(existing?.payload, {})), ...row };
+  delete payloadObj.payload;
+  delete payloadObj._forceCloudOverwrite;
+  const lastSyncedAt = row.lastSyncedAt
+    || (syncStatus === 'SYNCED' ? new Date().toISOString() : null);
   run(
     `INSERT INTO suppliers (
         id, name, phone, email, company_name, payload,
-        is_active, is_deleted, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        is_active, is_deleted, updated_at, sync_id, sync_status, last_synced_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name,
        phone = excluded.phone,
@@ -630,38 +653,158 @@ function upsertSupplier(row) {
        payload = excluded.payload,
        is_active = excluded.is_active,
        is_deleted = excluded.is_deleted,
-       updated_at = excluded.updated_at`,
+       updated_at = excluded.updated_at,
+       sync_id = COALESCE(suppliers.sync_id, excluded.sync_id),
+       sync_status = excluded.sync_status,
+       last_synced_at = COALESCE(excluded.last_synced_at, suppliers.last_synced_at)`,
     [
       id,
       name,
       row.phone || row.mobile || '',
       row.email || '',
       row.companyName || row.company || '',
-      JSON.stringify(row),
+      JSON.stringify(payloadObj),
       inactive ? 0 : 1,
       row.isDeleted ? 1 : 0,
       row.updatedAt || new Date().toISOString(),
+      syncId,
+      syncStatus,
+      lastSyncedAt,
     ]
   );
 }
 
-function listSuppliers() {
+function mapSupplierRow(row) {
+  let extra = {};
+  try { extra = JSON.parse(row.payload || '{}'); } catch { extra = {}; }
+  const isActive = row.is_active === 1;
+  return {
+    ...extra,
+    id: row.id,
+    _id: row.id,
+    name: row.name,
+    phone: row.phone,
+    email: row.email,
+    companyName: row.company_name,
+    isActive,
+    status: isActive ? 'active' : 'inactive',
+    syncId: row.sync_id || extra.syncId || null,
+    syncStatus: row.sync_status || 'SYNCED',
+    isDeleted: row.is_deleted === 1,
+    updatedAt: row.updated_at || extra.updatedAt || null,
+  };
+}
+
+function listSuppliers(opts = {}) {
+  const includeInactive = opts.includeInactive === true;
+  const includeDeleted = opts.includeDeleted === true;
+  let sql = 'SELECT * FROM suppliers WHERE 1=1';
+  if (!includeDeleted) sql += ' AND is_deleted = 0';
+  if (!includeInactive) sql += ' AND is_active = 1';
+  sql += ' ORDER BY name';
+  return all(sql).map(mapSupplierRow);
+}
+
+function saveSupplier(payload = {}) {
+  const name = String(payload.name || '').trim();
+  if (!name) return { success: false, message: 'Supplier name is required' };
+  const prevId = payload.id || payload._id || null;
+  const prev = prevId ? get('SELECT * FROM suppliers WHERE id = ?', [prevId]) : null;
+  const id = prevId || `local-supp-${crypto.randomUUID()}`;
+  const syncId = String(payload.syncId || prev?.sync_id || crypto.randomUUID()).trim();
+  const status = String(payload.status || (payload.isActive === false ? 'inactive' : 'active')).toLowerCase();
+  const isActive = status !== 'inactive' && payload.isActive !== false;
+  const row = {
+    id,
+    _id: id,
+    syncId,
+    syncStatus: 'PENDING',
+    name,
+    companyName: payload.companyName || '',
+    code: payload.code || '',
+    contactPerson: payload.contactPerson || '',
+    department: payload.department || '',
+    phone: payload.phone || '',
+    email: payload.email || '',
+    address: payload.address || '',
+    city: payload.city || '',
+    country: payload.country || 'Pakistan',
+    industry: payload.industry || '',
+    businessType: payload.businessType || '',
+    paymentTerms: payload.paymentTerms || 'Net 30',
+    currencyId: payload.currencyId || null,
+    status: isActive ? 'active' : 'inactive',
+    isActive,
+    isDeleted: false,
+    updatedAt: new Date().toISOString(),
+  };
+  upsertSupplier({ ...row, _forceCloudOverwrite: true });
+  persist();
+  return { success: true, data: mapSupplierRow(get('SELECT * FROM suppliers WHERE id = ?', [id])) };
+}
+
+function deleteSupplier(id) {
+  if (!id) return { success: false, message: 'Supplier id is required' };
+  const now = new Date().toISOString();
+  run(
+    `UPDATE suppliers SET is_deleted = 1, is_active = 0, sync_status = 'PENDING', updated_at = ? WHERE id = ?`,
+    [now, id]
+  );
+  persist();
+  return { success: true };
+}
+
+function renameSupplierId(oldId, newId) {
+  if (!oldId || !newId || oldId === newId) return;
+  const existing = get('SELECT id FROM suppliers WHERE id = ?', [newId]);
+  if (existing) {
+    run('DELETE FROM suppliers WHERE id = ?', [oldId]);
+    return;
+  }
+  run('UPDATE suppliers SET id = ? WHERE id = ?', [newId, oldId]);
+  // Keep product references aligned when a local supplier gets a cloud id.
+  try {
+    run(
+      `UPDATE products SET payload = REPLACE(payload, ?, ?) WHERE payload LIKE ?`,
+      [`"supplierId":"${oldId}"`, `"supplierId":"${newId}"`, `%"supplierId":"${oldId}"%`]
+    );
+  } catch (_) { /* best-effort */ }
+}
+
+function markSupplierCloudSynced(localId, cloudId, cloudRow = null) {
+  const now = new Date().toISOString();
+  const targetId = cloudId || localId;
+  if (cloudId && cloudId !== localId) renameSupplierId(localId, cloudId);
+  if (cloudRow) {
+    upsertSupplier({
+      ...cloudRow,
+      id: targetId,
+      _id: targetId,
+      syncStatus: 'SYNCED',
+      lastSyncedAt: now,
+      _forceCloudOverwrite: true,
+    });
+  } else {
+    run(
+      `UPDATE suppliers SET sync_status = 'SYNCED', last_synced_at = ?, updated_at = ? WHERE id = ?`,
+      [now, now, targetId]
+    );
+  }
+  persist();
+  return true;
+}
+
+function markSupplierFailed(id) {
+  if (!id) return;
+  run(`UPDATE suppliers SET sync_status = 'FAILED' WHERE id = ?`, [id]);
+  persist();
+}
+
+function listPendingSuppliers() {
   return all(
-    `SELECT * FROM suppliers WHERE is_deleted = 0 AND is_active = 1 ORDER BY name`
-  ).map((row) => {
-    let extra = {};
-    try { extra = JSON.parse(row.payload || '{}'); } catch { extra = {}; }
-    return {
-      ...extra,
-      id: row.id,
-      _id: row.id,
-      name: row.name,
-      phone: row.phone,
-      email: row.email,
-      companyName: row.company_name,
-      isActive: row.is_active === 1,
-    };
-  });
+    `SELECT * FROM suppliers
+     WHERE sync_status IS NULL OR sync_status != 'SYNCED'`
+  ).map(mapSupplierRow);
 }
 
 function upsertCustomer(row) {
@@ -956,7 +1099,8 @@ function clearCatalog() {
   db.run(`DELETE FROM subcategories WHERE sync_status IS NULL OR sync_status = 'SYNCED'`);
   db.run(`DELETE FROM categories WHERE sync_status IS NULL OR sync_status = 'SYNCED'`);
   db.run('DELETE FROM customers');
-  db.run('DELETE FROM suppliers');
+  // Preserve unsynced local suppliers (same rule as products/categories).
+  db.run(`DELETE FROM suppliers WHERE sync_status IS NULL OR sync_status = 'SYNCED'`);
   db.run(
     `INSERT INTO sync_state (key, value) VALUES (?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
@@ -1968,6 +2112,7 @@ function pendingCounts() {
     categories: get(`SELECT COUNT(*) AS n FROM categories WHERE sync_status != '${SYNC_SYNCED}' OR sync_status IS NULL`)?.n || 0,
     subcategories: get(`SELECT COUNT(*) AS n FROM subcategories WHERE sync_status != '${SYNC_SYNCED}' OR sync_status IS NULL`)?.n || 0,
     products: get(`SELECT COUNT(*) AS n FROM products WHERE sync_status != '${SYNC_SYNCED}' OR sync_status IS NULL`)?.n || 0,
+    suppliers: get(`SELECT COUNT(*) AS n FROM suppliers WHERE sync_status != '${SYNC_SYNCED}' OR sync_status IS NULL`)?.n || 0,
   };
 }
 
@@ -2013,6 +2158,12 @@ module.exports = {
   listAllLocalReturns,
   listCatalog,
   listSuppliers,
+  saveSupplier,
+  deleteSupplier,
+  listPendingSuppliers,
+  markSupplierCloudSynced,
+  markSupplierFailed,
+  renameSupplierId,
   saveCategory,
   deleteCategory,
   saveSubcategory,

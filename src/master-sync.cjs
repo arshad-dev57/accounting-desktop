@@ -23,38 +23,166 @@ function offlineResult(conn = {}) {
   };
 }
 
+function supplierCloudPayload(row) {
+  return {
+    name: row.name || '',
+    companyName: row.companyName || '',
+    code: row.code || undefined,
+    contactPerson: row.contactPerson || '',
+    department: row.department || '',
+    phone: row.phone || '',
+    email: row.email || '',
+    address: row.address || '',
+    city: row.city || '',
+    country: row.country || 'Pakistan',
+    industry: row.industry || '',
+    businessType: row.businessType || '',
+    paymentTerms: row.paymentTerms || 'Net 30',
+    currencyId: row.currencyId || null,
+    status: row.status === 'inactive' || row.isActive === false ? 'inactive' : 'active',
+  };
+}
+
+function unwrapSupplierBody(res) {
+  const raw = res?.data;
+  if (!raw) return null;
+  if (raw.id || raw._id) return raw;
+  if (raw.data && (raw.data.id || raw.data._id)) return raw.data;
+  return raw;
+}
+
+async function pushPendingSuppliers(accessToken) {
+  const pending = masterSqlite.listPendingSuppliers();
+  if (!pending.length) {
+    return { success: true, pushed: 0, failed: 0 };
+  }
+  let pushed = 0;
+  let failed = 0;
+  const errors = [];
+
+  for (const row of pending) {
+    const localId = row.id || row._id;
+    try {
+      if (row.isDeleted) {
+        const isLocalOnly = String(localId).startsWith('local-supp-');
+        if (!isLocalOnly) {
+          const del = await posApi.deleteSupplier(accessToken, localId);
+          if (!del.success && del.status !== 404) {
+            masterSqlite.markSupplierFailed(localId);
+            failed += 1;
+            errors.push(del.message || `Delete failed for ${row.name}`);
+            continue;
+          }
+        }
+        masterSqlite.markSupplierCloudSynced(localId, localId);
+        pushed += 1;
+        continue;
+      }
+
+      const body = supplierCloudPayload(row);
+      const isLocalOnly = String(localId).startsWith('local-supp-');
+      let res;
+      if (isLocalOnly) {
+        // Avoid sending a client-only code that may collide; let cloud generate if empty.
+        if (!body.code) delete body.code;
+        res = await posApi.createSupplier(accessToken, body);
+      } else {
+        res = await posApi.updateSupplier(accessToken, localId, body);
+        // If cloud never saw this id, fall back to create.
+        if (!res.success && (res.status === 404 || /not found/i.test(String(res.message || '')))) {
+          res = await posApi.createSupplier(accessToken, body);
+        }
+      }
+
+      if (!res.success) {
+        masterSqlite.markSupplierFailed(localId);
+        failed += 1;
+        errors.push(res.message || `Failed to sync ${row.name}`);
+        continue;
+      }
+
+      const cloud = unwrapSupplierBody(res);
+      const cloudId = cloud?.id || cloud?._id || (!isLocalOnly ? localId : null);
+      if (!cloudId) {
+        masterSqlite.markSupplierFailed(localId);
+        failed += 1;
+        errors.push(`No cloud id returned for ${row.name}`);
+        continue;
+      }
+      masterSqlite.markSupplierCloudSynced(localId, cloudId, cloud);
+      pushed += 1;
+    } catch (err) {
+      masterSqlite.markSupplierFailed(localId);
+      failed += 1;
+      errors.push(err.message || String(err));
+    }
+  }
+
+  return {
+    success: failed === 0,
+    pushed,
+    failed,
+    message: errors.length ? errors.slice(0, 3).join('; ') : undefined,
+  };
+}
+
 async function pushPendingCatalog(accessToken) {
   const pending = masterSqlite.listPendingSync();
   const total =
     pending.categories.length + pending.subcategories.length + pending.products.length;
-  if (!total) {
+  const pendingSuppliers = masterSqlite.listPendingSuppliers();
+  if (!total && !pendingSuppliers.length) {
     return {
       success: true,
       pushed: false,
-      summary: { categories: 0, subcategories: 0, products: 0, failed: 0 },
+      summary: { categories: 0, subcategories: 0, products: 0, suppliers: 0, failed: 0 },
     };
   }
 
-  const res = await posApi.pushMasterData(accessToken, pending);
-  if (!res.success) {
+  let catalogSummary = { categories: 0, subcategories: 0, products: 0, failed: 0 };
+  let mapping = {};
+
+  if (total) {
+    const res = await posApi.pushMasterData(accessToken, pending);
+    if (!res.success) {
+      return {
+        success: false,
+        retryable: res.retryable !== false && res.status !== 401,
+        status: res.status,
+        code: res.code || 'PUSH_FAILED',
+        message: res.message || 'Failed to upload local changes to the cloud',
+      };
+    }
+
+    const data = res.data || { pushed: [], mapping: {} };
+    masterSqlite.markSynced(data);
+    if (Array.isArray(data?.pushed?.failed)) masterSqlite.markFailed(data.pushed.failed);
+    masterSqlite.reloadFromDisk();
+    catalogSummary = data.summary || data.pushed || catalogSummary;
+    mapping = data.mapping || {};
+  }
+
+  const suppPush = await pushPendingSuppliers(accessToken);
+  if (!suppPush.success && !total) {
     return {
       success: false,
-      retryable: res.retryable !== false && res.status !== 401,
-      status: res.status,
-      code: res.code || 'PUSH_FAILED',
-      message: res.message || 'Failed to upload local changes to the cloud',
+      retryable: true,
+      code: 'SUPPLIER_PUSH_FAILED',
+      message: suppPush.message || 'Failed to upload local suppliers to the cloud',
+      summary: { ...catalogSummary, suppliers: suppPush.pushed || 0, failed: suppPush.failed || 0 },
     };
   }
 
-  const data = res.data || { pushed: [], mapping: {} };
-  masterSqlite.markSynced(data);
-  if (Array.isArray(data?.pushed?.failed)) masterSqlite.markFailed(data.pushed.failed);
-  masterSqlite.reloadFromDisk();
   return {
     success: true,
     pushed: true,
-    mapping: data.mapping || {},
-    summary: data.summary || data.pushed || {},
+    mapping,
+    summary: {
+      ...catalogSummary,
+      suppliers: suppPush.pushed || 0,
+      failed: (catalogSummary.failed || 0) + (suppPush.failed || 0),
+    },
+    supplierPush: suppPush,
   };
 }
 
