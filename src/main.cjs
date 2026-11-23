@@ -12,6 +12,7 @@ const {
   ipcMain,
   Menu,
   shell,
+  dialog,
   globalShortcut,
   session,
   nativeImage,
@@ -36,6 +37,7 @@ const authStore = require('./auth-store.cjs');
 const { setupAutoUpdate } = require('./updater.cjs');
 const backendApi = require('./backend-api.cjs');
 const desktopNotifications = require('./desktop-notifications.cjs');
+const onesignalBridge = require('./onesignal-bridge.cjs');
 const posApi = require('./pos-api.cjs');
 const salesApi = require('./sales-api.cjs');
 const localDb = require('./local-db.cjs');
@@ -252,10 +254,26 @@ function showRestaurantPosScreen(tab = 'counter') {
 
 function startDesktopNotifications() {
   desktopNotifications.start(appView, requireAuth, mainWindow);
+  const auth = requireAuth();
+  const userId = auth?.session?.user?.id;
+  const preloadPath = path.join(__dirname, 'preload.cjs');
+  onesignalBridge
+    .start({ userId, preloadPath, parent: mainWindow })
+    .then((res) => {
+      if (res?.ok) {
+        console.log('[desktop] OneSignal bridge ready ·', res.externalId);
+      } else {
+        console.warn('[desktop] OneSignal bridge skipped ·', res?.reason || 'unknown');
+      }
+    })
+    .catch((err) => {
+      console.warn('[desktop] OneSignal bridge failed:', err?.message || err);
+    });
 }
 
 function stopDesktopNotifications() {
   desktopNotifications.stop();
+  onesignalBridge.stop();
 }
 
 function resolvePosMode(user) {
@@ -1817,6 +1835,25 @@ function registerIpc() {
     return true;
   });
 
+  handle('onesignal:push', (_event, payload) => {
+    try {
+      return desktopNotifications.handleOneSignalPush(payload || {});
+    } catch (err) {
+      console.warn('[onesignal] push handle failed:', err?.message || err);
+      return { shown: false, reason: 'error' };
+    }
+  });
+
+  handle('onesignal:status', (_event, payload) => {
+    console.log('[onesignal] bridge status', payload || {});
+    return { ok: true };
+  });
+
+  handle('onesignal:getStatus', () => ({
+    ...onesignalBridge.getStatus(),
+    ...desktopNotifications.getStatus(),
+  }));
+
   ipcMain.handle('auth:logout', (_event, payload) => {
     stopDesktopNotifications();
     pendingForcedLogout = false;
@@ -2613,11 +2650,14 @@ function registerIpc() {
     if (salesQueue.length > 0) {
       // Sanitize sales data before sending to backend
       const sanitizedSales = salesQueue.map(sale => {
-        // Remove local shift ID as backend will handle shift assignment
-        const { shiftId, ...saleWithoutShiftId } = sale;
+        // Keep real cloud shift ids; drop local-only ones so backend remaps to an open shift
+        const shiftId = String(sale.shiftId || '').trim();
+        const keepShift = shiftId && !shiftId.startsWith('local-shift-');
+        const { shiftId: _drop, ...saleWithoutShiftId } = sale;
 
         return {
           ...saleWithoutShiftId,
+          ...(keepShift ? { shiftId } : {}),
           companyId: sale.companyId || activeCompany || undefined,
           items: (sale.items || []).map(item => {
             // Handle taxRate - if it's an object, extract the rate value
@@ -2653,8 +2693,10 @@ function registerIpc() {
 
         const failed = saleResults.filter((r) => r.status === 'failed');
         if (failed.length > 0) {
+          const reasons = failed.map((r) => `${r.id}: ${r.reason || 'unknown'}`).join('; ');
+          console.error(`[sync] Sale failures (${failed.length}): ${reasons}`);
           results.errors.push(
-            `${failed.length} sale(s) failed to sync: ${failed.map((r) => r.reason || r.id).join('; ')}`
+            `${failed.length} sale(s) failed to sync: ${reasons}`
           );
         }
 
@@ -5062,6 +5104,43 @@ function registerIpc() {
     }
   });
 
+  ipcMain.handle('backup:exportLocal', async () => {
+    try {
+      const win = BrowserWindow.getFocusedWindow() || mainWindow;
+      const defaultName = driveBackup.buildZipName();
+      const result = await dialog.showSaveDialog(win || undefined, {
+        title: 'Save POS backup file',
+        defaultPath: defaultName,
+        filters: [{ name: 'POS Backup ZIP', extensions: ['zip'] }],
+      });
+      if (result.canceled || !result.filePath) {
+        return { success: false, cancelled: true, message: 'Save cancelled' };
+      }
+      const data = await driveBackup.exportLocalBackup(result.filePath);
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, message: err.message || 'Could not save backup file' };
+    }
+  });
+
+  ipcMain.handle('backup:restoreLocal', async () => {
+    try {
+      const win = BrowserWindow.getFocusedWindow() || mainWindow;
+      const result = await dialog.showOpenDialog(win || undefined, {
+        title: 'Restore from local backup file',
+        properties: ['openFile'],
+        filters: [{ name: 'POS Backup ZIP', extensions: ['zip'] }],
+      });
+      if (result.canceled || !result.filePaths?.length) {
+        return { success: false, cancelled: true, message: 'Open cancelled' };
+      }
+      const data = await driveBackup.restoreFromLocalFile(result.filePaths[0]);
+      return { success: true, data };
+    } catch (err) {
+      return { success: false, message: err.message || 'Local restore failed' };
+    }
+  });
+
   ipcMain.handle('codes:qrSvg', async (_event, { text, size } = {}) => {
     try {
       const QRCode = require('qrcode');
@@ -5082,6 +5161,11 @@ function registerIpc() {
   });
 }
 
+/** Local JWT expiry poll (no network). Server session-status is once per day. */
+const SESSION_LOCAL_CHECK_MS = 60_000;
+const SESSION_SERVER_CHECK_MS = 86_400_000; // 1 day
+let lastServerSessionCheckAt = 0;
+
 function watchSessionExpiry() {
   if (sessionWatchTimer) clearInterval(sessionWatchTimer);
   sessionWatchTimer = setInterval(async () => {
@@ -5098,6 +5182,11 @@ function watchSessionExpiry() {
     }
 
     if (!sessionData?.accessToken || pendingForcedLogout) return;
+
+    const now = Date.now();
+    if (now - lastServerSessionCheckAt < SESSION_SERVER_CHECK_MS) return;
+    lastServerSessionCheckAt = now;
+
     try {
       const check = await validateSessionAccess(sessionData.accessToken);
       if (!check.ok) {
@@ -5110,7 +5199,7 @@ function watchSessionExpiry() {
         }
       }
     } catch (_) { /* network error — ignore, will retry next cycle */ }
-  }, 20_000);
+  }, SESSION_LOCAL_CHECK_MS);
 }
 
 app.whenReady().then(async () => {

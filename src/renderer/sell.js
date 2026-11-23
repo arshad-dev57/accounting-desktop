@@ -38,7 +38,6 @@ function restaurantFmtTime(iso) {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-let restaurantReadyPoll = null;
 let isRestaurantPos = false;
 const restaurantOrderVersions = new Map();
 const restaurantReadyFilters = {
@@ -152,6 +151,8 @@ let customerCreditInfo = null;
 let overallDiscount = 0;
 let cartDiscountAmount = 0;
 let discountMode = 'pct';
+let heldSaleId = null;
+let heldSalesCache = [];
 
 let payments = [];
 let focusedPaymentIndex = 0;
@@ -381,6 +382,48 @@ function showRestaurantTokenSettings() {
   document.getElementById('restaurant-token-card')?.classList.remove('hidden');
 }
 
+function showSettingsSection(sectionId) {
+  const id = String(sectionId || 'printing').trim() || 'printing';
+  document.querySelectorAll('.settings-nav-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.getAttribute('data-settings-section') === id);
+  });
+  document.querySelectorAll('.settings-section').forEach((panel) => {
+    panel.classList.toggle('active', panel.getAttribute('data-settings-section') === id);
+  });
+  try {
+    document.getElementById(`settings-section-${id}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  } catch (_) { /* ignore */ }
+}
+
+function setupSettingsNav() {
+  const nav = document.getElementById('settings-nav');
+  if (!nav || nav.dataset.bound === '1') return;
+  nav.dataset.bound = '1';
+  nav.querySelectorAll('.settings-nav-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      showSettingsSection(btn.getAttribute('data-settings-section'));
+    });
+  });
+}
+
+function updateTokenFlowStatus(saved) {
+  const status = document.getElementById('token-settings-status');
+  const badge = document.getElementById('token-flow-badge');
+  const enabled = !!saved?.enabled;
+  if (badge) {
+    badge.textContent = enabled ? 'ON' : 'OFF';
+    badge.style.background = enabled ? '#dcfce7' : '#fee2e2';
+    badge.style.color = enabled ? '#166534' : '#991b1b';
+  }
+  if (status) {
+    status.textContent = enabled
+      ? `Token flow ON · next ${saved.preview || tokenPreviewFromForm()} · Save token settings after any change`
+      : 'Token flow OFF · turn on “Enable token flow”, then click Save token settings';
+  }
+  const fields = document.getElementById('token-settings-fields');
+  if (fields) fields.style.opacity = enabled ? '1' : '0.72';
+}
+
 function saveLocalSettings() {
   const thermal = document.getElementById('settings-enable-thermal');
   if (thermal) posSettings.autoPrintOnSale = !!thermal.checked;
@@ -388,7 +431,7 @@ function saveLocalSettings() {
   if (posSettings.enableBarcodeScanner == null) posSettings.enableBarcodeScanner = true;
 
   localStorage.setItem('pos_settings', JSON.stringify(posSettings));
-  showToast('Print settings saved', 'success');
+  showToast('Receipt print settings saved (this does not enable tokens)', 'success');
 }
 
 function tokenPreviewFromForm() {
@@ -493,11 +536,16 @@ async function loadRestaurantTokenSettings() {
   showRestaurantTokenSettings();
   try {
     const res = await api.pos.getRestaurantTokenSettings();
-    if (!res?.success || !res.data) return;
+    if (!res?.success || !res.data) {
+      updateTokenFlowStatus({ enabled: false });
+      return;
+    }
     applyRestaurantTokenSettingsToForm(res.data);
     cachedTokenDesign = { ...res.data };
+    updateTokenFlowStatus(res.data);
   } catch (err) {
     console.warn('[token settings] load failed', err);
+    updateTokenFlowStatus({ enabled: false });
   }
 }
 
@@ -508,15 +556,31 @@ async function saveRestaurantTokenSettings() {
   }
   const status = document.getElementById('token-settings-status');
   try {
-    const res = await api.pos.saveRestaurantTokenSettings(tokenSettingsPayloadFromForm());
+    const payload = tokenSettingsPayloadFromForm();
+    // Master checkbox is the source of truth when saving from the form
+    const master = document.getElementById('token-enabled');
+    if (master) payload.enabled = !!master.checked;
+    // If enabling with no print targets, default customer token on
+    if (payload.enabled && !payload.printCustomer && !payload.printKitchen) {
+      payload.printCustomer = true;
+      const pc = document.getElementById('token-print-customer');
+      if (pc) pc.checked = true;
+    }
+    const res = await api.pos.saveRestaurantTokenSettings(payload);
     if (!res?.success) {
       if (status) status.textContent = res?.message || 'Could not save';
       showToast(res?.message || 'Could not save token settings', 'error');
       return;
     }
-    await loadRestaurantTokenSettings();
-    if (status) status.textContent = `Saved. Next token: ${res.data?.preview || tokenPreviewFromForm()}`;
-    showToast('Token settings saved', 'success');
+    applyRestaurantTokenSettingsToForm(res.data);
+    cachedTokenDesign = { ...res.data };
+    updateTokenFlowStatus({ ...res.data, preview: res.data?.preview });
+    showToast(
+      res.data?.enabled
+        ? `Token flow ON — next ${res.data.preview || tokenPreviewFromForm()}`
+        : 'Token flow OFF — checkout will use receipt only',
+      'success'
+    );
   } catch (err) {
     if (status) status.textContent = err.message || 'Save failed';
     showToast(err.message || 'Could not save token settings', 'error');
@@ -722,7 +786,23 @@ document.getElementById('btn-reset-token-now')?.addEventListener('click', () => 
     ) {
       master.checked = false;
     }
+    const status = document.getElementById('token-settings-status');
+    if (status) status.textContent = 'Unsaved changes — click Save token settings';
   });
+});
+document.getElementById('token-enabled')?.addEventListener('change', (e) => {
+  const on = !!e.target?.checked;
+  if (on) {
+    const pc = document.getElementById('token-print-customer');
+    const pk = document.getElementById('token-print-kitchen');
+    if (pc && !pc.checked && pk && !pk.checked) pc.checked = true;
+  }
+  const status = document.getElementById('token-settings-status');
+  if (status) {
+    status.textContent = on
+      ? 'Enable checked — click Save token settings to turn flow ON'
+      : 'Enable unchecked — click Save token settings to turn flow OFF (receipt only)';
+  }
 });
 
 function specItem(label, value) {
@@ -928,6 +1008,61 @@ async function restoreSelectedBackup() {
   window.location.reload();
 }
 
+async function downloadLocalBackupFile() {
+  const statusEl = document.getElementById('local-backup-status');
+  if (statusEl) statusEl.textContent = 'Creating complete backup zip…';
+  const res = await api.backup.exportLocal();
+  if (res?.cancelled) {
+    if (statusEl) statusEl.textContent = 'Download cancelled.';
+    return;
+  }
+  if (!res?.success) {
+    if (statusEl) statusEl.textContent = res?.message || 'Download failed';
+    alert(res?.message || 'Could not save backup file');
+    return;
+  }
+  const name = res.data?.fileName || 'backup.zip';
+  const where = res.data?.path || '';
+  if (statusEl) {
+    statusEl.innerHTML = `Saved: <b>${name}</b>${where ? `<br><span style="word-break:break-all;">${where}</span>` : ''}`;
+  }
+  await loadDriveBackupSettings().catch(() => {});
+  const inc = res.data?.manifest?.includes || {};
+  const bits = [
+    inc.sqliteMasterDb ? 'products/stock/customers/sales DB' : null,
+    inc.salesQueue ? 'sales queue' : null,
+    inc.categoriesCache ? 'categories' : null,
+    inc.customersCache ? 'customers' : null,
+    inc.heldSales ? 'held sales' : null,
+    inc.accounts ? 'accounts' : null,
+  ].filter(Boolean);
+  alert(
+    `Complete backup downloaded.\n\n${name}\n\nIncludes: ${bits.join(', ') || 'company POS data'}.\nReports rebuild after restore.\n\nKeep this .zip safe — restore later from Settings → Backup.`
+  );
+}
+
+async function restoreFromLocalBackupFile() {
+  const ok = confirm(
+    'Restore from a local backup file?\n\nThis overwrites POS data on THIS computer only.\nYour cloud/Railway server will NOT change.\nA safety backup is created first when possible.'
+  );
+  if (!ok) return;
+  const statusEl = document.getElementById('local-backup-status');
+  if (statusEl) statusEl.textContent = 'Select backup .zip file…';
+  const res = await api.backup.restoreLocal();
+  if (res?.cancelled) {
+    if (statusEl) statusEl.textContent = 'Restore cancelled.';
+    return;
+  }
+  if (!res?.success) {
+    if (statusEl) statusEl.textContent = res?.message || 'Restore failed';
+    alert(res?.message || 'Could not restore from file');
+    return;
+  }
+  if (statusEl) statusEl.textContent = res.data?.message || 'Restore complete';
+  alert(res.data?.message || 'Local backup restored. Reloading…');
+  window.location.reload();
+}
+
 document.getElementById('btn-backup-save')?.addEventListener('click', () => {
   saveDriveBackupSettings().catch((e) => alert(e.message || 'Save failed'));
 });
@@ -945,6 +1080,12 @@ document.getElementById('btn-backup-refresh-list')?.addEventListener('click', ()
 });
 document.getElementById('btn-backup-restore')?.addEventListener('click', () => {
   restoreSelectedBackup().catch((e) => alert(e.message || 'Restore failed'));
+});
+document.getElementById('btn-backup-download')?.addEventListener('click', () => {
+  downloadLocalBackupFile().catch((e) => alert(e.message || 'Download failed'));
+});
+document.getElementById('btn-backup-restore-file')?.addEventListener('click', () => {
+  restoreFromLocalBackupFile().catch((e) => alert(e.message || 'Restore failed'));
 });
 
 // Boot Check
@@ -1027,6 +1168,7 @@ async function boot() {
   }, 1000);
 
   setupTabs();
+  try { setupSettingsNav(); } catch (e) { console.warn('setupSettingsNav', e); }
 
   const stashed = readStashedCatalog();
   if (stashed && stashed.length) {
@@ -1035,6 +1177,7 @@ async function boot() {
   }
   await loadCategories();
 
+  try { await loadHeldSales(); } catch (e) { console.warn('loadHeldSales', e); }
   updateOfflineCount();
 }
 
@@ -1094,13 +1237,6 @@ async function setupRestaurantUi() {
     await payRestaurantReadyOrder(btn);
   });
 
-  if (restaurantReadyPoll) clearInterval(restaurantReadyPoll);
-  restaurantReadyPoll = setInterval(() => {
-    const panel = document.getElementById('tab-ready-orders');
-    if (panel?.classList.contains('active')) {
-      refreshRestaurantReadyOrders().catch(() => {});
-    }
-  }, 5000);
 }
 
 function applyRestaurantBranding(user) {
@@ -1443,9 +1579,12 @@ function setupTabs() {
 
       if (targetTab === 'reports') { try { loadReportsTab(); } catch (e) { console.warn('loadReportsTab not defined', e); } }
       if (targetTab === 'sales') { try { loadSalesRegister(); } catch (e) { console.warn('loadSalesRegister not defined', e); } }
+      if (targetTab === 'held') { try { loadHeldSales(); } catch (e) { console.warn('loadHeldSales not defined', e); } }
       if (targetTab === 'categories') { try { loadLocalCatalog(); } catch (e) { console.warn('loadLocalCatalog not defined', e); } }
       if (targetTab === 'products') { try { loadLocalProducts(); } catch (e) { console.warn('loadLocalProducts not defined', e); } }
       if (targetTab === 'settings') {
+        try { setupSettingsNav(); } catch (e) { console.warn('setupSettingsNav', e); }
+        try { showSettingsSection('printing'); } catch (e) { console.warn('showSettingsSection', e); }
         try { fillReceiptSettingsForm(); } catch (e) { console.warn('fillReceiptSettingsForm not defined', e); }
         try { void loadInvoiceSerialSettings(); } catch (e) { console.warn('loadInvoiceSerialSettings not defined', e); }
         try {
@@ -1583,9 +1722,11 @@ async function runPushToCloud({ retryFailed = false } = {}) {
     const saleResults = Array.isArray(salesResult?.data?.sales?.data) ? salesResult.data.sales.data : [];
     const returnResults = Array.isArray(salesResult?.data?.returns?.data) ? salesResult.data.returns.data : [];
     const saleOk = saleResults.filter((r) => r.status === 'success' || r.status === 'skipped').length;
-    const saleFail = saleResults.filter((r) => r.status === 'failed').length;
+    const saleFailList = saleResults.filter((r) => r.status === 'failed');
+    const saleFail = saleFailList.length;
     const retOk = returnResults.filter((r) => r.status === 'success' || r.status === 'skipped').length;
-    const retFail = returnResults.filter((r) => r.status === 'failed').length;
+    const retFailList = returnResults.filter((r) => r.status === 'failed');
+    const retFail = retFailList.length;
     const catPushed = Number(catalogPush?.pushed || catalogPush?.data?.pushed || 0);
     const accPushed = Number(accountsPush?.pushed || accountsPush?.data?.pushed || 0);
     const accFailed = Number(accountsPush?.failed || accountsPush?.data?.failed || 0);
@@ -1595,6 +1736,21 @@ async function runPushToCloud({ retryFailed = false } = {}) {
     showToast(summary, saleFail || retFail || accFailed ? 'error' : 'success');
     setCloudSyncMsg(summary);
     appendCloudSyncLog(summary, saleFail || retFail || accFailed ? 'error' : 'success');
+
+    // Surface server reasons so "failed 13" is actionable (unique reasons, capped)
+    const failReasons = [...saleFailList, ...retFailList]
+      .map((r) => String(r.reason || '').trim())
+      .filter(Boolean);
+    const uniqueReasons = [...new Set(failReasons)].slice(0, 5);
+    if (uniqueReasons.length) {
+      appendCloudSyncLog(`Why failed: ${uniqueReasons.join(' · ')}`, 'error');
+      setCloudSyncMsg(`${summary}\n${uniqueReasons.join('\n')}`);
+    }
+    if (Array.isArray(salesResult?.data?.errors) && salesResult.data.errors.length) {
+      appendCloudSyncLog(salesResult.data.errors.slice(0, 3).join(' · '), 'error');
+    } else if (salesResult?.message && (saleFail || retFail)) {
+      appendCloudSyncLog(salesResult.message, 'error');
+    }
   } catch (err) {
     showToast(err.message || 'Push failed', 'error');
     setCloudSyncMsg(err.message || 'Push failed');
@@ -2905,15 +3061,7 @@ btnAddCustomLine?.addEventListener('click', () => {
 
 // Clear Cart button
 btnClearCart.addEventListener('click', () => {
-  cart = [];
-  selectedCustomer = null;
-  customerCreditInfo = null;
-  overallDiscount = 0;
-  cartDiscountAmount = 0;
-  document.getElementById('cart-discount-input').value = 0;
-  customerSearchInp.value = '';
-  custCreditInfoCard.style.display = 'none';
-  renderCartList();
+  clearCartState();
 });
 
 // Overall discount inputs
@@ -3556,27 +3704,27 @@ async function submitCompleteSale() {
             design: tokenRes.data.settings || cachedTokenDesign,
           };
         } else if (tokenRes?.code === 'TOKEN_DISABLED') {
-          showToast('Token flow is OFF in Settings — enable & save token settings', 'error');
+          // Token flow intentionally OFF — receipt-only checkout is fine
+          console.log('[token] skipped (disabled in Settings)');
         } else if (tokenRes && !tokenRes.success) {
-          showToast(tokenRes.message || 'Could not allocate token', 'error');
+          console.warn('[token] allocate skipped', tokenRes.message);
         }
       } catch (tokenErr) {
         console.warn('[token] checkout allocate skipped', tokenErr);
-        showToast(tokenErr?.message || 'Token allocate failed', 'error');
       }
     }
 
     checkoutModalOverlay.style.display = 'none';
 
+    // If this was a recalled held sale, remove it from held queue
+    if (heldSaleId) {
+      try { await api.pos.deleteHeldSale(heldSaleId); } catch (_) { /* ignore */ }
+      heldSaleId = null;
+      try { void loadHeldSales(); } catch (_) { /* ignore */ }
+    }
+
     // Clear cart immediately
-    cart = [];
-    selectedCustomer = null;
-    overallDiscount = 0;
-    cartDiscountAmount = 0;
-    document.getElementById('cart-discount-input').value = 0;
-    customerSearchInp.value = '';
-    custCreditInfoCard.style.display = 'none';
-    renderCartList();
+    clearCartState();
 
     // Update local stock quantities
     snapItems.forEach(async (cartItem) => {
@@ -3816,10 +3964,212 @@ document.getElementById('btn-receipt-email').addEventListener('click', () => {
   showToast('Email feature not available in desktop app', 'info');
 });
 
-// ─── HOLD SALE ──────────────────────────────────────────────────────────────
+// ─── HOLD / HELD SALES ──────────────────────────────────────────────────────
+function updateHeldBanner() {
+  const banner = document.getElementById('cart-held-banner');
+  if (!banner) return;
+  banner.classList.toggle('visible', Boolean(heldSaleId));
+}
+
+function updateHeldBadge(count) {
+  const badge = document.getElementById('held-count-badge');
+  if (!badge) return;
+  const n = Number(count) || 0;
+  badge.textContent = String(n);
+  badge.classList.toggle('hidden', n <= 0);
+}
+
+function heldSaleTotal(sale) {
+  if (sale?.grandTotal != null) return Number(sale.grandTotal) || 0;
+  const items = sale?.items || [];
+  const subtotal = items.reduce((sum, i) => {
+    const line = i.lineTotal != null
+      ? Number(i.lineTotal)
+      : (Number(i.quantity) || 0) * (Number(i.unitPrice) || 0);
+    return sum + (Number.isFinite(line) ? line : 0);
+  }, 0);
+  return Math.max(0, subtotal - (Number(sale?.discountTotal) || 0) + (Number(sale?.taxTotal) || 0));
+}
+
+function clearCartState() {
+  cart = [];
+  selectedCustomer = null;
+  customerCreditInfo = null;
+  overallDiscount = 0;
+  cartDiscountAmount = 0;
+  heldSaleId = null;
+  const discInp = document.getElementById('cart-discount-input');
+  if (discInp) discInp.value = 0;
+  if (customerSearchInp) customerSearchInp.value = '';
+  if (custCreditInfoCard) custCreditInfoCard.style.display = 'none';
+  updateHeldBanner();
+  renderCartList();
+}
+
+async function loadHeldSales() {
+  const listEl = document.getElementById('held-sales-list');
+  if (listEl) {
+    listEl.innerHTML = '<div class="held-empty"><div class="held-empty-icon">⏸️</div><p>Loading held sales…</p></div>';
+  }
+  try {
+    const res = await api.pos.getHeldSales();
+    heldSalesCache = Array.isArray(res?.data) ? res.data : [];
+  } catch (err) {
+    heldSalesCache = [];
+    console.warn('[held] load failed', err);
+  }
+  updateHeldBadge(heldSalesCache.length);
+  renderHeldSalesList();
+}
+
+function renderHeldSalesList() {
+  const listEl = document.getElementById('held-sales-list');
+  if (!listEl) return;
+
+  if (!heldSalesCache.length) {
+    listEl.innerHTML = `
+      <div class="held-empty">
+        <div class="held-empty-icon">⏸️</div>
+        <p>No held sales</p>
+        <p style="font-size:12px;margin-top:6px;">Cart park karne ke liye Sell → Hold Sale use karein.</p>
+      </div>`;
+    return;
+  }
+
+  listEl.innerHTML = heldSalesCache.map((sale) => {
+    const id = sale.id;
+    const itemCount = sale.items?.length || 0;
+    const when = sale.createdAt
+      ? new Date(sale.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : '—';
+    const label = sale.invoiceNumber || String(id || '').slice(0, 12);
+    const cust = sale.customerName || 'Walk-in Customer';
+    return `
+      <div class="held-sale-card" data-held-id="${id}">
+        <div class="held-meta">
+          <b>${label}</b>
+          <span>${cust} · ${itemCount} item${itemCount === 1 ? '' : 's'} · ${when}</span>
+        </div>
+        <div class="held-right">
+          <div class="held-amount">
+            <b>${pkr(heldSaleTotal(sale))}</b>
+            <small>Parked</small>
+          </div>
+          <button type="button" class="btn-recall" data-action="recall">Recall</button>
+          <button type="button" class="btn-delete-held" data-action="delete">Delete</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  listEl.querySelectorAll('.held-sale-card').forEach((card) => {
+    const id = card.getAttribute('data-held-id');
+    const sale = heldSalesCache.find((s) => String(s.id) === String(id));
+    card.querySelector('[data-action="recall"]')?.addEventListener('click', () => {
+      if (sale) recallHeldSale(sale);
+    });
+    card.querySelector('[data-action="delete"]')?.addEventListener('click', () => {
+      if (sale) deleteHeldSaleById(sale.id);
+    });
+  });
+}
+
+function recallHeldSale(sale) {
+  if (!sale?.items?.length) {
+    showToast('Held sale has no items', 'error');
+    return;
+  }
+  if (cart.length > 0 && !confirm('Current cart clear ho jayegi. Held sale recall karein?')) {
+    return;
+  }
+
+  cart = sale.items.map((item) => {
+    const qty = Number(item.quantity) || 0;
+    const unitPrice = Number(item.unitPrice) || 0;
+    const discount = Number(item.discount) || 0;
+    const taxRate = resolveTaxRate(item.taxRate);
+    const lineTotal = item.lineTotal != null ? Number(item.lineTotal) : qty * unitPrice;
+    const isCustom = !item.productId || item.sku === 'CUSTOM' || item.isCustom;
+    return {
+      productId: item.productId || `custom-${item.productName}-${unitPrice}`,
+      productName: item.productName,
+      sku: item.sku || (isCustom ? 'CUSTOM' : ''),
+      isCustom: Boolean(isCustom),
+      quantity: qty,
+      unitPrice,
+      discount,
+      taxRate,
+      taxAmount: Number(item.taxAmount) || 0,
+      lineTotal,
+      currentStock: item.currentStock != null ? Number(item.currentStock) : qty,
+      availableStock: item.availableStock != null ? Number(item.availableStock) : qty,
+      unitName: item.unitName || 'Pcs',
+      stockUnitName: item.stockUnitName || item.unitName || 'Pcs',
+      salesConversionFactor: item.conversionFactor ?? item.salesConversionFactor ?? 1,
+      conversionFactor: item.conversionFactor ?? item.salesConversionFactor ?? 1,
+      allowFractionalQty: Boolean(item.allowFractionalQty) || Math.abs(qty - Math.round(qty)) > 1e-9,
+      serialNumber: item.serialNumber || null,
+      batchNumber: item.batchNumber || null,
+      expiryDate: item.expiryDate || null,
+    };
+  });
+
+  selectedCustomer = sale.customerId
+    ? {
+        id: sale.customerId,
+        name: sale.customerName || 'Customer',
+        phone: sale.customerPhone || null,
+        email: sale.customerEmail || null,
+      }
+    : null;
+  customerCreditInfo = null;
+  heldSaleId = sale.id;
+  overallDiscount = 0;
+  cartDiscountAmount = Number(sale.discountTotal) || 0;
+  discountMode = cartDiscountAmount > 0 ? 'amount' : 'pct';
+  const modeEl = document.getElementById('cart-discount-mode');
+  const discInp = document.getElementById('cart-discount-input');
+  if (modeEl) modeEl.value = discountMode;
+  if (discInp) discInp.value = cartDiscountAmount > 0 ? cartDiscountAmount : 0;
+  if (customerSearchInp) customerSearchInp.value = selectedCustomer?.name || '';
+  if (custCreditInfoCard) custCreditInfoCard.style.display = 'none';
+  if (selectedCustomer?.id) refreshCustomerCreditInfo();
+
+  updateHeldBanner();
+  renderCartList();
+
+  // Switch to Sell tab
+  document.querySelector('.tab-btn[data-tab="sell"]')?.click();
+  showToast('Held sale recalled into cart', 'success');
+}
+
+async function deleteHeldSaleById(id) {
+  if (!id) return;
+  if (!confirm('Delete this held sale?')) return;
+  try {
+    const res = await api.pos.deleteHeldSale(id);
+    if (!res?.success) {
+      showToast(res?.message || 'Could not delete held sale', 'error');
+      return;
+    }
+    if (String(heldSaleId) === String(id)) {
+      heldSaleId = null;
+      updateHeldBanner();
+    }
+    await loadHeldSales();
+    showToast('Held sale deleted', 'success');
+  } catch (err) {
+    showToast(err?.message || 'Could not delete held sale', 'error');
+  }
+}
+
 btnHoldSaleTrigger.addEventListener('click', async () => {
   if (cart.length === 0) return;
   const totals = calculateTotals();
+
+  // Re-parking an already-recalled held sale: replace the old park
+  if (heldSaleId) {
+    try { await api.pos.deleteHeldSale(heldSaleId); } catch (_) { /* ignore */ }
+  }
 
   const payload = {
     terminalId: activeShift.terminalId,
@@ -3830,31 +4180,42 @@ btnHoldSaleTrigger.addEventListener('click', async () => {
     items: cart.map(i => ({
       productId: i.isCustom ? null : i.productId,
       productName: i.productName,
-      sku: i.sku,
+      sku: i.isCustom ? 'CUSTOM' : i.sku,
       quantity: i.quantity,
       unitPrice: i.unitPrice,
       discount: i.discount,
-      taxRate: i.taxRate
+      taxRate: i.taxRate,
+      taxAmount: i.taxAmount || 0,
+      lineTotal: i.lineTotal,
+      unitName: i.unitName || 'Pcs',
+      stockUnitName: i.stockUnitName || i.unitName || 'Pcs',
+      conversionFactor: i.conversionFactor ?? i.salesConversionFactor ?? 1,
+      salesConversionFactor: i.conversionFactor ?? i.salesConversionFactor ?? 1,
+      allowFractionalQty: Boolean(i.allowFractionalQty),
+      isCustom: Boolean(i.isCustom),
+      serialNumber: i.serialNumber || null,
+      batchNumber: i.batchNumber || null,
+      expiryDate: i.expiryDate || null,
+      currentStock: i.currentStock,
     })),
+    subtotal: totals.subtotal,
     discountTotal: totals.discountTotal,
-    taxTotal: totals.taxTotal
+    taxTotal: totals.taxTotal,
+    grandTotal: totals.grandTotal,
   };
 
   const res = await api.pos.holdSale(payload);
   if (res?.success) {
-    alert('Sale parked successfully');
-
-    // Clear cart
-    cart = [];
-    selectedCustomer = null;
-    overallDiscount = 0;
-    cartDiscountAmount = 0;
-    customerSearchInp.value = '';
-    custCreditInfoCard.style.display = 'none';
-    renderCartList();
+    clearCartState();
+    await loadHeldSales();
+    showToast('Sale parked — Held tab se recall karein', 'success');
   } else {
     alert(res?.message || 'Could not park sale');
   }
+});
+
+document.getElementById('btn-refresh-held')?.addEventListener('click', () => {
+  loadHeldSales();
 });
 
 // ─── CLOSE SHIFT / CASH FLOW MODALS ───────────────────────────────────────────

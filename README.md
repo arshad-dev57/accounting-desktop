@@ -37,7 +37,7 @@ Flow: **Login → POS** (direct password login, no OTP).
 
 ```env
 ELECTRON_APP_URL=http://127.0.0.1:3000
-ELECTRON_API_URL=http://127.0.0.1:5000
+ELECTRON_API_URL=https://bisonstechserpbackend-production.up.railway.app
 ```
 
 ## Build

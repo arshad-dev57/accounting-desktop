@@ -8,6 +8,9 @@
   window.__btSessionGuardBound = true;
 
   let shown = false;
+  /** Avoid hammering /session-status — at most once per day (plus forced logout events). */
+  const SERVER_CHECK_MS = 86_400_000;
+  let lastCheckAt = 0;
 
   function titleFor(code) {
     if (code === 'USER_INACTIVE') return 'Account deactivated';
@@ -79,8 +82,11 @@
     setTimeout(go, 4000);
   }
 
-  async function check() {
+  async function check(force) {
     if (shown || !api.auth.checkAccess) return;
+    const now = Date.now();
+    if (!force && lastCheckAt && now - lastCheckAt < SERVER_CHECK_MS) return;
+    lastCheckAt = now;
     try {
       const res = await api.auth.checkAccess();
       if (res && res.ok === false && res.code !== 'OFFLINE' && res.code !== 'NO_SESSION') {
@@ -116,8 +122,9 @@
   } else {
     check();
   }
-  setInterval(check, 15_000);
+  // Server session-status: once per day (first load + interval; visibility respects throttle)
+  setInterval(() => check(false), SERVER_CHECK_MS);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') check();
+    if (document.visibilityState === 'visible') check(false);
   });
 })();

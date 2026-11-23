@@ -2,10 +2,8 @@ const api = window.bisonDesktop;
 
 let stationId = '';
 let lastOrderCount = 0;
-let pollTimer = null;
 let refreshing = false;
 const orderVersions = new Map();
-const POLL_MS = 4000;
 
 function fmtTime(iso) {
   if (!iso) return '—';
@@ -200,9 +198,7 @@ async function refreshKitchen({ quiet = false } = {}) {
       const when = kitchenRes.serverTime
         ? new Date(kitchenRes.serverTime).toLocaleTimeString()
         : new Date().toLocaleTimeString();
-      meta.textContent = quiet
-        ? `Live · updated ${when}`
-        : `Updated ${when} · auto-refresh every ${POLL_MS / 1000}s`;
+      meta.textContent = quiet ? `Updated ${when}` : `Updated ${when} · tap Refresh for new orders`;
     }
   } catch (err) {
     if (meta) meta.textContent = err.message || 'Kitchen refresh failed';
@@ -210,13 +206,6 @@ async function refreshKitchen({ quiet = false } = {}) {
   } finally {
     refreshing = false;
   }
-}
-
-function startPolling() {
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(() => {
-    refreshKitchen({ quiet: true }).catch(() => {});
-  }, POLL_MS);
 }
 
 function tickClock() {
@@ -272,12 +261,6 @@ document.getElementById('station-filter')?.addEventListener('change', (e) => {
   refreshKitchen().catch(() => {});
 });
 
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') {
-    refreshKitchen({ quiet: true }).catch(() => {});
-  }
-});
-
 async function boot() {
   tickClock();
   setInterval(tickClock, 1000);
@@ -293,9 +276,7 @@ async function boot() {
   }
 
   await loadStations();
-  // Auto-load as soon as page opens — no manual Refresh needed
   await refreshKitchen();
-  startPolling();
 
   api.kitchen?.onNewOrder?.((payload) => {
     const badge = document.getElementById('new-order-badge');
@@ -303,7 +284,6 @@ async function boot() {
       badge.textContent = payload?.message || payload?.title || 'New kitchen order';
       badge.classList.remove('hidden');
     }
-    refreshKitchen({ quiet: true }).catch(() => {});
   });
 
   api.kitchen?.onNotificationsCleared?.(() => {

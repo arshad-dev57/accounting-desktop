@@ -262,6 +262,118 @@
         font-size: 10px;
         font-weight: 700;
       }
+      .tab-btn {
+        position: relative;
+      }
+      .held-badge {
+        position: absolute;
+        top: 2px;
+        right: 6px;
+        min-width: 16px;
+        height: 16px;
+        padding: 0 4px;
+        border-radius: 999px;
+        background: #f59e0b;
+        color: #fff;
+        font-size: 9px;
+        font-weight: 800;
+        line-height: 16px;
+        text-align: center;
+      }
+      .held-badge.hidden {
+        display: none;
+      }
+      .held-sales-grid {
+        display: grid;
+        gap: 12px;
+        padding: 4px 0 24px;
+      }
+      .held-sale-card {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 14px 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+      }
+      .held-sale-card .held-meta b {
+        display: block;
+        font-size: 14px;
+        color: #0f172a;
+      }
+      .held-sale-card .held-meta span {
+        display: block;
+        margin-top: 4px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .held-sale-card .held-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-shrink: 0;
+      }
+      .held-sale-card .held-amount {
+        text-align: right;
+      }
+      .held-sale-card .held-amount b {
+        display: block;
+        color: var(--brand);
+        font-size: 16px;
+      }
+      .held-sale-card .held-amount small {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .held-sale-card .btn-recall {
+        height: 34px;
+        padding: 0 14px;
+        border: none;
+        border-radius: 8px;
+        background: var(--brand);
+        color: #fff;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .held-sale-card .btn-delete-held {
+        height: 34px;
+        padding: 0 12px;
+        border: 1px solid #fecaca;
+        border-radius: 8px;
+        background: #fef2f2;
+        color: #dc2626;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .held-empty {
+        text-align: center;
+        padding: 48px 16px;
+        color: var(--muted);
+      }
+      .held-empty .held-empty-icon {
+        font-size: 36px;
+        margin-bottom: 8px;
+        opacity: 0.5;
+      }
+      #cart-held-banner {
+        display: none;
+        margin: 0 0 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: #fffbeb;
+        border: 1px solid #fcd34d;
+        color: #92400e;
+        font-size: 11px;
+        font-weight: 600;
+      }
+      #cart-held-banner.visible {
+        display: block;
+      }
 
       /* Main Workspace View */
       .workspace {
@@ -924,6 +1036,137 @@
         display: grid;
         gap: 16px;
         max-width: 1080px;
+      }
+      .settings-page {
+        display: grid;
+        grid-template-columns: 220px minmax(0, 1fr);
+        gap: 20px;
+        align-items: start;
+        max-width: 1180px;
+      }
+      @media (max-width: 900px) {
+        .settings-page { grid-template-columns: 1fr; }
+      }
+      .settings-nav {
+        position: sticky;
+        top: 8px;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .settings-nav-title {
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--muted);
+        padding: 4px 10px 10px;
+      }
+      .settings-nav-btn {
+        border: 0;
+        background: transparent;
+        text-align: left;
+        border-radius: 10px;
+        padding: 10px 12px;
+        cursor: pointer;
+        color: #334155;
+        font-size: 13px;
+        font-weight: 600;
+        line-height: 1.25;
+      }
+      .settings-nav-btn small {
+        display: block;
+        margin-top: 2px;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--muted);
+      }
+      .settings-nav-btn:hover { background: #f1f5f9; }
+      .settings-nav-btn.active {
+        background: rgba(1, 69, 130, 0.1);
+        color: var(--brand);
+      }
+      .settings-nav-btn.hidden { display: none; }
+      .settings-main {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        min-width: 0;
+      }
+      .settings-section {
+        display: none;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .settings-section.active { display: flex; }
+      .settings-section-head {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        padding: 2px 2px 4px;
+      }
+      .settings-section-head h3 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 800;
+        color: #0f172a;
+      }
+      .settings-section-head p {
+        margin: 0;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .settings-card-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 8px;
+      }
+      .settings-card-head h3 {
+        margin: 0;
+      }
+      .settings-tag {
+        flex-shrink: 0;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        padding: 3px 8px;
+        border-radius: 999px;
+        background: #e2e8f0;
+        color: #475569;
+      }
+      .settings-tag.local { background: #ecfdf5; color: #047857; }
+      .settings-tag.cloud { background: #eff6ff; color: #1d4ed8; }
+      .settings-tag.restaurant { background: #fff7ed; color: #c2410c; }
+      .settings-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 12px;
+      }
+      .settings-toggle-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 8px 12px;
+        margin-top: 8px;
+      }
+      .settings-card .receipt-feature {
+        margin: 0;
+        padding: 10px 12px;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        background: #f8fafc;
+      }
+      .settings-card .receipt-feature p {
+        margin: 6px 0 0;
+        font-size: 12px;
+        color: var(--muted);
       }
       .receipt-settings-grid {
         display: grid;
@@ -2145,6 +2388,10 @@
           <button class="tab-btn" data-tab="returns">
             <span>Returns</span>
           </button>
+          <button class="tab-btn" data-tab="held" id="tab-btn-held">
+            <span>Held</span>
+            <span class="held-badge hidden" id="held-count-badge">0</span>
+          </button>
           <button class="tab-btn" data-tab="customers">
             <span>Customers</span>
           </button>
@@ -2211,6 +2458,7 @@
                   <h3>Cart (<span id="cart-qty-count">0</span> items)</h3>
                   <button class="btn-clear-cart" id="btn-clear-cart" style="display:none;">Clear</button>
                 </div>
+                <div id="cart-held-banner">Resuming held sale — checkout ke baad yeh held list se hat jayegi</div>
                 
                 <div class="customer-selector">
                   <div class="customer-search-row">
@@ -2316,7 +2564,7 @@
               <div class="panel-header restaurant-ready-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
                 <div>
                   <h2 style="margin:0;">Ready orders</h2>
-                  <p style="margin:4px 0 0;font-size:12px;color:var(--muted);">Kitchen se ready tickets — yahan payment lo (local save, phir Sync).</p>
+                  <p style="margin:4px 0 0;font-size:12px;color:var(--muted);">Kitchen se ready tickets — Refresh dabao naye orders ke liye, phir payment lo (local save, Sync).</p>
                 </div>
                 <button class="btn-nav-action ghost" id="btn-refresh-ready-orders" type="button">↻ Refresh</button>
               </div>
@@ -2331,6 +2579,19 @@
                 </select>
               </div>
               <div id="ready-orders-list" class="restaurant-ready-grid"></div>
+            </div>
+          </div>
+
+          <div class="view-panel" id="tab-held">
+            <div class="panel-content">
+              <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                <div>
+                  <h2 style="margin:0;">Held Sales</h2>
+                  <p style="margin:4px 0 0;font-size:12px;color:var(--muted);">Parked carts — Recall se cart mein wapas lao, phir checkout karo.</p>
+                </div>
+                <button class="btn-nav-action ghost" id="btn-refresh-held" type="button">↻ Refresh</button>
+              </div>
+              <div id="held-sales-list" class="held-sales-grid"></div>
             </div>
           </div>
 
@@ -2572,313 +2833,429 @@
           <!-- ─── T6: SETTINGS VIEW ──────────────────────────────── -->
           <div class="view-panel" id="tab-settings">
             <div class="panel-content">
-              <div class="panel-header">
-                <h2>POS settings</h2>
+              <div class="panel-header" style="margin-bottom:16px;">
+                <h2 style="margin:0;">POS settings</h2>
+                <p class="settings-muted" style="margin:6px 0 0;">Left menu se section choose karein — har setting ka apna Save button hai.</p>
               </div>
-              <div class="settings-stack">
-                <div class="settings-card" id="cloud-sync-card">
-                  <h3>Cloud Synchronization</h3>
-                  <p class="settings-muted">
-                    POS works offline first. Use <b>Push</b> to upload local pending records, and
-                    <b>Get</b> to download the latest catalog and ERP data. These never run together.
-                  </p>
-                  <div class="cloud-sync-status-grid" id="cloud-sync-status-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:12px 0;">
-                    <div class="settings-kpi"><span>Connection</span><b id="cloud-sync-connection">Checking…</b></div>
-                    <div class="settings-kpi"><span>Pending</span><b id="cloud-sync-pending">0</b></div>
-                    <div class="settings-kpi"><span>Failed</span><b id="cloud-sync-failed">0</b></div>
-                    <div class="settings-kpi"><span>Last push</span><b id="cloud-sync-last-push">—</b></div>
-                    <div class="settings-kpi"><span>Last get</span><b id="cloud-sync-last-get">—</b></div>
-                  </div>
-                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 8px;">
-                    <button class="btn-add-custom" id="btn-push-to-cloud" type="button" style="background:#0f766e;">↑ Push to Cloud</button>
-                    <button class="btn-add-custom" id="btn-get-from-cloud" type="button" style="background:var(--brand);">↓ Get from Cloud</button>
-                    <button class="btn-add-custom" id="btn-retry-failed-sync" type="button" style="background:#b45309;">↻ Retry failed</button>
-                  </div>
-                  <p class="settings-muted" id="cloud-sync-status-msg" style="font-size:12px;margin:0 0 8px;"></p>
-                  <div id="cloud-sync-log" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:#f8fafc;padding:8px;font-size:12px;color:#334155;">
-                    <div class="settings-muted">No sync activity yet.</div>
-                  </div>
-                </div>
 
-                <div class="settings-card" id="print-settings-card">
-                  <h3>Printing</h3>
-                  <p class="settings-muted">Local print options for this POS terminal.</p>
-                  <div class="receipt-feature" style="margin-top:10px;">
-                    <label class="receipt-toggle" style="border:0;padding:0;">
-                      <span style="font-weight:700;">Auto-print receipt on sale</span>
-                      <input type="checkbox" id="settings-enable-thermal" />
-                    </label>
-                    <p>When enabled, a full customer receipt prints after checkout.</p>
-                  </div>
-                  <button class="btn-add-custom" id="btn-save-settings" type="button" style="margin-top:10px;">Save print settings</button>
-                </div>
+              <div class="settings-page">
+                <nav class="settings-nav" id="settings-nav" aria-label="Settings sections">
+                  <div class="settings-nav-title">Sections</div>
+                  <button type="button" class="settings-nav-btn active" data-settings-section="printing">
+                    Printing &amp; slips
+                    <small>Receipt · Token · Template</small>
+                  </button>
+                  <button type="button" class="settings-nav-btn" data-settings-section="numbers">
+                    Invoice numbers
+                    <small>Receipt serial sequence</small>
+                  </button>
+                  <button type="button" class="settings-nav-btn" data-settings-section="sync">
+                    Cloud sync
+                    <small>Push / Get offline data</small>
+                  </button>
+                  <button type="button" class="settings-nav-btn" data-settings-section="backup">
+                    Backup
+                    <small>Local file · Google Drive</small>
+                  </button>
+                </nav>
 
-                <div class="settings-card hidden" id="restaurant-token-card" data-restaurant-only="true">
-                  <h3>Restaurant token flow</h3>
-                  <p class="settings-muted">
-                    Turn on <b>Enable token flow</b> (or Print customer / kitchen), then click
-                    <b>Save token settings</b>.
-                    Tokens print on <b>Send to Kitchen</b> and also on restaurant <b>checkout / sale print</b>
-                    (same thermal printer as receipts). Paper length matches slip content only.
-                  </p>
-                  <div class="receipt-feature" style="margin-top:10px;">
-                    <label class="receipt-toggle" style="border:0;padding:0;">
-                      <span style="font-weight:700;">Enable token flow</span>
-                      <input type="checkbox" id="token-enabled" />
-                    </label>
-                  </div>
-                  <div class="receipt-feature">
-                    <label class="receipt-toggle" style="border:0;padding:0;">
-                      <span style="font-weight:700;">Print customer token</span>
-                      <input type="checkbox" id="token-print-customer" checked />
-                    </label>
-                  </div>
-                  <div class="receipt-feature">
-                    <label class="receipt-toggle" style="border:0;padding:0;">
-                      <span style="font-weight:700;">Print kitchen token / KOT</span>
-                      <input type="checkbox" id="token-print-kitchen" checked />
-                    </label>
-                  </div>
-                  <div class="invoice-serial-grid" style="margin-top:12px;">
-                    <label>
-                      <span>Token prefix</span>
-                      <input type="text" id="token-prefix" maxlength="8" placeholder="T" />
-                    </label>
-                    <label>
-                      <span>Next token #</span>
-                      <input type="number" id="token-next" min="1" step="1" />
-                    </label>
-                    <label>
-                      <span>Digits</span>
-                      <input type="number" id="token-pad" min="1" max="8" step="1" />
-                    </label>
-                    <label>
-                      <span>Reset tokens</span>
-                      <select id="token-reset-mode" class="pf-select" style="height:36px;">
-                        <option value="daily">Every day (24h)</option>
-                        <option value="never">Never (keep running)</option>
-                        <option value="shift">On new day after reset hour</option>
-                      </select>
-                    </label>
-                    <label>
-                      <span>Daily reset hour</span>
-                      <input type="number" id="token-reset-hour" min="0" max="23" step="1" placeholder="0" />
-                    </label>
-                    <div class="invoice-serial-preview">
-                      <span>Next token will be</span>
-                      <b id="token-preview">T001</b>
+                <div class="settings-main">
+                  <!-- ── Printing ── -->
+                  <section class="settings-section active" id="settings-section-printing" data-settings-section="printing">
+                    <div class="settings-section-head">
+                      <h3>Printing &amp; slips</h3>
+                      <p>Customer receipt = full bill. Token = queue number slip (restaurant only).</p>
                     </div>
-                  </div>
 
-                  <h4 style="margin:18px 0 6px;font-size:14px;">Token design / theme</h4>
-                  <p class="settings-muted" style="margin-bottom:10px;">
-                    Same look as the sales receipt. Store logo &amp; address come from the synced receipt template.
-                  </p>
-                  <div class="invoice-serial-grid">
-                    <label>
-                      <span>Paper width</span>
-                      <select id="token-paper-width" class="pf-select" style="height:36px;">
-                        <option value="80">80 mm</option>
-                        <option value="58">58 mm</option>
-                      </select>
-                    </label>
-                    <label>
-                      <span>Customer header</span>
-                      <input type="text" id="token-header-customer" placeholder="CUSTOMER TOKEN" />
-                    </label>
-                    <label>
-                      <span>Kitchen header</span>
-                      <input type="text" id="token-header-kitchen" placeholder="KITCHEN TOKEN / KOT" />
-                    </label>
-                    <label>
-                      <span>Copy label</span>
-                      <input type="text" id="token-copy-label" placeholder="TOKEN COPY" />
-                    </label>
-                  </div>
-                  <div class="receipt-field" style="margin-top:10px;">
-                    <label>Customer message</label>
-                    <input id="token-customer-message" type="text" placeholder="Please wait for your order" />
-                  </div>
-                  <div class="receipt-field">
-                    <label>Customer hint</label>
-                    <input id="token-customer-hint" type="text" placeholder="Show this token when collecting" />
-                  </div>
-                  <div class="receipt-field">
-                    <label>Footer text</label>
-                    <input id="token-footer-text" type="text" placeholder="Thank you!" />
-                  </div>
-                  <div class="receipt-field">
-                    <label>Powered by</label>
-                    <input id="token-powered-by" type="text" placeholder="Powered by BisonTechs POS" />
-                  </div>
-                  <div class="receipt-feature">
-                    <label class="receipt-toggle" style="border:0;padding:0;">
-                      <span style="font-weight:700;">Show logo</span>
-                      <input type="checkbox" id="token-show-logo" checked />
-                    </label>
-                  </div>
-                  <div class="receipt-feature">
-                    <label class="receipt-toggle" style="border:0;padding:0;">
-                      <span style="font-weight:700;">Show address</span>
-                      <input type="checkbox" id="token-show-address" checked />
-                    </label>
-                  </div>
-                  <div class="receipt-feature">
-                    <label class="receipt-toggle" style="border:0;padding:0;">
-                      <span style="font-weight:700;">Show phone</span>
-                      <input type="checkbox" id="token-show-phone" checked />
-                    </label>
-                  </div>
-                  <div class="receipt-feature">
-                    <label class="receipt-toggle" style="border:0;padding:0;">
-                      <span style="font-weight:700;">Show date / time</span>
-                      <input type="checkbox" id="token-show-datetime" checked />
-                    </label>
-                  </div>
-                  <div class="receipt-feature">
-                    <label class="receipt-toggle" style="border:0;padding:0;">
-                      <span style="font-weight:700;">Show table</span>
-                      <input type="checkbox" id="token-show-table" checked />
-                    </label>
-                  </div>
-                  <div class="receipt-feature">
-                    <label class="receipt-toggle" style="border:0;padding:0;">
-                      <span style="font-weight:700;">Show ticket #</span>
-                      <input type="checkbox" id="token-show-ticket" checked />
-                    </label>
-                  </div>
-                  <div class="receipt-feature">
-                    <label class="receipt-toggle" style="border:0;padding:0;">
-                      <span style="font-weight:700;">Show items on customer token</span>
-                      <input type="checkbox" id="token-show-items-customer" />
-                    </label>
-                  </div>
-                  <div class="receipt-feature">
-                    <label class="receipt-toggle" style="border:0;padding:0;">
-                      <span style="font-weight:700;">Show cashier</span>
-                      <input type="checkbox" id="token-show-cashier" />
-                    </label>
-                  </div>
-
-                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
-                    <button class="btn-add-custom" id="btn-save-token-settings" type="button">Save token settings</button>
-                    <button class="btn-add-custom" id="btn-preview-token" type="button" style="background:#334155;">Preview customer token</button>
-                    <button class="btn-add-custom" id="btn-reset-token-now" type="button" style="background:#0f766e;">Reset counter now</button>
-                  </div>
-                  <p class="settings-muted" id="token-settings-status" style="margin-top:8px;font-size:12px;"></p>
-                  <div id="token-preview-panel" class="hidden" style="margin-top:14px;padding:12px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:10px;overflow:auto;max-height:420px;"></div>
-                </div>
-
-                <div class="settings-card" id="drive-backup-card">
-                  <h3>Google Drive backup</h3>
-                  <p class="settings-muted" style="margin-bottom:10px;">
-                    Backs up <b>this PC’s POS data only</b> to your Google Drive.
-                    <b style="color:#0b7a3e;">Does not change your cloud / Railway server.</b>
-                  </p>
-                  <div id="backup-guide" class="backup-guide"></div>
-
-                  <label class="receipt-toggle" style="margin-top:10px;">
-                    <span>Enable scheduled backup (3 times / day)</span>
-                    <input type="checkbox" id="backup-enabled" />
-                  </label>
-
-                  <div style="margin-top:12px;">
-                    <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;">Backup times (local clock)</div>
-                    <div class="backup-times-row">
-                      <input type="time" id="backup-time-1" />
-                      <input type="time" id="backup-time-2" />
-                      <input type="time" id="backup-time-3" />
+                    <div class="settings-card" id="print-settings-card">
+                      <div class="settings-card-head">
+                        <h3>1. Customer receipt print</h3>
+                        <span class="settings-tag local">This PC</span>
+                      </div>
+                      <p class="settings-muted">Full bill / invoice after checkout. Ye token nahi hai.</p>
+                      <div class="receipt-feature">
+                        <label class="receipt-toggle" style="border:0;padding:0;">
+                          <span style="font-weight:700;">Auto-print receipt on sale</span>
+                          <input type="checkbox" id="settings-enable-thermal" />
+                        </label>
+                        <p>Checkout ke baad full customer receipt print hogi.</p>
+                      </div>
+                      <div class="settings-actions">
+                        <button class="btn-add-custom" id="btn-save-settings" type="button">Save receipt print</button>
+                      </div>
                     </div>
-                  </div>
 
-                  <details style="margin-top:12px;">
-                    <summary style="cursor:pointer;font-size:13px;font-weight:700;">Google OAuth credentials (admin)</summary>
-                    <p class="settings-muted" style="margin:8px 0;">
-                      Google Cloud Console → enable <b>Google Drive API</b> → create OAuth client type <b>Desktop app</b>.
-                      You can also put values in desktop <code>.env</code> as <code>GOOGLE_OAUTH_CLIENT_ID</code> / <code>GOOGLE_OAUTH_CLIENT_SECRET</code>.
-                    </p>
-                    <div class="receipt-field">
-                      <label>Client ID</label>
-                      <input id="backup-client-id" type="text" placeholder="xxxx.apps.googleusercontent.com" autocomplete="off" />
+                    <div class="settings-card" id="receipt-settings-card">
+                      <div class="settings-card-head">
+                        <h3>2. Receipt template</h3>
+                        <span class="settings-tag cloud">From web admin</span>
+                      </div>
+                      <p class="settings-muted">
+                        Logo, store name, header/footer <b>Web app → POS admin → Receipt</b> se aate hain.
+                        Yahan sync karein; local option alag save hoti hai.
+                      </p>
+                      <div class="settings-actions" style="margin-top:0;margin-bottom:12px;">
+                        <button class="btn-add-custom" id="btn-sync-receipt-settings" type="button">↻ Sync receipt from web</button>
+                        <span class="settings-muted" id="receipt-sync-status" style="align-self:center;font-size:12px;"></span>
+                      </div>
+                      <div class="receipt-feature">
+                        <label class="receipt-toggle" style="border:0;padding:0;">
+                          <span style="font-weight:700;">Ask cashier for cash received</span>
+                          <input type="checkbox" id="rset-ask-cash" />
+                        </label>
+                        <p>Local only — cashier cash amount type karega, change calculate hoga.</p>
+                      </div>
+                      <div class="settings-actions">
+                        <button class="btn-add-custom" id="btn-save-receipt-settings" type="button">Save local option</button>
+                      </div>
                     </div>
-                    <div class="receipt-field">
-                      <label>Client Secret</label>
-                      <input id="backup-client-secret" type="password" placeholder="Leave blank to keep existing" autocomplete="off" />
+
+                    <div class="settings-card hidden" id="restaurant-token-card" data-restaurant-only="true">
+                      <div class="settings-card-head">
+                        <h3 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                          3. Restaurant token flow
+                          <span id="token-flow-badge" style="font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px;background:#fee2e2;color:#991b1b;">OFF</span>
+                        </h3>
+                        <span class="settings-tag restaurant">Restaurant</span>
+                      </div>
+                      <p class="settings-muted">
+                        Queue number slips (receipt se alag).
+                        <b>Enable</b> → print options → <b>Save token settings</b>.
+                        OFF = sirf receipt; koi error nahi.
+                      </p>
+                      <div class="receipt-feature" style="margin-bottom:10px;">
+                        <label class="receipt-toggle" style="border:0;padding:0;">
+                          <span style="font-weight:700;">Enable token flow</span>
+                          <input type="checkbox" id="token-enabled" />
+                        </label>
+                      </div>
+                      <div id="token-settings-fields">
+                        <div class="settings-toggle-grid">
+                          <div class="receipt-feature">
+                            <label class="receipt-toggle" style="border:0;padding:0;">
+                              <span style="font-weight:700;">Print customer token</span>
+                              <input type="checkbox" id="token-print-customer" checked />
+                            </label>
+                          </div>
+                          <div class="receipt-feature">
+                            <label class="receipt-toggle" style="border:0;padding:0;">
+                              <span style="font-weight:700;">Print kitchen token / KOT</span>
+                              <input type="checkbox" id="token-print-kitchen" checked />
+                            </label>
+                          </div>
+                        </div>
+                        <div class="invoice-serial-grid" style="margin-top:12px;">
+                          <label>
+                            <span>Token prefix</span>
+                            <input type="text" id="token-prefix" maxlength="8" placeholder="T" />
+                          </label>
+                          <label>
+                            <span>Next token #</span>
+                            <input type="number" id="token-next" min="1" step="1" />
+                          </label>
+                          <label>
+                            <span>Digits</span>
+                            <input type="number" id="token-pad" min="1" max="8" step="1" />
+                          </label>
+                          <label>
+                            <span>Reset tokens</span>
+                            <select id="token-reset-mode" class="pf-select" style="height:36px;">
+                              <option value="daily">Every day (24h)</option>
+                              <option value="never">Never (keep running)</option>
+                              <option value="shift">On new day after reset hour</option>
+                            </select>
+                          </label>
+                          <label>
+                            <span>Daily reset hour</span>
+                            <input type="number" id="token-reset-hour" min="0" max="23" step="1" placeholder="0" />
+                          </label>
+                          <div class="invoice-serial-preview">
+                            <span>Next token will be</span>
+                            <b id="token-preview">T001</b>
+                          </div>
+                        </div>
+
+                        <h4 style="margin:18px 0 6px;font-size:14px;">Token design / theme</h4>
+                        <p class="settings-muted" style="margin-bottom:10px;">
+                          Same printer as sales receipt. Logo/address receipt template se aate hain.
+                        </p>
+                        <div class="invoice-serial-grid">
+                          <label>
+                            <span>Paper width</span>
+                            <select id="token-paper-width" class="pf-select" style="height:36px;">
+                              <option value="80">80 mm</option>
+                              <option value="58">58 mm</option>
+                            </select>
+                          </label>
+                          <label>
+                            <span>Customer header</span>
+                            <input type="text" id="token-header-customer" placeholder="CUSTOMER TOKEN" />
+                          </label>
+                          <label>
+                            <span>Kitchen header</span>
+                            <input type="text" id="token-header-kitchen" placeholder="KITCHEN TOKEN / KOT" />
+                          </label>
+                          <label>
+                            <span>Copy label</span>
+                            <input type="text" id="token-copy-label" placeholder="TOKEN COPY" />
+                          </label>
+                        </div>
+                        <div class="receipt-field" style="margin-top:10px;">
+                          <label>Customer message</label>
+                          <input id="token-customer-message" type="text" placeholder="Please wait for your order" />
+                        </div>
+                        <div class="receipt-field">
+                          <label>Customer hint</label>
+                          <input id="token-customer-hint" type="text" placeholder="Show this token when collecting" />
+                        </div>
+                        <div class="receipt-field">
+                          <label>Footer text</label>
+                          <input id="token-footer-text" type="text" placeholder="Thank you!" />
+                        </div>
+                        <div class="receipt-field">
+                          <label>Powered by</label>
+                          <input id="token-powered-by" type="text" placeholder="Powered by BisonTechs POS" />
+                        </div>
+                        <div class="settings-toggle-grid">
+                          <div class="receipt-feature">
+                            <label class="receipt-toggle" style="border:0;padding:0;">
+                              <span style="font-weight:700;">Show logo</span>
+                              <input type="checkbox" id="token-show-logo" checked />
+                            </label>
+                          </div>
+                          <div class="receipt-feature">
+                            <label class="receipt-toggle" style="border:0;padding:0;">
+                              <span style="font-weight:700;">Show address</span>
+                              <input type="checkbox" id="token-show-address" checked />
+                            </label>
+                          </div>
+                          <div class="receipt-feature">
+                            <label class="receipt-toggle" style="border:0;padding:0;">
+                              <span style="font-weight:700;">Show phone</span>
+                              <input type="checkbox" id="token-show-phone" checked />
+                            </label>
+                          </div>
+                          <div class="receipt-feature">
+                            <label class="receipt-toggle" style="border:0;padding:0;">
+                              <span style="font-weight:700;">Show date / time</span>
+                              <input type="checkbox" id="token-show-datetime" checked />
+                            </label>
+                          </div>
+                          <div class="receipt-feature">
+                            <label class="receipt-toggle" style="border:0;padding:0;">
+                              <span style="font-weight:700;">Show table</span>
+                              <input type="checkbox" id="token-show-table" checked />
+                            </label>
+                          </div>
+                          <div class="receipt-feature">
+                            <label class="receipt-toggle" style="border:0;padding:0;">
+                              <span style="font-weight:700;">Show ticket #</span>
+                              <input type="checkbox" id="token-show-ticket" checked />
+                            </label>
+                          </div>
+                          <div class="receipt-feature">
+                            <label class="receipt-toggle" style="border:0;padding:0;">
+                              <span style="font-weight:700;">Show items on customer token</span>
+                              <input type="checkbox" id="token-show-items-customer" />
+                            </label>
+                          </div>
+                          <div class="receipt-feature">
+                            <label class="receipt-toggle" style="border:0;padding:0;">
+                              <span style="font-weight:700;">Show cashier</span>
+                              <input type="checkbox" id="token-show-cashier" />
+                            </label>
+                          </div>
+                        </div>
+
+                        <div class="settings-actions">
+                          <button class="btn-add-custom" id="btn-save-token-settings" type="button">Save token settings</button>
+                          <button class="btn-add-custom" id="btn-preview-token" type="button" style="background:#334155;">Preview customer token</button>
+                          <button class="btn-add-custom" id="btn-reset-token-now" type="button" style="background:#0f766e;">Reset counter now</button>
+                        </div>
+                      </div>
+                      <p class="settings-muted" id="token-settings-status" style="margin-top:8px;font-size:12px;"></p>
+                      <div id="token-preview-panel" class="hidden" style="margin-top:14px;padding:12px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:10px;overflow:auto;max-height:420px;"></div>
                     </div>
-                  </details>
+                  </section>
 
-                  <div id="backup-status-line" class="settings-muted" style="margin-top:10px;"></div>
-
-                  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;">
-                    <button class="btn-add-custom" id="btn-backup-save" type="button">Save backup settings</button>
-                    <button class="btn-add-custom" id="btn-backup-connect" type="button">Connect Google Drive</button>
-                    <button class="btn-add-custom" id="btn-backup-disconnect" type="button" style="background:#6b7280;">Disconnect</button>
-                    <button class="btn-add-custom" id="btn-backup-now" type="button">Backup now</button>
-                    <button class="btn-add-custom" id="btn-backup-refresh-list" type="button" style="background:#0f766e;">Load Drive backups</button>
-                  </div>
-
-                  <div style="margin-top:14px;">
-                    <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;">Restore from Google Drive</div>
-                    <p class="settings-muted" style="margin-bottom:8px;">
-                      Pick a backup by date/time. This overwrites <b>local data on this PC only</b> (not the cloud server).
-                    </p>
-                    <select id="backup-restore-select" style="width:100%;padding:8px;border-radius:8px;border:1px solid #d1d5db;font-size:13px;">
-                      <option value="">— Load list first —</option>
-                    </select>
-                    <button class="btn-add-custom" id="btn-backup-restore" type="button" style="margin-top:8px;background:#b45309;">Restore selected backup</button>
-                  </div>
-                </div>
-
-                <div class="settings-card" id="receipt-settings-card">
-                  <h3>Receipt template</h3>
-                  <p class="settings-muted">
-                    Logo, store details, header/footer, and show/hide options are managed in
-                    <b>Web app → POS admin → Receipt</b>. This terminal syncs that company template for printing.
-                    Sell-page print size and layout are unchanged.
-                  </p>
-                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px;">
-                    <button class="btn-add-custom" id="btn-sync-receipt-settings" type="button">↻ Sync receipt from web</button>
-                    <span class="settings-muted" id="receipt-sync-status" style="align-self:center;font-size:12px;"></span>
-                  </div>
-                  <div class="receipt-feature">
-                    <label class="receipt-toggle" style="border:0;padding:0;">
-                      <span style="font-weight:700;">Ask cashier for cash received</span>
-                      <input type="checkbox" id="rset-ask-cash" />
-                    </label>
-                    <p>Local to this PC only. When enabled, at checkout the cashier types how much the customer paid. Remaining change is calculated and printed on the receipt.</p>
-                  </div>
-                  <button class="btn-add-custom" id="btn-save-receipt-settings" type="button" style="margin-top:10px;">Save local option</button>
-                </div>
-
-                <div class="settings-card" id="invoice-serial-card">
-                  <h3>Invoice / receipt serial</h3>
-                  <p class="settings-muted">
-                    New sales get a proper running receipt number (e.g. <b>INV000001</b>).
-                    Change prefix and next number here so serials start clean from your preferred sequence.
-                  </p>
-                  <div class="invoice-serial-grid">
-                    <label>
-                      <span>Prefix</span>
-                      <input type="text" id="inv-serial-prefix" maxlength="12" placeholder="INV" />
-                    </label>
-                    <label>
-                      <span>Next number</span>
-                      <input type="number" id="inv-serial-next" min="1" step="1" />
-                    </label>
-                    <label>
-                      <span>Digits (padding)</span>
-                      <input type="number" id="inv-serial-pad" min="1" max="12" step="1" />
-                    </label>
-                    <div class="invoice-serial-preview">
-                      <span>Next receipt will be</span>
-                      <b id="inv-serial-preview">INV000001</b>
+                  <!-- ── Numbers ── -->
+                  <section class="settings-section" id="settings-section-numbers" data-settings-section="numbers">
+                    <div class="settings-section-head">
+                      <h3>Invoice numbers</h3>
+                      <p>Sale ke baad jo receipt number milta hai (e.g. INV000001).</p>
                     </div>
-                  </div>
-                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
-                    <button class="btn-add-custom" id="btn-save-invoice-serial" type="button">Save serial settings</button>
-                    <button class="btn-add-custom" id="btn-renumber-invoices" type="button" style="background:#0f766e;">Fix empty / temp invoices</button>
-                  </div>
-                  <p class="settings-muted" id="invoice-serial-status" style="margin-top:8px;font-size:12px;"></p>
+                    <div class="settings-card" id="invoice-serial-card">
+                      <div class="settings-card-head">
+                        <h3>Invoice / receipt serial</h3>
+                        <span class="settings-tag local">This PC</span>
+                      </div>
+                      <p class="settings-muted">
+                        Prefix aur next number yahan set karein. Har nayi sale next number use karti hai.
+                      </p>
+                      <div class="invoice-serial-grid">
+                        <label>
+                          <span>Prefix</span>
+                          <input type="text" id="inv-serial-prefix" maxlength="12" placeholder="INV" />
+                        </label>
+                        <label>
+                          <span>Next number</span>
+                          <input type="number" id="inv-serial-next" min="1" step="1" />
+                        </label>
+                        <label>
+                          <span>Digits (padding)</span>
+                          <input type="number" id="inv-serial-pad" min="1" max="12" step="1" />
+                        </label>
+                        <div class="invoice-serial-preview">
+                          <span>Next receipt will be</span>
+                          <b id="inv-serial-preview">INV000001</b>
+                        </div>
+                      </div>
+                      <div class="settings-actions">
+                        <button class="btn-add-custom" id="btn-save-invoice-serial" type="button">Save serial settings</button>
+                        <button class="btn-add-custom" id="btn-renumber-invoices" type="button" style="background:#0f766e;">Fix empty / temp invoices</button>
+                      </div>
+                      <p class="settings-muted" id="invoice-serial-status" style="margin-top:8px;font-size:12px;"></p>
+                    </div>
+                  </section>
+
+                  <!-- ── Sync ── -->
+                  <section class="settings-section" id="settings-section-sync" data-settings-section="sync">
+                    <div class="settings-section-head">
+                      <h3>Cloud sync</h3>
+                      <p>Offline pehle — Push se upload, Get se latest catalog download.</p>
+                    </div>
+                    <div class="settings-card" id="cloud-sync-card">
+                      <div class="settings-card-head">
+                        <h3>Cloud Synchronization</h3>
+                        <span class="settings-tag cloud">ERP cloud</span>
+                      </div>
+                      <p class="settings-muted">
+                        <b>Push</b> = local pending records upload.
+                        <b>Get</b> = latest products / ERP data download.
+                        Dono ek saath nahi chalte.
+                      </p>
+                      <div class="cloud-sync-status-grid" id="cloud-sync-status-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:12px 0;">
+                        <div class="settings-kpi"><span>Connection</span><b id="cloud-sync-connection">Checking…</b></div>
+                        <div class="settings-kpi"><span>Pending</span><b id="cloud-sync-pending">0</b></div>
+                        <div class="settings-kpi"><span>Failed</span><b id="cloud-sync-failed">0</b></div>
+                        <div class="settings-kpi"><span>Last push</span><b id="cloud-sync-last-push">—</b></div>
+                        <div class="settings-kpi"><span>Last get</span><b id="cloud-sync-last-get">—</b></div>
+                      </div>
+                      <div class="settings-actions">
+                        <button class="btn-add-custom" id="btn-push-to-cloud" type="button" style="background:#0f766e;">↑ Push to Cloud</button>
+                        <button class="btn-add-custom" id="btn-get-from-cloud" type="button" style="background:var(--brand);">↓ Get from Cloud</button>
+                        <button class="btn-add-custom" id="btn-retry-failed-sync" type="button" style="background:#b45309;">↻ Retry failed</button>
+                      </div>
+                      <p class="settings-muted" id="cloud-sync-status-msg" style="font-size:12px;margin:10px 0 8px;"></p>
+                      <div id="cloud-sync-log" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:#f8fafc;padding:8px;font-size:12px;color:#334155;">
+                        <div class="settings-muted">No sync activity yet.</div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <!-- ── Backup ── -->
+                  <section class="settings-section" id="settings-section-backup" data-settings-section="backup">
+                    <div class="settings-section-head">
+                      <h3>Backup</h3>
+                      <p>Complete POS backup is PC-only — cloud/Railway server change nahi hota.</p>
+                    </div>
+
+                    <div class="settings-card" id="local-backup-card">
+                      <div class="settings-card-head">
+                        <h3>1. Local file backup</h3>
+                        <span class="settings-tag local">Download / Restore</span>
+                      </div>
+                      <p class="settings-muted">
+                        Complete company backup <b>.zip</b> — download karke USB/folder pe rakh sakte ho,
+                        baad mein wahi file se restore.
+                      </p>
+                      <div class="backup-guide" style="margin-bottom:12px;">
+                        <b>Is backup mein sab connected data hai:</b>
+                        <ul style="margin:8px 0 0;padding-left:18px;">
+                          <li>Products · stock · categories · subcategories</li>
+                          <li>Customers · suppliers · customer ledger / loyalty balances</li>
+                          <li>Sales · returns · held sales · shifts</li>
+                          <li>Accounts ledger · day closing</li>
+                          <li>Receipt template options · invoice serial · restaurant token settings</li>
+                          <li>Reports isi data se restore ke baad dubara ban jate hain</li>
+                        </ul>
+                        <div style="margin-top:8px;font-size:12px;opacity:0.9;">
+                          Local file aur Google Drive dono <b>same complete zip</b> use karte hain.
+                          Cloud/Railway server change nahi hota.
+                        </div>
+                      </div>
+                      <div class="settings-actions">
+                        <button class="btn-add-custom" id="btn-backup-download" type="button" style="background:#0f766e;">⬇ Download backup file</button>
+                        <button class="btn-add-custom" id="btn-backup-restore-file" type="button" style="background:#b45309;">⬆ Restore from backup file</button>
+                      </div>
+                      <p class="settings-muted" id="local-backup-status" style="margin-top:10px;font-size:12px;">
+                        Ready — download creates one complete .zip for this company on this PC.
+                      </p>
+                    </div>
+
+                    <div class="settings-card" id="drive-backup-card">
+                      <div class="settings-card-head">
+                        <h3>2. Google Drive backup</h3>
+                        <span class="settings-tag cloud">Optional</span>
+                      </div>
+                      <p class="settings-muted" style="margin-bottom:10px;">
+                        Same POS data ko Google Drive pe bhi rakh sakte ho (optional).
+                        <b style="color:#0b7a3e;">Cloud / Railway server change nahi hota.</b>
+                      </p>
+                      <div id="backup-guide" class="backup-guide"></div>
+
+                      <label class="receipt-toggle" style="margin-top:10px;">
+                        <span>Enable scheduled backup (3 times / day)</span>
+                        <input type="checkbox" id="backup-enabled" />
+                      </label>
+
+                      <div style="margin-top:12px;">
+                        <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;">Backup times (local clock)</div>
+                        <div class="backup-times-row">
+                          <input type="time" id="backup-time-1" />
+                          <input type="time" id="backup-time-2" />
+                          <input type="time" id="backup-time-3" />
+                        </div>
+                      </div>
+
+                      <details style="margin-top:12px;">
+                        <summary style="cursor:pointer;font-size:13px;font-weight:700;">Google OAuth credentials (admin)</summary>
+                        <p class="settings-muted" style="margin:8px 0;">
+                          Google Cloud Console → enable <b>Google Drive API</b> → create OAuth client type <b>Desktop app</b>.
+                          Or set <code>GOOGLE_OAUTH_CLIENT_ID</code> / <code>GOOGLE_OAUTH_CLIENT_SECRET</code> in desktop <code>.env</code>.
+                        </p>
+                        <div class="receipt-field">
+                          <label>Client ID</label>
+                          <input id="backup-client-id" type="text" placeholder="xxxx.apps.googleusercontent.com" autocomplete="off" />
+                        </div>
+                        <div class="receipt-field">
+                          <label>Client Secret</label>
+                          <input id="backup-client-secret" type="password" placeholder="Leave blank to keep existing" autocomplete="off" />
+                        </div>
+                      </details>
+
+                      <div id="backup-status-line" class="settings-muted" style="margin-top:10px;"></div>
+
+                      <div class="settings-actions">
+                        <button class="btn-add-custom" id="btn-backup-save" type="button">Save backup settings</button>
+                        <button class="btn-add-custom" id="btn-backup-connect" type="button">Connect Google Drive</button>
+                        <button class="btn-add-custom" id="btn-backup-disconnect" type="button" style="background:#6b7280;">Disconnect</button>
+                        <button class="btn-add-custom" id="btn-backup-now" type="button">Backup now</button>
+                        <button class="btn-add-custom" id="btn-backup-refresh-list" type="button" style="background:#0f766e;">Load Drive backups</button>
+                      </div>
+
+                      <div style="margin-top:14px;">
+                        <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;">Restore from Google Drive</div>
+                        <p class="settings-muted" style="margin-bottom:8px;">
+                          Selected backup is PC local data overwrite only (not cloud server).
+                        </p>
+                        <select id="backup-restore-select" style="width:100%;padding:8px;border-radius:8px;border:1px solid #d1d5db;font-size:13px;">
+                          <option value="">— Load list first —</option>
+                        </select>
+                        <button class="btn-add-custom" id="btn-backup-restore" type="button" style="margin-top:8px;background:#b45309;">Restore selected backup</button>
+                      </div>
+                    </div>
+                  </section>
                 </div>
               </div>
             </div>

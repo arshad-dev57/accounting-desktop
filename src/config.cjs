@@ -77,6 +77,14 @@ function isDesktopAuthPath(pathname) {
   return p === '/login' || p.startsWith('/login/');
 }
 
+function resolveOnesignalAppId() {
+  return String(process.env.ONESIGNAL_APP_ID || '').trim();
+}
+
+function resolveOnesignalEnv() {
+  return String(process.env.ONESIGNAL_ENV || process.env.NOTIFICATION_ENV || 'dev').trim() || 'dev';
+}
+
 module.exports = {
   DEFAULT_LOCAL,
   DEFAULT_PROD,
@@ -89,4 +97,6 @@ module.exports = {
   posUrl,
   isDesktopAllowedPath,
   isDesktopAuthPath,
+  resolveOnesignalAppId,
+  resolveOnesignalEnv,
 };

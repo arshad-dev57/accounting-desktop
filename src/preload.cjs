@@ -24,6 +24,8 @@ const ALLOWED_CHANNELS = new Set([
   'backup:runNow',
   'backup:list',
   'backup:restore',
+  'backup:exportLocal',
+  'backup:restoreLocal',
   'codes:qrSvg',
   'print:showDialog',
   'print:thermalReceipt',
@@ -139,6 +141,9 @@ const ALLOWED_CHANNELS = new Set([
   'tax:getContext',
   'tax:refreshContext',
   'tax:setEnabled',
+  'onesignal:push',
+  'onesignal:status',
+  'onesignal:getStatus',
 ]);
 
 function invoke(channel, payload) {
@@ -391,6 +396,11 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
       return () => ipcRenderer.removeListener('desktop:notifications-cleared', listener);
     },
   },
+  onesignal: {
+    reportPush: (payload) => ipcRenderer.invoke('onesignal:push', payload),
+    reportStatus: (payload) => ipcRenderer.invoke('onesignal:status', payload),
+    getStatus: () => ipcRenderer.invoke('onesignal:getStatus'),
+  },
   app: {
     getInfo: () => invoke('app:getInfo'),
     openExternal: (url) => invoke('app:openExternal', url),
@@ -403,6 +413,8 @@ contextBridge.exposeInMainWorld('bisonDesktop', {
     runNow: () => invoke('backup:runNow'),
     list: () => invoke('backup:list'),
     restore: (fileId) => invoke('backup:restore', fileId),
+    exportLocal: () => invoke('backup:exportLocal'),
+    restoreLocal: () => invoke('backup:restoreLocal'),
   },
   codes: {
     qrSvg: (text, size) => invoke('codes:qrSvg', { text, size }),

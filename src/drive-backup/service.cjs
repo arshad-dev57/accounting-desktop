@@ -127,13 +127,38 @@ function createLocalZip() {
     }
   }
 
+  const includedFiles = entries.filter((name) => !name.startsWith('.'));
+  const hasSqlite = includedFiles.includes('pos-master.sqlite');
   const manifest = {
     app: 'accounting-desktop-app',
     type: 'pos-local-backup',
     companyId: companyId(),
     createdAt: new Date().toISOString(),
     hostname: os.hostname(),
-    note: 'Local POS data only. Does not change cloud/server database.',
+    note: 'Complete local POS company backup. Does not change cloud/Railway server database.',
+    complete: true,
+    includes: {
+      sqliteMasterDb: hasSqlite, // products, categories, customers, sales, stock, suppliers, returns, ledger
+      productsCache: includedFiles.includes('cache_products.json'),
+      categoriesCache: includedFiles.includes('cache_categories.json'),
+      customersCache: includedFiles.includes('cache_customers.json'),
+      terminalsCache: includedFiles.includes('cache_terminals.json'),
+      locationsCache: includedFiles.includes('cache_locations.json'),
+      taxCache: includedFiles.includes('cache_tax_context.json'),
+      salesQueue: includedFiles.includes('queue_sales.json'),
+      returnsQueue: includedFiles.includes('queue_returns.json'),
+      shiftsQueue: includedFiles.includes('queue_shifts.json'),
+      heldSales: includedFiles.includes('queue_held.json'),
+      accounts: includedFiles.includes('accounts_ledger.json') || includedFiles.includes('queue_accounts.json'),
+      receiptSettings: includedFiles.includes('receipt_settings.json'),
+      invoiceSerial: includedFiles.includes('invoice_serial.json'),
+      tokenSettings: includedFiles.includes('restaurant_token.json'),
+      activeShift: includedFiles.includes('active_shift.json'),
+      shiftHistory: includedFiles.includes('history_shifts.json'),
+    },
+    files: includedFiles,
+    // Reports are not separate files — they rebuild from sales/stock in this backup.
+    reportsNote: 'Sales/stock/customer reports rebuild automatically after restore from this data.',
   };
   zip.addFile('backup-manifest.json', Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'));
   zip.writeZip(zipPath);
@@ -204,13 +229,49 @@ async function listRemoteBackups() {
   return googleDrive.listBackups(settings);
 }
 
+function applyZipToCompanyData(zipPath) {
+  const target = companyDir();
+  const zip = new AdmZip(zipPath);
+  const entries = zip.getEntries();
+  let fileCount = 0;
+  let hasManifest = false;
+  for (const entry of entries) {
+    if (entry.isDirectory) continue;
+    if (entry.entryName === 'backup-manifest.json') {
+      hasManifest = true;
+      continue;
+    }
+    // Prevent zip-slip outside company folder
+    const dest = path.join(target, entry.entryName);
+    const resolved = path.resolve(dest);
+    if (!resolved.startsWith(path.resolve(target) + path.sep) && resolved !== path.resolve(target)) {
+      continue;
+    }
+    const destDir = path.dirname(dest);
+    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+    fs.writeFileSync(dest, entry.getData());
+    fileCount += 1;
+  }
+  if (!fileCount) {
+    throw new Error('Backup zip is empty or invalid');
+  }
+  return { fileCount, hasManifest };
+}
+
+async function reopenSqliteAfterRestore() {
+  try {
+    await masterSqlite?.open?.(userDataPath, { companyId: companyId() });
+  } catch (err) {
+    console.warn('[drive-backup] reopen sqlite after restore', err.message);
+  }
+}
+
 async function runRestore(fileId) {
   if (!fileId) throw new Error('Select a backup file');
   if (running) throw new Error('Backup/restore already running');
   running = true;
   const settings = loadSettings();
   const tmpZip = path.join(userDataPath, LOCAL_BACKUP_DIR, `restore-${Date.now()}.zip`);
-  const target = companyDir();
 
   try {
     // safety local snapshot before overwrite
@@ -233,29 +294,15 @@ async function runRestore(fileId) {
       /* ignore */
     }
 
-    const zip = new AdmZip(tmpZip);
-    const entries = zip.getEntries();
-    for (const entry of entries) {
-      if (entry.isDirectory) continue;
-      if (entry.entryName === 'backup-manifest.json') continue;
-      const dest = path.join(target, entry.entryName);
-      const destDir = path.dirname(dest);
-      if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
-      fs.writeFileSync(dest, entry.getData());
-    }
-
-    // reopen sqlite for current company
-    try {
-      await masterSqlite?.open?.(userDataPath, { companyId: companyId() });
-    } catch (err) {
-      console.warn('[drive-backup] reopen sqlite after restore', err.message);
-    }
+    applyZipToCompanyData(tmpZip);
+    await reopenSqliteAfterRestore();
 
     saveSettings({ lastRestoreAt: new Date().toISOString() });
     return {
       success: true,
       message: 'Backup restored to this PC. Reloading POS data is recommended.',
       restoredAt: new Date().toISOString(),
+      source: 'google-drive',
     };
   } finally {
     running = false;
@@ -264,6 +311,94 @@ async function runRestore(fileId) {
     } catch {
       /* ignore */
     }
+  }
+}
+
+/**
+ * Create a full POS backup zip and copy it to destPath (user Downloads / chosen folder).
+ */
+async function exportLocalBackup(destPath) {
+  if (!destPath) throw new Error('Choose where to save the backup file');
+  if (running) throw new Error('Backup/restore already running');
+  running = true;
+  try {
+    const { zipPath, zipName, manifest } = createLocalZip();
+    const outPath = String(destPath).endsWith('.zip')
+      ? destPath
+      : path.join(destPath, zipName);
+    fs.copyFileSync(zipPath, outPath);
+    pruneLocalBackups(5);
+    saveSettings({
+      lastBackupAt: new Date().toISOString(),
+      lastBackupStatus: 'ok',
+      lastBackupError: null,
+      lastBackupFile: path.basename(outPath),
+      lastBackupReason: 'local-export',
+    });
+    return {
+      success: true,
+      path: outPath,
+      fileName: path.basename(outPath),
+      manifest,
+      message: 'Backup file saved on this computer',
+    };
+  } catch (err) {
+    saveSettings({
+      lastBackupAt: new Date().toISOString(),
+      lastBackupStatus: 'error',
+      lastBackupError: err.message || String(err),
+      lastBackupReason: 'local-export',
+    });
+    throw err;
+  } finally {
+    running = false;
+  }
+}
+
+/**
+ * Restore POS data from a local .zip backup file chosen by the user.
+ */
+async function restoreFromLocalFile(zipPath) {
+  if (!zipPath) throw new Error('Select a backup .zip file');
+  if (!fs.existsSync(zipPath)) throw new Error('Backup file not found');
+  if (!String(zipPath).toLowerCase().endsWith('.zip')) {
+    throw new Error('Please select a .zip backup file');
+  }
+  if (running) throw new Error('Backup/restore already running');
+  running = true;
+  try {
+    // safety snapshot first
+    try {
+      createLocalZip();
+    } catch {
+      /* still allow restore */
+    }
+
+    try {
+      masterSqlite?.persist?.();
+    } catch {
+      /* ignore */
+    }
+    try {
+      await masterSqlite?.close?.();
+    } catch {
+      /* ignore */
+    }
+
+    const applied = applyZipToCompanyData(zipPath);
+    await reopenSqliteAfterRestore();
+
+    saveSettings({ lastRestoreAt: new Date().toISOString() });
+    return {
+      success: true,
+      message: 'Local backup restored to this PC. Reloading POS…',
+      restoredAt: new Date().toISOString(),
+      source: 'local-file',
+      fileName: path.basename(zipPath),
+      ...applied,
+    };
+  } finally {
+    running = false;
   }
 }
 
@@ -288,14 +423,13 @@ function getStatus() {
     folderName: googleDrive.FOLDER_NAME,
     affectsCloudServer: false,
     guide: {
-      title: 'Google Drive backup (this PC only)',
+      title: 'Backup options (this PC only)',
       points: [
-        'Backups copy THIS computer’s POS data (sales queue, catalog, shifts) to your Google Drive.',
+        'Local file: Download a complete .zip backup to your computer, or restore by selecting a .zip later.',
+        'Google Drive: optional cloud copy of the same POS data (sales, catalog, shifts).',
         'Your cloud / Railway accounting server is NOT changed by backup or restore.',
-        'Turn ON scheduled backup, set up to 3 daily times, then Connect Google.',
-        'Google opens in the browser — allow access, then return here.',
-        'Restore: pick a Drive backup by date/time — it overwrites local data on this PC only.',
-        'App must be open for scheduled backups to run.',
+        'Restore always overwrites data on THIS PC only (a safety zip is created first when possible).',
+        'App must be open for scheduled Google Drive backups to run.',
       ],
     },
   };
@@ -369,5 +503,9 @@ module.exports = {
   runBackup,
   listRemoteBackups,
   runRestore,
+  exportLocalBackup,
+  restoreFromLocalFile,
+  createLocalZip,
+  buildZipName,
   stop,
 };

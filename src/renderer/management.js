@@ -2,7 +2,6 @@ const api = window.bisonDesktop;
 const TABS = ['Terminals', 'Users', 'Shifts', 'Sales', 'Returns', 'Receipt', 'Tax', 'Audit Log'];
 let page = 1;
 let currentTab = 'Terminals';
-let locations = [];
 let terminals = [];
 let companyUsers = [];
 
@@ -64,8 +63,8 @@ function assignedUserForTerminal(users, terminalId) {
   return (users || []).find((u) => String(u.assignedTerminalId || '') === String(terminalId));
 }
 
-function renderTerminalUserOptions(users, locationId, selectedUserId) {
-  const eligible = usersEligibleForLocation(users, locationId);
+function renderTerminalUserOptions(users, selectedUserId) {
+  const eligible = usersEligibleForLocation(users, '');
   return [
     '<option value="">— No user —</option>',
     ...eligible.map((u) => {
@@ -119,11 +118,6 @@ async function loadTab() {
   if (currentTab === 'Receipt') return loadReceipt();
   if (currentTab === 'Tax') return loadTax();
   if (currentTab === 'Audit Log') return loadAudit();
-}
-
-async function loadLocations() {
-  const res = await api.pos.listLocations();
-  locations = asList(res);
 }
 
 async function loadUsers() {
@@ -210,7 +204,6 @@ async function loadTerminals() {
   const [termRes, usersRes] = await Promise.all([
     api.pos.listTerminals(),
     api.pos.listUsers(),
-    locations.length ? null : loadLocations(),
   ]);
   if (!termRes?.success) {
     wrap.innerHTML = `<p class="error">${termRes?.message || 'Failed to load terminals'}</p>`;
@@ -224,14 +217,10 @@ async function loadTerminals() {
       <button class="btn btn-brand" id="btn-new-terminal" type="button">+ New Terminal</button>
     </div>
     <div class="card hidden" id="create-terminal">
-      <p class="muted" style="margin:0 0 12px">Warehouse is optional. Leave it blank for company-wide inventory; assign a warehouse to scope this terminal. You can also assign a cashier.</p>
+      <p class="muted" style="margin:0 0 12px">Assign a cashier so they only see this terminal on desktop POS.</p>
       <div class="form-grid">
         <input id="t-name" placeholder="Terminal name (e.g. Main Counter)" />
         <input id="t-code" placeholder="Code (e.g. TERM-01)" />
-        <select id="t-location">
-          <option value="">— No warehouse (all inventory) —</option>
-          ${locations.map((l) => `<option value="${l.id}">${l.name} (${l.code || l.type || ''})</option>`).join('')}
-        </select>
         <select id="t-user">
           <option value="">— No user —</option>
         </select>
@@ -240,7 +229,7 @@ async function loadTerminals() {
       </div>
     </div>
     <table>
-      <thead><tr><th>Name</th><th>Code</th><th>Location</th><th>Assigned user</th><th>Status</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Name</th><th>Code</th><th>Assigned user</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>
         ${terminals.map((t) => {
           const assigned = assignedUserForTerminal(companyUsers, t.id);
@@ -248,7 +237,6 @@ async function loadTerminals() {
           <tr>
             <td><b>${t.name || ''}</b></td>
             <td>${t.code || ''}</td>
-            <td>${t.location?.name || '<span class="muted">All inventory</span>'}</td>
             <td>${assigned
               ? `<strong>${userDisplayName(assigned)}</strong><div class="muted">${assigned.email || ''}</div>`
               : '<span class="muted">—</span>'}</td>
@@ -258,34 +246,24 @@ async function loadTerminals() {
               <button class="btn btn-red" data-del="${t.id}">Delete</button>
             </td>
           </tr>`;
-        }).join('') || `<tr><td colspan="6" class="muted">No terminals found</td></tr>`}
+        }).join('') || `<tr><td colspan="5" class="muted">No terminals found</td></tr>`}
       </tbody>
     </table>`;
 
-  const locSelect = wrap.querySelector('#t-location');
   const userSelect = wrap.querySelector('#t-user');
-  const refreshUserSelect = () => {
-    const prev = userSelect.value;
-    userSelect.innerHTML = renderTerminalUserOptions(companyUsers, locSelect.value, prev);
-    if (prev && ![...userSelect.options].some((o) => o.value === prev)) userSelect.value = '';
-  };
-  locSelect.addEventListener('change', refreshUserSelect);
-  refreshUserSelect();
+  userSelect.innerHTML = renderTerminalUserOptions(companyUsers, '');
 
   wrap.querySelector('#btn-new-terminal').onclick = () => wrap.querySelector('#create-terminal').classList.toggle('hidden');
   wrap.querySelector('#t-cancel').onclick = () => wrap.querySelector('#create-terminal').classList.add('hidden');
   wrap.querySelector('#t-save').onclick = async () => {
     const name = wrap.querySelector('#t-name').value.trim();
     const code = wrap.querySelector('#t-code').value.trim().toUpperCase();
-    const locationId = wrap.querySelector('#t-location').value;
     const userId = wrap.querySelector('#t-user').value;
     if (!name || !code) return showError('Name and code are required');
     const saveBtn = wrap.querySelector('#t-save');
     saveBtn.disabled = true;
     saveBtn.textContent = 'Creating…';
-    const createBody = { name, code };
-    if (locationId) createBody.locationId = locationId;
-    const res = await api.pos.createTerminal(createBody);
+    const res = await api.pos.createTerminal({ name, code });
     if (!res?.success) {
       saveBtn.disabled = false;
       saveBtn.textContent = 'Create';
@@ -674,7 +652,6 @@ async function boot() {
     }
   };
   document.getElementById('btn-logout').onclick = () => api.auth.logout();
-  await loadLocations();
   await loadTab();
 }
 
